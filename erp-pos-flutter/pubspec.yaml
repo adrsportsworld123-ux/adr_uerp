@@ -1,0 +1,21 @@
+name: erp_pos_app
+description: Phase 0/1 walking-skeleton POS client — login, barcode scan, cart, checkout.
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  provider: ^6.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

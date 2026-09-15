@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: erp
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: app_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d   # auto-runs 001_schema.sql + 002_seed.sql on first boot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_user -d erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HTTP_ADDR: ":8080"
+      DATABASE_DSN: "postgres://app_user:app_password@postgres:5432/erp?sslmode=disable"
+      JWT_SECRET: "dev-only-secret-change-me"
+      # Enables POST /dev/hash-password and POST /dev/set-password — see
+      # internal/authn/dev_handlers.go. On by default here because this
+      # compose file IS your local dev environment. Delete this line (or
+      # set it to "false") in any compose/deployment file that isn't
+      # running solely on your own machine.
+      DEV_AUTH_TOOLS_ENABLED: "true"
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:
