@@ -19,13 +19,23 @@ class ApiException implements Exception {
 
 class LoginResult {
   final String accessToken;
+  final String? refreshToken; // absent from older server responses; nullable for that reason
+  final int? expiresIn; // seconds
   final String userId;
   final List<String> roles;
 
-  LoginResult({required this.accessToken, required this.userId, required this.roles});
+  LoginResult({
+    required this.accessToken,
+    this.refreshToken,
+    this.expiresIn,
+    required this.userId,
+    required this.roles,
+  });
 
   factory LoginResult.fromJson(Map<String, dynamic> json) => LoginResult(
         accessToken: json['access_token'] as String,
+        refreshToken: json['refresh_token'] as String?,
+        expiresIn: json['expires_in'] as int?,
         userId: json['user_id'] as String,
         roles: (json['roles'] as List<dynamic>? ?? const []).cast<String>(),
       );
@@ -58,6 +68,46 @@ class ProductLookup {
       );
 }
 
+/// One sales_order_lines row, joined server-side with product_variants for
+/// display fields (name/sku) — see internal/sales/handlers.go's
+/// loadOrderLines. Money/quantity fields are strings for the same reason as
+/// OrderSummary's totals below.
+class OrderLine {
+  final String lineId;
+  final String variantId;
+  final String sku;
+  final String productName;
+  final String quantity;
+  final String unitPrice;
+  final String discountAmount;
+  final String taxAmount;
+  final String lineTotal;
+
+  OrderLine({
+    required this.lineId,
+    required this.variantId,
+    required this.sku,
+    required this.productName,
+    required this.quantity,
+    required this.unitPrice,
+    required this.discountAmount,
+    required this.taxAmount,
+    required this.lineTotal,
+  });
+
+  factory OrderLine.fromJson(Map<String, dynamic> json) => OrderLine(
+        lineId: json['line_id'] as String,
+        variantId: json['variant_id'] as String,
+        sku: json['sku'] as String,
+        productName: json['product_name'] as String,
+        quantity: json['quantity'] as String,
+        unitPrice: json['unit_price'] as String,
+        discountAmount: json['discount_amount'] as String,
+        taxAmount: json['tax_amount'] as String,
+        lineTotal: json['line_total'] as String,
+      );
+}
+
 /// Mirrors the backend's orderResponse shape exactly (internal/sales/handlers.go).
 /// Money fields are deliberately kept as Dart Strings, never parsed to
 /// double, all the way out to the receipt screen — the backend already
@@ -67,6 +117,10 @@ class ProductLookup {
 /// deliberately contained on the server. Display them as-is; if this
 /// screen ever needs to do arithmetic on them (e.g. a running total before
 /// the server confirms it), use a fixed-point/decimal package, not double.
+///
+/// `lines` used to be absent from this response (see the FLAGGED GAP note
+/// that was in state/session.dart) — the backend now joins them in, so the
+/// app no longer needs to track cart lines locally per-device.
 class OrderSummary {
   final String orderId;
   final String orderNumber;
@@ -75,6 +129,7 @@ class OrderSummary {
   final String discountTotal;
   final String taxTotal;
   final String grandTotal;
+  final List<OrderLine> lines;
 
   OrderSummary({
     required this.orderId,
@@ -84,6 +139,7 @@ class OrderSummary {
     required this.discountTotal,
     required this.taxTotal,
     required this.grandTotal,
+    this.lines = const [],
   });
 
   factory OrderSummary.fromJson(Map<String, dynamic> json) => OrderSummary(
@@ -94,6 +150,9 @@ class OrderSummary {
         discountTotal: json['discount_total'] as String,
         taxTotal: json['tax_total'] as String,
         grandTotal: json['grand_total'] as String,
+        lines: (json['lines'] as List<dynamic>? ?? const [])
+            .map((e) => OrderLine.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 }
 
@@ -110,14 +169,13 @@ class PaymentInput {
 /// phase0_1_design.md §3 and implemented (and verified against live
 /// Postgres) in internal/authn, internal/catalog, internal/sales.
 ///
-/// NOT independently verified: this file could not be compiled, analyzed,
-/// or run in the sandbox that wrote it — no Flutter/Dart SDK was available
-/// and the network path to install one was blocked by the same
-/// organizational egress policy that blocked the Go module proxy (see
-/// erp-core-go's README for that precedent). Every field name and JSON
-/// shape here was written to match the server code byte-for-byte, but
-/// `flutter analyze` has not actually checked that. Run it before trusting
-/// this beyond "carefully written."
+/// `flutter analyze` and `flutter test` both run clean against this file as
+/// of the Phase 1 hardening pass — the original sandbox that wrote the
+/// first version of this file had no Flutter/Dart SDK available (same
+/// organizational egress policy that blocked the Go module proxy), so this
+/// is the first real verification it's had. Field names/JSON shapes are
+/// checked against a running server manually, not by an automated
+/// integration test — there still isn't one.
 class ApiClient {
   final String baseUrl;
   final http.Client _http;
@@ -181,6 +239,17 @@ class ApiClient {
       Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/lines'),
       headers: _authHeaders,
       body: jsonEncode({'variant_id': variantId, 'quantity': quantity}),
+    );
+    return OrderSummary.fromJson(_decode(resp));
+  }
+
+  Future<OrderSummary> deleteLine({
+    required String orderId,
+    required String lineId,
+  }) async {
+    final resp = await _http.delete(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/lines/$lineId'),
+      headers: _authHeaders,
     );
     return OrderSummary.fromJson(_decode(resp));
   }

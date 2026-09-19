@@ -51,15 +51,17 @@ Each phase lists what's **in**, what's explicitly **deferred**, the **tech stack
 
 **Definition of Done:** A real sports/general retail store could process actual daily sales on this — offline-capable, GST-correct, receipt-printing, stock-accurate.
 
-**Status: in progress.** Built so far: catalog barcode lookup, cart → add-line → checkout with optimistic-locking stock reservation and idempotent checkout (see `phase0_1_design.md`). **Still open, in dependency order for whoever (Claude Code, going forward) picks this up next:**
-1. `DELETE /sales/orders/{id}/lines/{line_id}` — remove a line, release its reservation (contract already specified in `phase0_1_design.md` §3.4)
-2. Failed-login lockout enforcement (5 attempts / 15 min) — the check exists in `LoginHandler`, but nothing increments `failed_login_attempts` on a wrong password yet; flagged with a `NOTE:` comment in `internal/authn/handlers.go`. Don't ship Phase 1 without this.
-3. `GET /sales/orders/{id}` returning full line detail (currently aggregates only) — see the flagged gap in `phase0_1_design.md` §3.4
-4. Manual/authorized discounts (`POST /sales/orders/{id}/discounts`) with the FRD's tiered authorization
-5. The 15-minute reservation-expiry sweeper
-6. Barcode & label generation, printer integration
-7. PIN quick-login + device binding for POS
-8. Basic daily/stock/EOD reports
+**Status: in progress — a hardening pass closed most of the previous open list.** Built: catalog barcode lookup, full cart → add-line → discount → delete-line → checkout with optimistic-locking stock reservation, idempotent checkout, session-tiered auth (login/PIN-login/refresh/logout), failed-login lockout, the reservation-expiry sweeper, inventory adjustments with audit trail, and basic reports (see `phase0_1_design.md` §6 for the full list and how each was verified live against this repo's own `docker-compose.yml`).
+
+**§6.1 of that doc is worth reading before touching anything else here**: the hardening pass found that `docker-compose.yml`'s `api` service was connecting to Postgres as a superuser (`app_user`, via `POSTGRES_USER`), which silently disabled every RLS policy in the system since Phase 0 — the multi-tenancy guarantee this whole codebase is built around had never actually been enforced by the database in this stack. Fixed (a dedicated non-superuser `erp_app` role, `migrations/004_least_privilege_app_role.sql`) and re-verified live, but **if you've deployed this anywhere outside the shipped docker-compose, check that deployment's DB role the same way** — this class of bug (an admin/master role standing in for the app's own role) isn't specific to Docker.
+
+**Still open, in dependency order:**
+1. `/sync/push`/`/sync/pull` + a Flutter-side offline store — the single biggest remaining gap against "offline-capable" in this phase's Definition of Done below. Needs a decision on the Flutter local-storage approach before implementation starts.
+2. Barcode & label generation, printer integration
+3. `GET /sales/orders/{id}/receipt`, `POST /sales/orders/{id}/void`, `POST /sales/orders/{id}/customer`, `PATCH .../lines/{line_id}`
+4. General permission-code enforcement (`permissions`/`role_permissions` — currently only two handlers gate by role name, not the schema's permission-code model)
+5. Discount-before-tax GST treatment (today's discount is a post-tax reduction — see `phase0_1_design.md` §3.4)
+6. PIN quick-login UI in the Flutter app (backend supports it; no screen calls it yet)
 
 ---
 

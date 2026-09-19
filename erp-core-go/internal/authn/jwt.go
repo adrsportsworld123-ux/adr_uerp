@@ -13,17 +13,23 @@ import (
 // *Claims, so swapping this for RS256 + key rotation, or for validating
 // tokens issued by Keycloak/an external IdP later, touches this file alone.
 type TokenIssuer struct {
-	secret    []byte
-	issuer    string
-	accessTTL time.Duration
+	secret       []byte
+	issuer       string
+	maxAccessTTL time.Duration // operator-configured hard ceiling, regardless of role tier
 }
 
-func NewTokenIssuer(secret, issuer string, accessTTL time.Duration) *TokenIssuer {
-	return &TokenIssuer{secret: []byte(secret), issuer: issuer, accessTTL: accessTTL}
+func NewTokenIssuer(secret, issuer string, maxAccessTTL time.Duration) *TokenIssuer {
+	return &TokenIssuer{secret: []byte(secret), issuer: issuer, maxAccessTTL: maxAccessTTL}
 }
 
-func (t *TokenIssuer) IssueAccessToken(tenantID, userID, branchID string, roles []string) (string, time.Time, error) {
-	expiresAt := time.Now().Add(t.accessTTL)
+// IssueAccessToken signs a token whose ttl is the caller-requested value
+// (pick it via sessionTTLForRoles — see session_tiers.go — so session
+// length reflects the FRD's role-based tiers), clamped to maxAccessTTL.
+func (t *TokenIssuer) IssueAccessToken(tenantID, userID, branchID string, roles []string, ttl time.Duration) (string, time.Time, error) {
+	if ttl > t.maxAccessTTL {
+		ttl = t.maxAccessTTL
+	}
+	expiresAt := time.Now().Add(ttl)
 	claims := &Claims{
 		TenantID: tenantID,
 		UserID:   userID,

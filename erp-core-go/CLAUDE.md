@@ -163,3 +163,12 @@ docker-compose.yml             postgres + redis + this service
   codebase has been kept `gofmt`-clean throughout.
 - When you add a new tenant-scoped table or query, it goes through
   `DB.WithTenant`, full stop — that's the whole RLS safety property.
+- Data access is hand-written SQL via `pgx` directly — no ORM/codegen layer
+  yet (`docs/tech_stack_decision.md` §3.1 originally named `GORM`/`sqlc`;
+  the as-built note there explains why that was deferred, and flags
+  introducing `sqlc` at/before Phase 2 once the query surface grows). Don't
+  add an ORM as a drive-by refactor without reading that note first.
+- Every API error code actually in use is catalogued in
+  `docs/phase0_1_design.md` §3 (just above §3.1) — add new mutating
+  endpoints' codes there as you build them, so that table stays the real
+  contract instead of drifting from the code.

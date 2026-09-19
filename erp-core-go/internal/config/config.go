@@ -23,8 +23,11 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		HTTPAddr:            getenv("HTTP_ADDR", ":8080"),
-		DatabaseDSN:         getenv("DATABASE_DSN", "postgres://app_user:app_password@localhost:5432/erp?sslmode=disable"),
+		HTTPAddr: getenv("HTTP_ADDR", ":8080"),
+		// erp_app, not app_user — app_user is the schema-owning superuser
+		// migrations run as; the service must run as the RLS-restricted role
+		// (see migrations/004_least_privilege_app_role.sql).
+		DatabaseDSN:         getenv("DATABASE_DSN", "postgres://erp_app:erp_app_password@localhost:5432/erp?sslmode=disable"),
 		JWTSecret:           getenv("JWT_SECRET", "dev-only-secret-change-me"),
 		DevAuthToolsEnabled: getenv("DEV_AUTH_TOOLS_ENABLED", "false") == "true",
 	}

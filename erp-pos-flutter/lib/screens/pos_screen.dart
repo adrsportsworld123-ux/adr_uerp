@@ -132,16 +132,28 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ),
           Expanded(
-            child: session.cartLines.isEmpty
+            child: (order == null || order.lines.isEmpty)
                 ? const Center(child: Text('Cart is empty — scan an item to begin'))
                 : ListView.builder(
-                    itemCount: session.cartLines.length,
+                    itemCount: order.lines.length,
                     itemBuilder: (context, i) {
-                      final line = session.cartLines[i];
+                      final line = order.lines[i];
                       return ListTile(
                         title: Text(line.productName),
-                        subtitle: Text('${line.sku} · qty ${line.quantity.toStringAsFixed(0)}'),
-                        trailing: Text('₹${line.unitPrice}'),
+                        subtitle: Text('${line.sku} · qty ${line.quantity}'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('₹${line.lineTotal}'),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 18),
+                              tooltip: 'Remove',
+                              onPressed: _busy || order.status != 'cart'
+                                  ? null
+                                  : () => session.removeLine(line.lineId),
+                            ),
+                          ],
+                        ),
                       );
                     },
                   ),

@@ -84,6 +84,7 @@ CREATE TABLE users (
     name                    TEXT NOT NULL,
     email                   TEXT,
     phone                   TEXT,
+    employee_code           TEXT,               -- for PIN quick-login (POST /auth/pin-login)
     password_hash           TEXT,
     pin_hash                TEXT,               -- 4-6 digit quick-login PIN, hashed
     status                  TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive','locked')),
@@ -92,7 +93,8 @@ CREATE TABLE users (
     password_changed_at     TIMESTAMPTZ,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (merchant_id, email),
-    UNIQUE (merchant_id, phone)
+    UNIQUE (merchant_id, phone),
+    UNIQUE (merchant_id, employee_code)
 );
 
 CREATE TABLE user_roles (
@@ -365,10 +367,14 @@ CREATE INDEX idx_audit_logs_entity            ON audit_logs(merchant_id, entity_
 -- =====================================================================
 -- Pattern: every tenant-scoped table gets RLS enabled, keyed off
 -- current_setting('app.tenant_id'). The application layer (Go core)
--- executes `SET LOCAL app.tenant_id = '<merchant_id>'` as the first
+-- executes `SELECT set_config('app.tenant_id', $1, true)` as the first
 -- statement of every transaction, immediately after resolving the
 -- tenant from the authenticated JWT — never trust a client-supplied
--- tenant_id directly.
+-- tenant_id directly. (Not `SET LOCAL app.tenant_id = $1` — Postgres's
+-- SET command doesn't accept bind parameters over the extended query
+-- protocol; set_config is the parameterized equivalent, verified against
+-- a live instance. See internal/db/db.go's WithTenant and
+-- phase0_1_design.md §2.1 for the full explanation.)
 
 DO $$
 DECLARE

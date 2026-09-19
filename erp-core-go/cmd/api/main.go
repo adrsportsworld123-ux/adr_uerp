@@ -15,6 +15,7 @@ import (
 	"erp-core-go/internal/config"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpserver"
+	"erp-core-go/internal/sales"
 )
 
 func main() {
@@ -30,6 +31,8 @@ func main() {
 	defer database.Close()
 
 	issuer := authn.NewTokenIssuer(cfg.JWTSecret, "erp-core-go", 24*time.Hour)
+
+	go sales.RunExpirySweeper(ctx, database, time.Minute)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

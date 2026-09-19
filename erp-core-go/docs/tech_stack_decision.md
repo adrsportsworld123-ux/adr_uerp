@@ -83,7 +83,9 @@ flowchart TB
 - Offline sync & conflict resolution engine for POS devices
 - Notification dispatch at volume (fan-out to Email/SMS/WhatsApp/Push providers)
 
-**Stack:** Go 1.23+, `chi` or `Fiber` for HTTP, `gRPC` for internal service calls, `GORM` or `sqlc` for the Postgres/MySQL-portable data layer, `Asynq` (Redis-backed) for background jobs, `testify` + `httptest` for testing.
+**Stack:** Go 1.23+ (built and shipped on 1.24), `chi` for HTTP, `gRPC` for internal service calls (not yet needed — no second service exists yet to call), `GORM` or `sqlc` for the Postgres/MySQL-portable data layer, `Asynq` (Redis-backed) for background jobs, `testify` + `httptest` for testing.
+
+> **As-built note (Phase 0/1):** `erp-core-go` currently talks to Postgres with hand-written SQL via `pgx` directly — no `GORM`/`sqlc` layer yet, and no MySQL portability. That was the pragmatic call for a walking skeleton small enough to verify by hand, statement by statement, against a live Postgres instance (see `phase0_1_design.md` §4) — a codegen/ORM layer adds a step between "here's the SQL" and "here's what ran" that isn't worth it yet at this size. It's real technical debt against §5's "Secondary SQL adapter: MySQL" decision below, not a silent scope cut: introduce `sqlc` (keeps hand-reviewable SQL, adds compile-time safety and a path to a MySQL-dialect target) at or before Phase 2's multi-branch work, before the query surface grows much larger than it is today.
 
 ### 3.2 Python — Business Modules + AI Platform
 **Why:** Fastest iteration for business-rule-heavy modules (GST slabs, payroll statutory rules, promotion hierarchies), and the natural home for every AI capability in your BRS.
@@ -208,7 +210,7 @@ Rather than a fixed date, split a module out when **any** of these hit:
 | Web admin | Next.js / React / TypeScript | Recommended (BRD-aligned) |
 | Primary database | PostgreSQL | Confirmed |
 | Multi-tenancy | Shared DB, row-level (RLS) | Confirmed |
-| Secondary DB adapter | MySQL (SQL-dialect portable), MongoDB excluded from core | Confirmed |
+| Secondary DB adapter | MySQL (SQL-dialect portable), MongoDB excluded from core | Confirmed decision; **not yet built** — see the as-built note in §3.1, revisit at/before Phase 2 |
 | Cache/queue | Redis | Recommended |
 | Search | OpenSearch | Confirmed (FRD-specified) |
 | Object storage | MinIO → S3-compatible | Recommended |

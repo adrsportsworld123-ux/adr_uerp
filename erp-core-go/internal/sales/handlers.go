@@ -28,13 +28,26 @@ type Handler struct {
 }
 
 type orderResponse struct {
-	OrderID       string `json:"order_id"`
-	OrderNumber   string `json:"order_number"`
-	Status        string `json:"status"`
-	Subtotal      string `json:"subtotal"`
-	DiscountTotal string `json:"discount_total"`
-	TaxTotal      string `json:"tax_total"`
-	GrandTotal    string `json:"grand_total"`
+	OrderID       string      `json:"order_id"`
+	OrderNumber   string      `json:"order_number"`
+	Status        string      `json:"status"`
+	Subtotal      string      `json:"subtotal"`
+	DiscountTotal string      `json:"discount_total"`
+	TaxTotal      string      `json:"tax_total"`
+	GrandTotal    string      `json:"grand_total"`
+	Lines         []orderLine `json:"lines"`
+}
+
+type orderLine struct {
+	LineID         string `json:"line_id"`
+	VariantID      string `json:"variant_id"`
+	SKU            string `json:"sku"`
+	ProductName    string `json:"product_name"`
+	Quantity       string `json:"quantity"`
+	UnitPrice      string `json:"unit_price"`
+	DiscountAmount string `json:"discount_amount"`
+	TaxAmount      string `json:"tax_amount"`
+	LineTotal      string `json:"line_total"`
 }
 
 // ---------------------------------------------------------------------
@@ -83,8 +96,18 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 			ON CONFLICT (merchant_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
 			RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text`,
 			req.BranchID, req.POSTerminalID, claims.UserID, orderNumber, req.IdempotencyKey)
-		return row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
-			&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal)
+		if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
+			&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+			return err
+		}
+		// A replayed idempotency_key returns the pre-existing cart, which may
+		// already have lines from the original call — not necessarily empty.
+		lines, err := loadOrderLines(ctx, tx, resp.OrderID)
+		if err != nil {
+			return err
+		}
+		resp.Lines = lines
+		return nil
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create order")
@@ -178,16 +201,7 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		row := tx.QueryRow(ctx, `
-			UPDATE sales_orders SET
-			  subtotal = (SELECT COALESCE(SUM(unit_price*quantity),0) FROM sales_order_lines WHERE sales_order_id = $1),
-			  tax_total = (SELECT COALESCE(SUM(tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
-			  discount_total = (SELECT COALESCE(SUM(discount_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
-			  grand_total = (SELECT COALESCE(SUM(line_total),0) FROM sales_order_lines WHERE sales_order_id = $1)
-			WHERE id = $1
-			RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text`, orderID)
-		return row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
-			&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal)
+		return recalcOrderTotals(ctx, tx, orderID, &resp)
 	})
 
 	switch {
@@ -199,6 +213,84 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order or product not found")
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not add line")
+	default:
+		httpx.JSON(w, http.StatusOK, resp)
+	}
+}
+
+// ---------------------------------------------------------------------
+// DELETE /sales/orders/{id}/lines/{line_id} — remove a line and release
+// its stock reservation. The schema has no FK from sales_order_lines to
+// stock_reservations (AddLine inserts both independently in the same
+// transaction), so the matching reservation is found by (order, variant,
+// quantity) rather than a direct join. If a variant was added to the same
+// cart more than once as separate lines, this releases one matching
+// active reservation, not necessarily the exact one tied to this specific
+// line — a known simplification worth a real join key if that scenario
+// turns out to matter in practice.
+// ---------------------------------------------------------------------
+
+func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	orderID := chi.URLParam(r, "id")
+	lineID := chi.URLParam(r, "line_id")
+
+	var resp orderResponse
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var branchID, status string
+		if err := tx.QueryRow(ctx, `SELECT branch_id, status FROM sales_orders WHERE id = $1`, orderID).
+			Scan(&branchID, &status); err != nil {
+			return err
+		}
+		if status != "cart" {
+			return errOrderNotEditable
+		}
+
+		var variantID string
+		var quantity float64
+		if err := tx.QueryRow(ctx, `
+			SELECT variant_id, quantity FROM sales_order_lines
+			WHERE id = $1 AND sales_order_id = $2`, lineID, orderID,
+		).Scan(&variantID, &quantity); err != nil {
+			return err
+		}
+
+		var reservationID string
+		err := tx.QueryRow(ctx, `
+			SELECT id FROM stock_reservations
+			WHERE sales_order_id = $1 AND variant_id = $2 AND quantity = $3 AND status = 'active'
+			ORDER BY created_at DESC LIMIT 1`, orderID, variantID, quantity,
+		).Scan(&reservationID)
+		if err != nil && err != pgx.ErrNoRows {
+			return err
+		}
+		if err == nil {
+			if err := releaseReservation(ctx, tx, branchID, variantID, quantity); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE stock_reservations SET status = 'released' WHERE id = $1`, reservationID); err != nil {
+				return err
+			}
+		}
+
+		if _, err := tx.Exec(ctx, `DELETE FROM sales_order_lines WHERE id = $1 AND sales_order_id = $2`, lineID, orderID); err != nil {
+			return err
+		}
+
+		return recalcOrderTotals(ctx, tx, orderID, &resp)
+	})
+
+	switch {
+	case errors.Is(err, errOrderNotEditable):
+		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order is no longer a cart")
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order or line not found")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not remove line")
 	default:
 		httpx.JSON(w, http.StatusOK, resp)
 	}
@@ -364,8 +456,74 @@ func loadOrder(ctx context.Context, tx pgx.Tx, orderID string, resp *orderRespon
 	row := tx.QueryRow(ctx, `
 		SELECT id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text
 		FROM sales_orders WHERE id = $1`, orderID)
-	return row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
-		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal)
+	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
+		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+		return err
+	}
+	lines, err := loadOrderLines(ctx, tx, orderID)
+	if err != nil {
+		return err
+	}
+	resp.Lines = lines
+	return nil
+}
+
+// recalcOrderTotals re-derives sales_orders' cached aggregate columns from
+// sales_order_lines — the source of truth is always the lines, never a
+// running total maintained incrementally, so this is safe to call after any
+// line-mutating operation (add, discount, delete) without needing to track
+// deltas. grand_total is computed explicitly as subtotal - discount + tax
+// rather than SUM(line_total) alone, so it's correct even if a caller ever
+// leaves line_total stale — belt-and-suspenders given how easy it is for a
+// per-line total to drift from the columns it's derived from.
+func recalcOrderTotals(ctx context.Context, tx pgx.Tx, orderID string, resp *orderResponse) error {
+	row := tx.QueryRow(ctx, `
+		UPDATE sales_orders SET
+		  subtotal = (SELECT COALESCE(SUM(unit_price*quantity),0) FROM sales_order_lines WHERE sales_order_id = $1),
+		  tax_total = (SELECT COALESCE(SUM(tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
+		  discount_total = (SELECT COALESCE(SUM(discount_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
+		  grand_total = (SELECT COALESCE(SUM(unit_price*quantity - discount_amount + tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1)
+		WHERE id = $1
+		RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text`, orderID)
+	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
+		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+		return err
+	}
+	lines, err := loadOrderLines(ctx, tx, orderID)
+	if err != nil {
+		return err
+	}
+	resp.Lines = lines
+	return nil
+}
+
+// loadOrderLines joins sales_order_lines with product_variants for
+// name/sku — closes the gap flagged in phase0_1_design.md §3.4: GET
+// /sales/orders/{id} previously returned order-level aggregates only.
+func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT sol.id, sol.variant_id, pv.sku, p.name, sol.quantity::text,
+		       sol.unit_price::text, sol.discount_amount::text, sol.tax_amount::text, sol.line_total::text
+		FROM sales_order_lines sol
+		JOIN product_variants pv ON pv.id = sol.variant_id
+		JOIN products p ON p.id = pv.product_id
+		WHERE sol.sales_order_id = $1
+		ORDER BY sol.created_at`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	lines := []orderLine{}
+	for rows.Next() {
+		var l orderLine
+		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity,
+			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal); err != nil {
+			return nil, err
+		}
+		lines = append(lines, l)
+	}
+	return lines, rows.Err()
 }
 
 var (

@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -18,6 +19,11 @@ const (
 	lockoutDuration   = 15 * time.Minute
 )
 
+// errAccountNotUsable covers both ACCOUNT_INACTIVE and ACCOUNT_LOCKED as a
+// single sentinel where the caller (refresh_handlers.go) doesn't need to
+// distinguish the two in its response.
+var errAccountNotUsable = errors.New("authn: account not usable")
+
 type LoginHandler struct {
 	DB     *db.DB
 	Issuer *TokenIssuer
@@ -30,10 +36,12 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	AccessToken string    `json:"access_token"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	UserID      string    `json:"user_id"`
-	Roles       []string  `json:"roles"`
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	ExpiresIn    int       `json:"expires_in"` // seconds — matches phase0_1_design.md §3.1's documented field
+	UserID       string    `json:"user_id"`
+	Roles        []string  `json:"roles"`
 }
 
 // ServeHTTP implements the two-step tenant resolution the schema requires:
@@ -85,22 +93,9 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return scanErr
 		}
 
-		rows, queryErr := tx.Query(ctx, `
-			SELECT r.name FROM roles r
-			JOIN user_roles ur ON ur.role_id = r.id
-			WHERE ur.user_id = $1`, u.id)
-		if queryErr != nil {
-			return queryErr
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			if scanErr := rows.Scan(&name); scanErr != nil {
-				return scanErr
-			}
-			roles = append(roles, name)
-		}
-		return rows.Err()
+		var rolesErr error
+		roles, rolesErr = fetchRoles(ctx, tx, u.id)
+		return rolesErr
 	})
 
 	if err == pgx.ErrNoRows {
@@ -121,25 +116,56 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(u.passwordHash), []byte(req.Password)) != nil {
-		// NOTE: incrementing failed_login_attempts / setting locked_until on
-		// mismatch is a straightforward follow-up UPDATE inside the same
-		// WithTenant pattern above — omitted here to keep this first vertical
-		// slice small; do not ship Phase 1 without it (FRD §18 requires the
-		// 5-attempt/15-minute lockout enforced above to actually trigger).
+		// Lockout enforcement: increment failed_login_attempts, and once it
+		// crosses maxFailedAttempts, set locked_until and reset the counter
+		// so the next window starts fresh. Runs inside the same WithTenant
+		// pattern as everything else — closes the gap flagged in the
+		// original NOTE here (ACCOUNT_LOCKED was checked above but never
+		// triggered by anything).
+		lockErr := h.DB.WithTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+			return recordFailedLoginAttempt(ctx, tx, u.id, u.failedLoginAttempts)
+		})
+		if lockErr != nil {
+			httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "login failed")
+			return
+		}
 		httpx.Error(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid merchant code, email or password")
 		return
 	}
 
-	token, expiresAt, err := h.Issuer.IssueAccessToken(tenantID, u.id, "", roles)
+	ttl := sessionTTLForRoles(roles)
+	var resp loginResponse
+	err = h.DB.WithTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Successful login clears any accumulated failed-attempt count —
+		// otherwise a user who fails a few times then succeeds stays one
+		// mistake away from lockout indefinitely.
+		if err := clearFailedLoginState(ctx, tx, u.id, u.failedLoginAttempts != 0 || u.lockedUntil != nil); err != nil {
+			return err
+		}
+
+		refreshToken, err := issueRefreshToken(ctx, tx, tenantID, u.id, nil, nil)
+		if err != nil {
+			return err
+		}
+
+		token, expiresAt, err := h.Issuer.IssueAccessToken(tenantID, u.id, "", roles, ttl)
+		if err != nil {
+			return err
+		}
+		resp = loginResponse{
+			AccessToken:  token,
+			RefreshToken: refreshToken,
+			ExpiresAt:    expiresAt,
+			ExpiresIn:    int(time.Until(expiresAt).Seconds()),
+			UserID:       u.id,
+			Roles:        roles,
+		}
+		return nil
+	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not issue token")
 		return
 	}
 
-	httpx.JSON(w, http.StatusOK, loginResponse{
-		AccessToken: token,
-		ExpiresAt:   expiresAt,
-		UserID:      u.id,
-		Roles:       roles,
-	})
+	httpx.JSON(w, http.StatusOK, resp)
 }
