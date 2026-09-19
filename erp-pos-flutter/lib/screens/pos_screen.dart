@@ -28,6 +28,14 @@ class _PosScreenState extends State<PosScreen> {
   bool _busy = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AppSession>().refreshPendingSyncCount();
+    });
+  }
+
+  @override
   void dispose() {
     _barcodeController.dispose();
     _barcodeFocusNode.dispose();
@@ -108,7 +116,36 @@ class _PosScreenState extends State<PosScreen> {
     final order = session.currentOrder;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('New Sale')),
+      appBar: AppBar(
+        title: const Text('New Sale'),
+        actions: [
+          if (session.offlineMode || session.pendingSyncCount > 0)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(
+                child: TextButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          setState(() => _busy = true);
+                          await session.syncNow();
+                          if (mounted) setState(() => _busy = false);
+                        },
+                  icon: Icon(
+                    session.offlineMode ? Icons.cloud_off : Icons.sync,
+                    color: Colors.white,
+                  ),
+                  label: Text(
+                    session.pendingSyncCount > 0
+                        ? '${session.pendingSyncCount} pending'
+                        : 'Offline',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(

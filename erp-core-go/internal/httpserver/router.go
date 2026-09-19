@@ -12,6 +12,7 @@ import (
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
+	"erp-core-go/internal/sync"
 )
 
 func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool) http.Handler {
@@ -30,6 +31,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	orders := &sales.Handler{DB: database}
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
+	syncH := &sync.Handler{DB: database}
 
 	// Dev-only, public, no-auth password tooling — see the package comment
 	// on internal/authn/dev_handlers.go for exactly what these two
@@ -63,17 +65,26 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 
 			protected.Post("/sales/orders", orders.CreateOrder)
 			protected.Get("/sales/orders/{id}", orders.GetOrder)
+			protected.Get("/sales/orders/{id}/receipt", orders.GetReceipt)
 			protected.Post("/sales/orders/{id}/lines", orders.AddLine)
+			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)
+			protected.Post("/sales/orders/{id}/customer", orders.AttachCustomer)
 			protected.Post("/sales/orders/{id}/discounts", orders.ApplyDiscount)
 			protected.Post("/sales/orders/{id}/checkout", orders.Checkout)
+			protected.With(authn.RequirePermission(database, "sales.void")).
+				Post("/sales/orders/{id}/void", orders.Void)
 
 			protected.Get("/inventory", inv.GetStock)
-			protected.Post("/inventory/adjustments", inv.AdjustStock)
+			protected.With(authn.RequirePermission(database, "inventory.adjust")).
+				Post("/inventory/adjustments", inv.AdjustStock)
 
 			protected.Get("/reports/daily-sales", rpt.DailySales)
 			protected.Get("/reports/stock-summary", rpt.StockSummary)
 			protected.Get("/reports/eod-cash", rpt.EODCash)
+
+			protected.Post("/sync/push", syncH.Push)
+			protected.Get("/sync/pull", syncH.Pull)
 		})
 	})
 

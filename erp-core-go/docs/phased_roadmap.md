@@ -55,13 +55,15 @@ Each phase lists what's **in**, what's explicitly **deferred**, the **tech stack
 
 **§6.1 of that doc is worth reading before touching anything else here**: the hardening pass found that `docker-compose.yml`'s `api` service was connecting to Postgres as a superuser (`app_user`, via `POSTGRES_USER`), which silently disabled every RLS policy in the system since Phase 0 — the multi-tenancy guarantee this whole codebase is built around had never actually been enforced by the database in this stack. Fixed (a dedicated non-superuser `erp_app` role, `migrations/004_least_privilege_app_role.sql`) and re-verified live, but **if you've deployed this anywhere outside the shipped docker-compose, check that deployment's DB role the same way** — this class of bug (an admin/master role standing in for the app's own role) isn't specific to Docker.
 
-**Still open, in dependency order:**
-1. `/sync/push`/`/sync/pull` + a Flutter-side offline store — the single biggest remaining gap against "offline-capable" in this phase's Definition of Done below. Needs a decision on the Flutter local-storage approach before implementation starts.
-2. Barcode & label generation, printer integration
-3. `GET /sales/orders/{id}/receipt`, `POST /sales/orders/{id}/void`, `POST /sales/orders/{id}/customer`, `PATCH .../lines/{line_id}`
-4. General permission-code enforcement (`permissions`/`role_permissions` — currently only two handlers gate by role name, not the schema's permission-code model)
-5. Discount-before-tax GST treatment (today's discount is a post-tax reduction — see `phase0_1_design.md` §3.4)
-6. PIN quick-login UI in the Flutter app (backend supports it; no screen calls it yet)
+**A second hardening pass then closed everything else that didn't require a new architectural decision** — general permission-code enforcement, `PATCH`/`customer`/`receipt`/`void` endpoints, pre-tax GST discount treatment, and PIN-login UI in Flutter (see `phase0_1_design.md` §6.5 for what closed and how each was verified live).
+
+**Offline sync — the last item on the previous open list — is also closed** (`/sync/push`/`/sync/pull`, and a `sqflite`-backed local store in the Flutter app; see `phase0_1_design.md` §6.6). One real gap in how it was verified: there's no Android/iOS device or emulator in this environment, so the offline flow was verified by a real SQLite-backed test (`sqflite_common_ffi`) plus static analysis, not by clicking through the app on a device — **do that before trusting this in front of a real cashier.**
+
+**Still open:**
+1. Barcode & label generation, real printer integration (the receipt payload endpoint it would consume is built — see §6.5)
+2. Standalone `POST/DELETE /inventory/reservations` (only relevant outside the cart flow, which doesn't need them today)
+3. Password-reuse history, a real forgot-password flow (superseding the dev-only `/dev/set-password` tool)
+4. On-device verification of the offline sync flow (see above) — the one piece of this phase not exercised on an actual device
 
 ---
 

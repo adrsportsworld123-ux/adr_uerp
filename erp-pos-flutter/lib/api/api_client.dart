@@ -205,6 +205,27 @@ class ApiClient {
     return result;
   }
 
+  Future<LoginResult> pinLogin({
+    required String posTerminalId,
+    required String employeeCode,
+    required String pin,
+    required String deviceFingerprint,
+  }) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/auth/pin-login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'pos_terminal_id': posTerminalId,
+        'employee_code': employeeCode,
+        'pin': pin,
+        'device_fingerprint': deviceFingerprint,
+      }),
+    );
+    final result = LoginResult.fromJson(_decode(resp));
+    _accessToken = result.accessToken;
+    return result;
+  }
+
   Future<ProductLookup> lookupBarcode(String code) async {
     final resp = await _http.get(
       Uri.parse('$baseUrl/api/v1/products/barcode/$code'),
@@ -272,6 +293,24 @@ class ApiClient {
       headers: _authHeaders,
     );
     return OrderSummary.fromJson(_decode(resp));
+  }
+
+  Future<Map<String, dynamic>> syncPull({required String branchId, String? since}) async {
+    final uri = Uri.parse('$baseUrl/api/v1/sync/pull').replace(queryParameters: {
+      'branch_id': branchId,
+      if (since != null) 'since': since,
+    });
+    final resp = await _http.get(uri, headers: _authHeaders);
+    return _decode(resp);
+  }
+
+  Future<Map<String, dynamic>> syncPush(List<Map<String, dynamic>> orders) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/sync/push'),
+      headers: _authHeaders,
+      body: jsonEncode({'orders': orders}),
+    );
+    return _decode(resp);
   }
 
   Map<String, dynamic> _decode(http.Response resp) {

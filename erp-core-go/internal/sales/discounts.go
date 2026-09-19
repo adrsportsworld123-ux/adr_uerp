@@ -49,14 +49,13 @@ type discountRequest struct {
 // the same invariant every other total on this order already relies on),
 // and records who authorized it in sales_order_discounts.
 //
-// Known simplification: discount is applied to each line's total AFTER
-// tax_amount was already computed on the pre-discount subtotal in AddLine
-// — i.e. this is a post-tax discount, not a reduction of the GST-taxable
-// value. Full pre-tax discount treatment would need tax_amount
-// recalculated per line here too (the tax rate isn't currently stored per
-// line, only the resolved tax_amount) — a reasonable follow-up once this
-// matters for real GST filings, not required to make tiered authorization
-// itself work correctly.
+// Applied pre-tax: each line's discount share reduces its taxable value
+// before tax is recomputed at that line's own rate, matching GST treatment
+// (tax is owed on the discounted price, not the pre-discount price) —
+// this re-joins product_variants/tax_slabs per line rather than reusing
+// the tax_amount AddLine originally stored, since that was computed
+// against the pre-discount subtotal and would otherwise overstate tax
+// after a discount is applied.
 func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -112,19 +111,26 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 
 		discountTotal := round2(subtotal * req.ValuePercent / 100)
 
-		rows, err := tx.Query(ctx, `SELECT id, unit_price, quantity, tax_amount FROM sales_order_lines WHERE sales_order_id = $1`, orderID)
+		rows, err := tx.Query(ctx, `
+			SELECT sol.id, sol.unit_price, sol.quantity,
+			       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
+			FROM sales_order_lines sol
+			JOIN product_variants pv ON pv.id = sol.variant_id
+			JOIN products p ON p.id = pv.product_id
+			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+			WHERE sol.sales_order_id = $1`, orderID)
 		if err != nil {
 			return err
 		}
 		type line struct {
 			lineID         string
 			unitPrice, qty float64
-			taxAmount      float64
+			taxRatePct     float64
 		}
 		var lines []line
 		for rows.Next() {
 			var l line
-			if err := rows.Scan(&l.lineID, &l.unitPrice, &l.qty, &l.taxAmount); err != nil {
+			if err := rows.Scan(&l.lineID, &l.unitPrice, &l.qty, &l.taxRatePct); err != nil {
 				rows.Close()
 				return err
 			}
@@ -138,10 +144,12 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		for _, l := range lines {
 			lineSubtotal := l.unitPrice * l.qty
 			share := round2(discountTotal * (lineSubtotal / subtotal))
-			lineTotal := lineSubtotal - share + l.taxAmount
+			taxableValue := lineSubtotal - share
+			taxAmount := round2(taxableValue * l.taxRatePct / 100)
+			lineTotal := taxableValue + taxAmount
 			if _, err := tx.Exec(ctx, `
-				UPDATE sales_order_lines SET discount_amount = $1, line_total = $2 WHERE id = $3`,
-				share, lineTotal, l.lineID); err != nil {
+				UPDATE sales_order_lines SET discount_amount = $1, tax_amount = $2, line_total = $3 WHERE id = $4`,
+				share, taxAmount, lineTotal, l.lineID); err != nil {
 				return err
 			}
 		}

@@ -73,22 +73,14 @@ type adjustmentRequest struct {
 // AdjustStock: POST /inventory/adjustments — manual correction, writes a
 // stock_movements row and an audit_logs row (before/after on_hand).
 //
-// Authorization: the schema has a `permissions`/`role_permissions` RBAC
-// model (with an `inventory.adjust` permission code already seeded-ready)
-// that no handler in this codebase actually enforces yet — building a
-// general permission-code middleware is a larger piece of work than this
-// one endpoint needs. As an interim, real (not absent) gate, this requires
-// the caller to hold "Branch Manager" or "Merchant Admin" — replace with a
-// role_permissions lookup once other endpoints need finer-grained
-// permission checks too, so it's solved once, generally, not per-handler.
+// Authorization is enforced by authn.RequirePermission("inventory.adjust")
+// at the router level (see internal/httpserver/router.go) — the general
+// permission-code mechanism this handler used to gate by role name as an
+// interim measure before that middleware existed.
 func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
 		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
-		return
-	}
-	if !authn.HasRole(claims.Roles, "Branch Manager") && !authn.HasRole(claims.Roles, "Merchant Admin") {
-		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", "stock adjustments require a Branch Manager or Merchant Admin role")
 		return
 	}
 
