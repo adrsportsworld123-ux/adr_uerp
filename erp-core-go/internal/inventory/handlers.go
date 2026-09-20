@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
@@ -136,6 +137,27 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		// Values the adjustment at the variant's current (WAC) cost and
+		// books it against Inventory Shrinkage in whichever direction makes
+		// the entry balance — this is a simplified model (one plug account
+		// for both gains and losses) since the FRD doesn't specify separate
+		// gain/loss accounts for adjustments; skipped entirely when
+		// cost_price is 0 (nothing ever purchased through a GRN yet) since
+		// there's no value to move.
+		var costPrice float64
+		if err := tx.QueryRow(ctx, `SELECT cost_price FROM product_variants WHERE id = $1`, req.VariantID).Scan(&costPrice); err != nil {
+			return err
+		}
+		if adjValue := req.QuantityDelta * costPrice; adjValue != 0 {
+			lines := []accounting.JournalLine{
+				{AccountCode: accounting.AccountInventory, Debit: posOrZero(adjValue), Credit: posOrZero(-adjValue)},
+				{AccountCode: accounting.AccountInventoryLoss, Debit: posOrZero(-adjValue), Credit: posOrZero(adjValue)},
+			}
+			if _, err := accounting.PostJournalEntry(ctx, tx, req.BranchID, "inventory_adjustment", req.VariantID, req.Reason, claims.UserID, lines); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -143,6 +165,15 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, resp)
+}
+
+// posOrZero returns v if positive, else 0 — used to build a two-sided
+// journal line from a single signed value without an if/else per line.
+func posOrZero(v float64) float64 {
+	if v > 0 {
+		return v
+	}
+	return 0
 }
 
 func formatQty(v float64) string {

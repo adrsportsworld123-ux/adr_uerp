@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
@@ -171,10 +172,25 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 			}
 		}
 
-		_, err := tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			UPDATE sales_orders SET status = 'finalized', finalized_at = now(),
 			  subtotal = $1, discount_total = $2, tax_total = $3, grand_total = $4
-			WHERE id = $5`, subtotal, discountTotal, taxTotal, grandTotal, orderID)
+			WHERE id = $5`, subtotal, discountTotal, taxTotal, grandTotal, orderID); err != nil {
+			return err
+		}
+
+		debitLines := make([]accounting.JournalLine, 0, len(o.Payments))
+		for _, p := range o.Payments {
+			debitLines = append(debitLines, accounting.JournalLine{AccountCode: accounting.AccountCodeForPaymentMethod(p.Method), Debit: p.Amount})
+		}
+		lines := debitLines
+		if netRevenue := subtotal - discountTotal; netRevenue > 0 {
+			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountSalesRevenue, Credit: netRevenue})
+		}
+		if taxTotal > 0 {
+			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountGSTPayable, Credit: taxTotal})
+		}
+		_, err := accounting.PostJournalEntry(ctx, tx, o.BranchID, "sale", orderID, "Offline sale (synced)", claims.UserID, lines)
 		if err == nil {
 			res.Status = "ok"
 		}

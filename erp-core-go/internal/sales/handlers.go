@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
@@ -324,8 +325,11 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var branchID, status, grandTotal string
-		if err := tx.QueryRow(ctx, `SELECT branch_id, status, grand_total::text FROM sales_orders WHERE id = $1`, orderID).
-			Scan(&branchID, &status, &grandTotal); err != nil {
+		var subtotal, discountTotal, taxTotal float64
+		if err := tx.QueryRow(ctx, `
+			SELECT branch_id, status, grand_total::text, subtotal, discount_total, tax_total
+			FROM sales_orders WHERE id = $1`, orderID,
+		).Scan(&branchID, &status, &grandTotal, &subtotal, &discountTotal, &taxTotal); err != nil {
 			return err
 		}
 
@@ -401,6 +405,29 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if _, err := tx.Exec(ctx, `UPDATE sales_orders SET status = 'finalized', finalized_at = now() WHERE id = $1`, orderID); err != nil {
+			return err
+		}
+
+		// Journal Dr lines are scaled to sum to exactly grand_total, not the
+		// raw submitted amounts — this system doesn't model "change given"
+		// (an over-tendered cash payment), so without this an over-tender
+		// would Dr more than the Cr side and fail PostJournalEntry's balance
+		// check, breaking a checkout that would otherwise have succeeded. In
+		// every real path through this codebase today (the Flutter client
+		// always sends payments summing to exactly grand_total), scale is 1
+		// and this is a no-op.
+		scale := 1.0
+		if paidTotal > grandTotalFloat && paidTotal > 0 {
+			scale = grandTotalFloat / paidTotal
+		}
+		debitLines := make([]accounting.JournalLine, 0, len(req.Payments))
+		for _, p := range req.Payments {
+			debitLines = append(debitLines, accounting.JournalLine{
+				AccountCode: accounting.AccountCodeForPaymentMethod(p.Method),
+				Debit:       p.Amount * scale,
+			})
+		}
+		if err := postSaleJournal(ctx, tx, branchID, orderID, claims.UserID, debitLines, subtotal, discountTotal, taxTotal); err != nil {
 			return err
 		}
 

@@ -82,16 +82,19 @@ flowchart TB
 - Inventory & stock reservation (optimistic locking, 15-minute soft holds, inter-branch transfer state machine)
 - Offline sync & conflict resolution engine for POS devices
 - Notification dispatch at volume (fan-out to Email/SMS/WhatsApp/Push providers)
+- **Purchase & Procurement, Ledger & Accounting** (moved here from §3.2 — see the as-built note below)
 
 **Stack:** Go 1.23+ (built and shipped on 1.24), `chi` for HTTP, `gRPC` for internal service calls (not yet needed — no second service exists yet to call), `GORM` or `sqlc` for the Postgres/MySQL-portable data layer, `Asynq` (Redis-backed) for background jobs, `testify` + `httptest` for testing.
 
 > **As-built note (Phase 0/1):** `erp-core-go` currently talks to Postgres with hand-written SQL via `pgx` directly — no `GORM`/`sqlc` layer yet, and no MySQL portability. That was the pragmatic call for a walking skeleton small enough to verify by hand, statement by statement, against a live Postgres instance (see `phase0_1_design.md` §4) — a codegen/ORM layer adds a step between "here's the SQL" and "here's what ran" that isn't worth it yet at this size. It's real technical debt against §5's "Secondary SQL adapter: MySQL" decision below, not a silent scope cut: introduce `sqlc` (keeps hand-reviewable SQL, adds compile-time safety and a path to a MySQL-dialect target) at or before Phase 2's multi-branch work, before the query surface grows much larger than it is today.
 
+> **As-built note (Phase 2):** Purchase Management and Ledger & Accounting were built directly in `erp-core-go` (`internal/purchase/`, `internal/accounting/`), not in `erp-business-py` as originally planned in §3.2 below — that repo was never created. Caught after both sub-areas were already implemented and live-verified, not before; **the user's explicit decision, on record: keep both in Go permanently rather than migrate**, since standing up and maintaining a second backend/language solo isn't worth it for modules that are working, tested, and don't need Python's business-rule-iteration-speed advantage badly enough to justify the split. This is a deliberate revision of §3.2's original ownership list, not a drift to silently work around — §11's Migration Triggers are still the right test for whether to split *any* module out later, this included. `erp-business-py` remains unbuilt; if it's ever started, it inherits CRM, HR, Reporting/BI, and the AI Platform only.
+
 ### 3.2 Python — Business Modules + AI Platform
 **Why:** Fastest iteration for business-rule-heavy modules (GST slabs, payroll statutory rules, promotion hierarchies), and the natural home for every AI capability in your BRS.
 
 **Owns:**
-- CRM & Loyalty, HR & Payroll, Purchase & Procurement, Ledger & Accounting, Reporting/BI, Service & Warranty, Workflow & Approvals
+- CRM & Loyalty, HR & Payroll, Reporting/BI, Service & Warranty, Workflow & Approvals — **not** Purchase & Procurement or Ledger & Accounting, moved to §3.1's Go ownership; see that section's Phase 2 as-built note for why
 - **AI Platform:** demand forecasting (scikit-learn/XGBoost/Prophet), dynamic pricing, recommendation engine, fraud detection, NLP-BI ("ask a question, get a chart"), AI Copilot/chatbot (LLM API or self-hosted via Ollama, with LangChain/LlamaIndex for orchestration), OCR (PaddleOCR/Tesseract), and embeddings/RAG via **pgvector** (a Postgres extension — avoids standing up a separate vector database)
 
 **Stack:** Python 3.12+, FastAPI, SQLAlchemy 2.0 (async, supports Postgres + MySQL dialects), Celery or Dramatiq + Redis for background/scheduled jobs, `pytest` for testing.

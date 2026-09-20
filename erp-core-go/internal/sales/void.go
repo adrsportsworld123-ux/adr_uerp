@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 )
@@ -51,8 +52,10 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var branchID, status string
-		if err := tx.QueryRow(ctx, `SELECT branch_id, status FROM sales_orders WHERE id = $1`, orderID).
-			Scan(&branchID, &status); err != nil {
+		var subtotal, discountTotal, taxTotal float64
+		if err := tx.QueryRow(ctx, `
+			SELECT branch_id, status, subtotal, discount_total, tax_total FROM sales_orders WHERE id = $1`, orderID,
+		).Scan(&branchID, &status, &subtotal, &discountTotal, &taxTotal); err != nil {
 			return err
 		}
 		if status != "finalized" {
@@ -97,6 +100,28 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 
 		if _, err := tx.Exec(ctx, `
 			UPDATE sales_orders SET status = 'voided', void_reason = $1 WHERE id = $2`, req.Reason, orderID); err != nil {
+			return err
+		}
+
+		payRows, err := tx.Query(ctx, `SELECT method, amount FROM payments WHERE sales_order_id = $1 AND status = 'captured'`, orderID)
+		if err != nil {
+			return err
+		}
+		var creditLines []accounting.JournalLine
+		for payRows.Next() {
+			var method string
+			var amount float64
+			if err := payRows.Scan(&method, &amount); err != nil {
+				payRows.Close()
+				return err
+			}
+			creditLines = append(creditLines, accounting.JournalLine{AccountCode: accounting.AccountCodeForPaymentMethod(method), Credit: amount})
+		}
+		payRows.Close()
+		if err := payRows.Err(); err != nil {
+			return err
+		}
+		if err := postSaleVoidJournal(ctx, tx, branchID, orderID, claims.UserID, creditLines, subtotal, discountTotal, taxTotal); err != nil {
 			return err
 		}
 
