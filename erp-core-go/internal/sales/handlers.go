@@ -24,8 +24,21 @@ import (
 	"erp-core-go/internal/httpx"
 )
 
+// LoyaltyEarner lets Checkout award loyalty points on a finalized sale
+// without internal/sales importing internal/loyalty directly — loyalty
+// already needs to import sales (for ApplyDiscountLayer, its redemption
+// layer), so a direct sales -> loyalty import would cycle. Same
+// field-injection shape router.go already uses for pricing.Handler.Search
+// (internal/search), wired to a *loyalty.Handler there.
+type LoyaltyEarner interface {
+	EarnForOrder(ctx context.Context, tx pgx.Tx, customerID, orderID string, grandTotal float64) (bool, error)
+}
+
 type Handler struct {
 	DB *db.DB
+	// Loyalty is optional (nil is fine — Checkout just skips earning);
+	// every real deployment wires it, same as pricing.Handler.Search.
+	Loyalty LoyaltyEarner
 }
 
 type orderResponse struct {
@@ -325,11 +338,12 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var branchID, status, grandTotal string
+		var customerID *string
 		var subtotal, discountTotal, taxTotal float64
 		if err := tx.QueryRow(ctx, `
-			SELECT branch_id, status, grand_total::text, subtotal, discount_total, tax_total
+			SELECT branch_id, status, grand_total::text, subtotal, discount_total, tax_total, customer_id
 			FROM sales_orders WHERE id = $1`, orderID,
-		).Scan(&branchID, &status, &grandTotal, &subtotal, &discountTotal, &taxTotal); err != nil {
+		).Scan(&branchID, &status, &grandTotal, &subtotal, &discountTotal, &taxTotal, &customerID); err != nil {
 			return err
 		}
 
@@ -429,6 +443,17 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := postSaleJournal(ctx, tx, branchID, orderID, claims.UserID, debitLines, subtotal, discountTotal, taxTotal); err != nil {
 			return err
+		}
+
+		// Loyalty earn (discount hierarchy item 5's counterpart — see
+		// internal/loyalty.Handler.EarnForOrder for why a redemption on
+		// this same order suppresses this rather than the other way
+		// around). Only walk-in orders with no customer attached skip
+		// this; h.Loyalty is nil only in tests/tools that never wire one.
+		if h.Loyalty != nil && customerID != nil {
+			if _, err := h.Loyalty.EarnForOrder(ctx, tx, *customerID, orderID, grandTotalFloat); err != nil {
+				return err
+			}
 		}
 
 		return loadOrder(ctx, tx, orderID, &resp)

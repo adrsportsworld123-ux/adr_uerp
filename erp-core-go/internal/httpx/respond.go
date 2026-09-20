@@ -29,3 +29,13 @@ func Error(w http.ResponseWriter, status int, code, message string) {
 func ErrorWithDetails(w http.ResponseWriter, status int, code, message string, details any) {
 	JSON(w, status, map[string]apiError{"error": {Code: code, Message: message, Details: details}})
 }
+
+// Binary writes a raw, non-JSON body — used only by internal/printing's
+// consumers (label/receipt print endpoints), which return actual ESC/POS
+// command bytes for a printer to consume, not a JSON payload for a
+// browser to parse.
+func Binary(w http.ResponseWriter, status int, contentType string, data []byte) {
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(status)
+	_, _ = w.Write(data)
+}

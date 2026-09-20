@@ -20,7 +20,11 @@ test("branch → transfer request → approve → dispatch → complete with a d
     await page.fill("#name", `E2E Branch ${branchCode}`);
     await page.fill("#code", branchCode);
     await page.click('button[type="submit"]');
-    await expect(page.getByText(`E2E Branch ${branchCode}`)).toBeVisible();
+    // exact: a short numeric branchCode (Date.now() % 100000 can be as
+    // short as one digit) can otherwise substring-match an older
+    // accumulated branch name from a previous run against this same
+    // persistent dev database.
+    await expect(page.getByRole("cell", { name: `E2E Branch ${branchCode}`, exact: true })).toBeVisible();
   });
 
   let transferNumber = "";

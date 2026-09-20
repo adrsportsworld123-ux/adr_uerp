@@ -8,7 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/printing"
 )
 
 type receiptResponse struct {
@@ -48,8 +50,65 @@ func (h *Handler) GetReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	orderID := chi.URLParam(r, "id")
 
+	resp, err := loadReceiptData(r.Context(), h.DB, claims.TenantID, orderID)
+	if err == pgx.ErrNoRows {
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
+		return
+	} else if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not build receipt")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, resp)
+}
+
+// PrintReceipt: GET /sales/orders/{id}/receipt/print — the actual
+// printer-ready rendering of GetReceipt's payload (see
+// internal/printing.BuildReceipt), closing the "printer integration"
+// half of Phase 1's Barcode & Label Generation item. Deliberately shares
+// loadReceiptData with GetReceipt rather than re-querying, so the JSON
+// contract and the printed receipt can never drift apart.
+func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	orderID := chi.URLParam(r, "id")
+
+	resp, err := loadReceiptData(r.Context(), h.DB, claims.TenantID, orderID)
+	if err == pgx.ErrNoRows {
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
+		return
+	} else if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not build receipt")
+		return
+	}
+
+	data := printing.ReceiptData{
+		MerchantName:  resp.MerchantName,
+		BranchName:    resp.BranchName,
+		OrderNumber:   resp.OrderNumber,
+		CashierName:   resp.CashierName,
+		Subtotal:      resp.Subtotal,
+		DiscountTotal: resp.DiscountTotal,
+		TaxTotal:      resp.TaxTotal,
+		GrandTotal:    resp.GrandTotal,
+	}
+	for _, l := range resp.Lines {
+		data.Lines = append(data.Lines, printing.ReceiptLine{
+			ProductName: l.ProductName, SKU: l.SKU, Quantity: l.Quantity, UnitPrice: l.UnitPrice, LineTotal: l.LineTotal,
+		})
+	}
+	for _, p := range resp.Payments {
+		data.Payments = append(data.Payments, printing.ReceiptPayment{Method: p.Method, Amount: p.Amount})
+	}
+
+	httpx.Binary(w, http.StatusOK, "application/vnd.escpos-raw", printing.BuildReceipt(data))
+}
+
+func loadReceiptData(ctx context.Context, database *db.DB, tenantID, orderID string) (receiptResponse, error) {
 	var resp receiptResponse
-	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err := database.WithTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var finalizedAt *string
 		var customerName *string
 		if err := tx.QueryRow(ctx, `
@@ -93,13 +152,5 @@ func (h *Handler) GetReceipt(w http.ResponseWriter, r *http.Request) {
 		}
 		return rows.Err()
 	})
-
-	if err == pgx.ErrNoRows {
-		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
-		return
-	} else if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not build receipt")
-		return
-	}
-	httpx.JSON(w, http.StatusOK, resp)
+	return resp, err
 }

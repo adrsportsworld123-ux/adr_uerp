@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 const SHORTCUTS = [
+  { href: "/customers", title: "Customers", description: "Profiles, auto-segmentation, and purchase history" },
   { href: "/suppliers/new", title: "New supplier", description: "Register a supplier before receiving stock from them" },
   { href: "/purchase/grn/new", title: "New GRN", description: "Record goods received from a supplier" },
   { href: "/purchase/bills", title: "Purchase bills", description: "Bill a completed GRN and track payments" },

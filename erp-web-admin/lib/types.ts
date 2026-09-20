@@ -48,6 +48,35 @@ export interface SearchResponse {
   limit: number;
 }
 
+export interface Customer {
+  customer_id: string;
+  name: string;
+  phone: string;
+  email: string;
+  customer_type: "b2c" | "b2b";
+  address: string;
+  date_of_birth: string | null;
+  anniversary: string | null;
+  company_name: string;
+  gstin: string;
+  status: string;
+  total_spend: string;
+  transaction_count: number;
+  last_purchase_at: string | null;
+  segment: "new" | "regular" | "vip" | "dormant";
+}
+
+export interface CustomerOrderHistoryEntry {
+  order_number: string;
+  branch_name: string;
+  finalized_at: string;
+  grand_total: string;
+}
+
+export interface CustomerDetail extends Customer {
+  recent_orders: CustomerOrderHistoryEntry[];
+}
+
 export interface Branch {
   branch_id: string;
   name: string;
@@ -198,4 +227,77 @@ export interface DayBookEntry {
   source_type: string;
   description: string;
   lines: DayBookLine[];
+}
+
+// Mirrors erp-core-go's internal/promotions.promoConfig — one unified
+// shape covering every promo_type's parameters (only the fields relevant
+// to a given promo_type are populated), same "one flexible shape over
+// type-specific plumbing" choice the Go side made.
+export interface VolumeTier {
+  min_qty: number;
+  max_qty: number; // 0 = unbounded ("11+")
+  discount_pct: number;
+}
+
+export interface PromotionConfig {
+  value_percent?: number;
+  value_amount?: number;
+  buy_qty?: number;
+  get_qty?: number;
+  get_discount_pct?: number;
+  tiers?: VolumeTier[];
+  min_purchase_amount?: number;
+  discount_amount?: number;
+  discount_pct?: number;
+}
+
+export interface Promotion {
+  promotion_id: string;
+  name: string;
+  promo_type: "percent" | "fixed" | "bogo" | "volume" | "min_value";
+  application_level: "order" | "product" | "category";
+  product_id: string | null;
+  category_id: string | null;
+  target_segment: "vip" | "regular" | "new" | "dormant" | null;
+  config: PromotionConfig;
+  stacking: "exclusive" | "stackable";
+  starts_at: string | null;
+  ends_at: string | null;
+  active: boolean;
+}
+
+export interface Coupon {
+  coupon_id: string;
+  code: string;
+  promo_type: "percent" | "fixed";
+  value: string;
+  min_purchase_amount: string | null;
+  usage_limit_total: number | null;
+  usage_limit_per_customer: number | null;
+  usage_count: number;
+  valid_from: string | null;
+  valid_until: string | null;
+  channels: string[] | null;
+  branch_id: string | null;
+  active: boolean;
+}
+
+export interface LoyaltyConfig {
+  earn_rupees_per_point: string;
+  redeem_points_per_rupee: string;
+  expiry_months: number;
+}
+
+export interface LoyaltyLedgerEntry {
+  entry_type: "earn" | "redeem";
+  points: number;
+  balance_after: number;
+  sales_order_id: string | null;
+  created_at: string;
+}
+
+export interface LoyaltyBalance {
+  customer_id: string;
+  available_points: number;
+  ledger: LoyaltyLedgerEntry[];
 }

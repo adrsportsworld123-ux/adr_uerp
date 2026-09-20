@@ -42,20 +42,16 @@ type discountRequest struct {
 	Reason        string  `json:"reason"`
 }
 
-// ApplyDiscount: POST /sales/orders/{id}/discounts — resolves the discount
-// amount from the order's current subtotal, distributes it across existing
-// lines proportionally to each line's share of the subtotal (so
-// discount_total always reconciles to SUM(sales_order_lines.discount_amount),
-// the same invariant every other total on this order already relies on),
-// and records who authorized it in sales_order_discounts.
-//
-// Applied pre-tax: each line's discount share reduces its taxable value
-// before tax is recomputed at that line's own rate, matching GST treatment
-// (tax is owed on the discounted price, not the pre-discount price) —
-// this re-joins product_variants/tax_slabs per line rather than reusing
-// the tax_amount AddLine originally stored, since that was computed
-// against the pre-discount subtotal and would otherwise overstate tax
-// after a discount is applied.
+// ApplyDiscount: POST /sales/orders/{id}/discounts — the discount
+// hierarchy's manual layer (pos_frd_complete.md §5, hierarchy item 6:
+// "Manual discounts (with authorization)"), applied last, on top of
+// whatever internal/promotions/internal/loyalty have already layered onto
+// this order via ApplyDiscountLayer (discount_layer.go). The percent is
+// still resolved against the order's raw subtotal (a manual "10% off"
+// means 10% of the sale, not 10% of whatever's left after other
+// discounts), then handed to ApplyDiscountLayer as a rupee amount that
+// stacks additively — a cart with only a manual discount behaves exactly
+// as before this hierarchy existed (0 existing + share = share).
 func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -111,57 +107,17 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 
 		discountTotal := round2(subtotal * req.ValuePercent / 100)
 
-		rows, err := tx.Query(ctx, `
-			SELECT sol.id, sol.unit_price, sol.quantity,
-			       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
-			FROM sales_order_lines sol
-			JOIN product_variants pv ON pv.id = sol.variant_id
-			JOIN products p ON p.id = pv.product_id
-			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-			WHERE sol.sales_order_id = $1`, orderID)
-		if err != nil {
-			return err
-		}
-		type line struct {
-			lineID         string
-			unitPrice, qty float64
-			taxRatePct     float64
-		}
-		var lines []line
-		for rows.Next() {
-			var l line
-			if err := rows.Scan(&l.lineID, &l.unitPrice, &l.qty, &l.taxRatePct); err != nil {
-				rows.Close()
-				return err
-			}
-			lines = append(lines, l)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-
-		for _, l := range lines {
-			lineSubtotal := l.unitPrice * l.qty
-			share := round2(discountTotal * (lineSubtotal / subtotal))
-			taxableValue := lineSubtotal - share
-			taxAmount := round2(taxableValue * l.taxRatePct / 100)
-			lineTotal := taxableValue + taxAmount
-			if _, err := tx.Exec(ctx, `
-				UPDATE sales_order_lines SET discount_amount = $1, tax_amount = $2, line_total = $3 WHERE id = $4`,
-				share, taxAmount, lineTotal, l.lineID); err != nil {
-				return err
-			}
-		}
-
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO sales_order_discounts (id, merchant_id, sales_order_id, type, value_percent, discount_amount, authorized_by, applied_by, reason)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7)`,
-			orderID, req.Type, req.ValuePercent, discountTotal, authorizerID, claims.UserID, req.Reason); err != nil {
-			return err
-		}
-
-		return recalcOrderTotals(ctx, tx, orderID, &resp)
+		var applyErr error
+		resp, applyErr = ApplyDiscountLayer(ctx, tx, DiscountLayer{
+			OrderID:      orderID,
+			Type:         req.Type,
+			Amount:       discountTotal,
+			ValuePercent: &req.ValuePercent,
+			AuthorizedBy: authorizerID,
+			AppliedBy:    claims.UserID,
+			Reason:       req.Reason,
+		})
+		return applyErr
 	})
 
 	switch {
@@ -169,8 +125,8 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order is no longer a cart")
 	case errors.Is(err, errDiscountNotAuthorized):
 		httpx.Error(w, http.StatusForbidden, "DISCOUNT_NOT_AUTHORIZED", "the presented authorizer/PIN does not permit a discount of this size")
-	case errors.Is(err, errDiscountOutOfRange):
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has nothing to discount")
+	case errors.Is(err, errDiscountOutOfRange), errors.Is(err, ErrDiscountExceedsAvailable):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has nothing left to discount")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
 	case err != nil:

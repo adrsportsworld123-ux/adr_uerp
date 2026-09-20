@@ -10,9 +10,12 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/branches"
 	"erp-core-go/internal/catalog"
+	"erp-core-go/internal/customers"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/loyalty"
 	"erp-core-go/internal/pricing"
+	"erp-core-go/internal/promotions"
 	"erp-core-go/internal/purchase"
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
@@ -33,9 +36,12 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	refresh := &authn.RefreshHandler{DB: database, Issuer: issuer}
 	logout := &authn.LogoutHandler{DB: database}
 	barcode := &catalog.BarcodeHandler{DB: database}
+	barcodeAssign := &catalog.BarcodeAssignHandler{DB: database}
+	label := &catalog.LabelHandler{DB: database}
 	productList := &catalog.ListHandler{DB: database}
 	prc := &pricing.Handler{DB: database, Search: searchClient}
-	orders := &sales.Handler{DB: database}
+	loy := &loyalty.Handler{DB: database}
+	orders := &sales.Handler{DB: database, Loyalty: loy}
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
 	syncH := &sync.Handler{DB: database}
@@ -43,6 +49,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	acct := &accounting.Handler{DB: database}
 	br := &branches.Handler{DB: database}
 	srch := &search.Handler{DB: database, Client: searchClient}
+	cust := &customers.Handler{DB: database}
+	promo := &promotions.Handler{DB: database}
 
 	// Dev-only, public, no-auth password tooling — see the package comment
 	// on internal/authn/dev_handlers.go for exactly what these two
@@ -73,6 +81,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/auth/logout", logout.ServeHTTP)
 
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
+			protected.Post("/products/variants/{id}/barcodes", barcodeAssign.AssignBarcode)
+			protected.Get("/products/variants/{id}/label", label.PrintLabel)
 			protected.Get("/products", productList.ListProducts)
 			protected.Get("/products/search", srch.Search)
 			protected.With(authn.RequirePermission(database, "search.reindex")).
@@ -81,11 +91,15 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/sales/orders", orders.CreateOrder)
 			protected.Get("/sales/orders/{id}", orders.GetOrder)
 			protected.Get("/sales/orders/{id}/receipt", orders.GetReceipt)
+			protected.Get("/sales/orders/{id}/receipt/print", orders.PrintReceipt)
 			protected.Post("/sales/orders/{id}/lines", orders.AddLine)
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)
 			protected.Post("/sales/orders/{id}/customer", orders.AttachCustomer)
 			protected.Post("/sales/orders/{id}/discounts", orders.ApplyDiscount)
+			protected.Post("/sales/orders/{id}/promotions/apply", promo.ApplyPromotions)
+			protected.Post("/sales/orders/{id}/coupons", promo.ApplyCoupon)
+			protected.Post("/sales/orders/{id}/loyalty/redeem", loy.Redeem)
 			protected.Post("/sales/orders/{id}/checkout", orders.Checkout)
 			protected.With(authn.RequirePermission(database, "sales.void")).
 				Post("/sales/orders/{id}/void", orders.Void)
@@ -142,6 +156,28 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/branch-transfers/{id}/dispatch", br.DispatchTransfer)
 			protected.Post("/branch-transfers/{id}/complete", br.CompleteTransfer)
 			protected.Post("/branch-transfers/{id}/cancel", br.CancelTransfer)
+
+			protected.Post("/customers", cust.CreateCustomer)
+			protected.Get("/customers", cust.ListCustomers)
+			protected.Get("/customers/{id}", cust.GetCustomer)
+			protected.Patch("/customers/{id}", cust.UpdateCustomer)
+			protected.Get("/customers/{id}/loyalty", loy.GetCustomerLoyalty)
+
+			protected.Get("/promotions", promo.ListPromotions)
+			protected.With(authn.RequirePermission(database, "promotions.manage")).
+				Post("/promotions", promo.CreatePromotion)
+			protected.With(authn.RequirePermission(database, "promotions.manage")).
+				Patch("/promotions/{id}", promo.UpdatePromotion)
+
+			protected.Get("/coupons", promo.ListCoupons)
+			protected.With(authn.RequirePermission(database, "promotions.manage")).
+				Post("/coupons", promo.CreateCoupon)
+			protected.With(authn.RequirePermission(database, "promotions.manage")).
+				Patch("/coupons/{id}", promo.UpdateCoupon)
+
+			protected.Get("/loyalty/config", loy.GetConfig)
+			protected.With(authn.RequirePermission(database, "loyalty.manage")).
+				Patch("/loyalty/config", loy.UpdateConfig)
 
 			protected.Post("/pricing/calculate", prc.Calculate)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
