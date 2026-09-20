@@ -9,6 +9,14 @@ type Config struct {
 	DatabaseDSN string // Postgres connection string
 	JWTSecret   string // HS256 signing key — replace with an asymmetric key + rotation before production
 
+	// OpenSearchURL points at the product-search cluster (see
+	// internal/search). Empty means search is simply not configured —
+	// internal/search.Client treats that as "disabled," not a startup
+	// failure, so a deployment without OpenSearch still runs everything
+	// else fine; GET /products/search and POST /search/reindex just
+	// answer 503 SEARCH_UNAVAILABLE.
+	OpenSearchURL string
+
 	// DevAuthToolsEnabled wires up POST /dev/hash-password and POST
 	// /dev/set-password (see internal/authn/dev_handlers.go) — public,
 	// unauthenticated password tooling meant only for local development,
@@ -29,6 +37,7 @@ func Load() Config {
 		// (see migrations/004_least_privilege_app_role.sql).
 		DatabaseDSN:         getenv("DATABASE_DSN", "postgres://erp_app:erp_app_password@localhost:5432/erp?sslmode=disable"),
 		JWTSecret:           getenv("JWT_SECRET", "dev-only-secret-change-me"),
+		OpenSearchURL:       getenv("OPENSEARCH_URL", ""),
 		DevAuthToolsEnabled: getenv("DEV_AUTH_TOOLS_ENABLED", "false") == "true",
 	}
 }

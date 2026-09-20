@@ -175,6 +175,9 @@ func (h *Handler) bulkUpdate(w http.ResponseWriter, r *http.Request, apply bool)
 		if item.Status == "skipped_negative_margin" {
 			skipped++
 		}
+		if apply && item.Status == "updated" {
+			h.reindex(r.Context(), claims.TenantID, item.VariantID)
+		}
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"items": results, "total_matched": len(results), "skipped_negative_margin": skipped,

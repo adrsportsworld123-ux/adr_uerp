@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -17,10 +18,16 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/search"
 )
 
 type Handler struct {
 	DB *db.DB
+	// Search is optional (nil, or a disabled *search.Client, are both
+	// fine) — pricing must keep working with search unconfigured. When
+	// present, a successful price change is reindexed so the search
+	// screen's prices don't drift stale until the next full reindex.
+	Search *search.Client
 }
 
 var errNegativeMargin = errors.New("this price would result in a negative margin")
@@ -184,7 +191,25 @@ func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update pricing")
 	default:
+		h.reindex(r.Context(), claims.TenantID, variantID)
 		httpx.JSON(w, http.StatusOK, resp)
+	}
+}
+
+// reindex is best-effort and never affects the request's outcome — a
+// search index write failing must not roll back or fail a price change
+// that already committed in Postgres, the actual system of record.
+func (h *Handler) reindex(ctx context.Context, tenantID, variantID string) {
+	if !h.Search.Enabled() {
+		return
+	}
+	doc, err := search.FetchDocument(ctx, h.DB, tenantID, variantID)
+	if err != nil {
+		log.Printf("pricing: reindex variant %s: fetch: %v", variantID, err)
+		return
+	}
+	if err := h.Search.IndexDocument(ctx, doc); err != nil {
+		log.Printf("pricing: reindex variant %s: index: %v", variantID, err)
 	}
 }
 

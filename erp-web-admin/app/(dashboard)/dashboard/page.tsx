@@ -10,6 +10,7 @@ const SHORTCUTS = [
   { href: "/transfers/new", title: "New branch transfer", description: "Move stock from one branch to another" },
   { href: "/branches", title: "Branches", description: "Manage branches" },
   { href: "/pricing", title: "Pricing", description: "Margins, calculator, and bulk price updates" },
+  { href: "/search", title: "Product Search", description: "Fast, typo-tolerant catalog search" },
 ];
 
 export default function DashboardHome() {

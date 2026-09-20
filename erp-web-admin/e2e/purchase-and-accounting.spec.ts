@@ -64,7 +64,10 @@ test("supplier → GRN → bill → payment → day book, end to end", async ({ 
 
   await test.step("complete the GRN", async () => {
     await page.click("text=Complete GRN");
-    await expect(page.getByText("completed")).toBeVisible();
+    // Scoped to the status badge specifically — a plain getByText("completed")
+    // also matches the toast's "GRN completed — stock and cost updated",
+    // a strict-mode violation once both are on screen at once.
+    await expect(page.locator("[data-slot='badge']", { hasText: "completed" })).toBeVisible();
   });
 
   await test.step("bill the GRN and confirm landed-cost math", async () => {

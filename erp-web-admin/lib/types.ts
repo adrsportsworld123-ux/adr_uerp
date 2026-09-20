@@ -22,6 +22,32 @@ export interface Product {
   variants: ProductVariant[];
 }
 
+// From GET /products/search (internal/search) — a denormalized OpenSearch
+// document, one per variant, not the nested Product/ProductVariant shape
+// GET /products returns. margin/markup aren't computed server-side here
+// (the index doesn't store them), so the search screen derives them
+// client-side from cost_price/selling_price when it needs to show them.
+export interface SearchHit {
+  variant_id: string;
+  product_id: string;
+  name: string;
+  sku: string;
+  hsn_code: string;
+  category_name?: string;
+  brand_name?: string;
+  cost_price: number;
+  mrp: number;
+  selling_price: number;
+  status: string;
+}
+
+export interface SearchResponse {
+  results: SearchHit[] | null;
+  total: number;
+  page: number;
+  limit: number;
+}
+
 export interface Branch {
   branch_id: string;
   name: string;

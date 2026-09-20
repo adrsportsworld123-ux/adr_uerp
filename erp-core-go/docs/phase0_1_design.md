@@ -103,6 +103,8 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `DEVICE_MISMATCH` | 403 | `POST /auth/pin-login` | Terminal is already device-bound and the presented `device_fingerprint` doesn't match |
 | `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'` |
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
+| `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}` | New price sells below cost and `override` wasn't set |
+| `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
 | `INTERNAL_ERROR` | 500 | any handler | Unexpected failure (DB error, etc.) — message is intentionally generic; check server logs for detail |
 
 ### 3.1 Auth
@@ -169,7 +171,22 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `POST /dev/hash-password` | `{ password }` → `{ hash }`. Pure bcrypt computation, no DB access. Only registered when `DEV_AUTH_TOOLS_ENABLED=true`. |
 | `POST /dev/set-password` | `{ merchant_code, email, new_password }` → `{ status, user_id, email }`. Sets one user's password directly. Only registered when `DEV_AUTH_TOOLS_ENABLED=true` — **must never be true outside a local/dev environment** (see §5.3 for why). |
 
-### 3.7 Reports (added during the Phase 1 hardening pass — not in this doc's original scope)
+### 3.7 Product Search (added in Phase 2 — the one sub-area that's new infrastructure, not new endpoints on the existing pattern)
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /products/search?q=&category_id=&brand_id=&min_price=&max_price=&page=&limit=` | OpenSearch-backed free-text search: fuzzy `multi_match` across name/SKU/HSN/category/brand, always filtered to the caller's `merchant_id` (see below), same filters `GET /products` (§3.2) already has. This is the ≤100ms-target endpoint the FRD names; `GET /products` stays the plain-Postgres exact/`ILIKE` browse view Pricing's screen uses. |
+| `POST /search/reindex` | Rebuilds the caller's tenant's slice of the OpenSearch index from Postgres in one bulk call. Gated by `search.reindex` (Merchant Admin only, `migrations/010_search.sql`) since it's a bulk operation. |
+
+Implementation (`internal/search/`) is a small hand-rolled REST client over OpenSearch's JSON API (`net/http`, no SDK dependency — see `tech_stack_decision.md` §3.1's as-built note). OpenSearch is a derived, rebuildable read model: Postgres stays the system of record, and a document is a denormalized snapshot of one `product_variants` row (its parent product's name/HSN, category/brand names inlined, since OpenSearch has no join). Document `_id` is the variant ID, so re-indexing one variant is a plain overwrite.
+
+**Tenant isolation has no RLS equivalent here** — OpenSearch enforces nothing on its own. The entire boundary is `internal/search.Params.TenantID`, sourced only from `authn.FromContext(ctx)` claims and applied as a hard `term` filter on every query the client builds; there is no code path that lets a request parameter influence which tenant's documents a search can return. Verified live by writing a document under a different `merchant_id` straight into the index (bypassing the API entirely) and confirming a real tenant's search never surfaced it.
+
+**Sync model, given there's still no general product/variant CRUD** (`POST/PATCH /products` in §3.2 remain unbuilt): `PATCH /pricing/variants/{id}` and a bulk-price-update's applied items are the only product-mutating endpoints that exist today, so each reindexes its one affected variant after its Postgres write commits — best-effort, logged-not-fatal, never rolling back or failing the price change itself. `POST /search/reindex` is the full-catalog catch-up path underneath that, and the only sync mechanism at all until real product CRUD exists.
+
+**Degrades gracefully by design:** `OPENSEARCH_URL` unset, or OpenSearch unreachable, makes `internal/search.Client.Enabled()` false — `EnsureIndex` at startup logs a warning instead of failing boot, and both search endpoints answer `503 SEARCH_UNAVAILABLE` instead of panicking or hanging. Verified live by stopping the `opensearch` container mid-session: both search endpoints degraded to 503 immediately while every unrelated endpoint kept working.
+
+### 3.8 Reports (added during the Phase 1 hardening pass — not in this doc's original scope)
 
 | Method & Path | Purpose |
 |---|---|
@@ -249,7 +266,7 @@ Migration 003 originally added `users.employee_code` via `ALTER TABLE`. The seed
 - **`GET /sales/orders/{id}` full line detail** (§3.4) — the gap this doc used to describe under "not yet true to this doc" is closed; the Flutter client's `CartLineDisplay` local-tracking workaround was removed accordingly.
 - **The 15-minute reservation-expiry sweeper** (`internal/sales/sweeper.go`) — verified live: forced a reservation's `expires_at` into the past, confirmed the sweeper (ticking every 1 minute from `main.go`) released it and marked it `expired` within one tick.
 - **`GET /inventory`, `POST /inventory/adjustments`** (§3.3) — the latter gated on `Branch Manager`/`Merchant Admin` as an interim role-name check at the time; see §6.5 for the follow-up that replaced it.
-- **Basic reports** (§3.7).
+- **Basic reports** (§3.8).
 - **`internal/authn/roles.go`'s `HasRole`** — the one shared, case-insensitive role check other packages (discount authorization) use, instead of each re-implementing its own.
 
 ### 6.4 Still open

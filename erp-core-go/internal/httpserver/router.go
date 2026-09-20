@@ -16,10 +16,11 @@ import (
 	"erp-core-go/internal/purchase"
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
+	"erp-core-go/internal/search"
 	"erp-core-go/internal/sync"
 )
 
-func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool) http.Handler {
+func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client) http.Handler {
 	r := chi.NewRouter()
 	r.Use(CORS)
 	r.Use(middleware.RequestID)
@@ -33,7 +34,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	logout := &authn.LogoutHandler{DB: database}
 	barcode := &catalog.BarcodeHandler{DB: database}
 	productList := &catalog.ListHandler{DB: database}
-	prc := &pricing.Handler{DB: database}
+	prc := &pricing.Handler{DB: database, Search: searchClient}
 	orders := &sales.Handler{DB: database}
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
@@ -41,6 +42,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	pur := &purchase.Handler{DB: database}
 	acct := &accounting.Handler{DB: database}
 	br := &branches.Handler{DB: database}
+	srch := &search.Handler{DB: database, Client: searchClient}
 
 	// Dev-only, public, no-auth password tooling — see the package comment
 	// on internal/authn/dev_handlers.go for exactly what these two
@@ -72,6 +74,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
 			protected.Get("/products", productList.ListProducts)
+			protected.Get("/products/search", srch.Search)
+			protected.With(authn.RequirePermission(database, "search.reindex")).
+				Post("/search/reindex", srch.Reindex)
 
 			protected.Post("/sales/orders", orders.CreateOrder)
 			protected.Get("/sales/orders/{id}", orders.GetOrder)

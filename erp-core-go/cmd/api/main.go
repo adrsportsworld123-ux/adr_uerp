@@ -16,6 +16,7 @@ import (
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpserver"
 	"erp-core-go/internal/sales"
+	"erp-core-go/internal/search"
 )
 
 func main() {
@@ -32,11 +33,37 @@ func main() {
 
 	issuer := authn.NewTokenIssuer(cfg.JWTSecret, "erp-core-go", 24*time.Hour)
 
+	searchClient := search.NewClient(cfg.OpenSearchURL)
+	if searchClient.Enabled() {
+		// Best-effort: OpenSearch being briefly unreachable at boot must
+		// never stop the whole API from starting — search is layered on
+		// top of Postgres, not load-bearing for it. GET /products/search
+		// and POST /search/reindex retry EnsureIndex themselves.
+		if err := searchClient.EnsureIndex(ctx); err != nil {
+			log.Printf("search: ensure index at startup: %v (will retry lazily)", err)
+		} else if count, err := searchClient.Count(ctx); err != nil {
+			log.Printf("search: count documents at startup: %v", err)
+		} else if count == 0 {
+			// An index with zero documents at boot means either this is a
+			// brand-new environment or OpenSearch's data was lost since
+			// the last run (no volume, a wiped volume, disaster recovery)
+			// — found live exactly this way once already. Backfill from
+			// Postgres now rather than leaving search silently empty
+			// until someone remembers POST /search/reindex exists.
+			log.Printf("search: index is empty at startup, backfilling from Postgres...")
+			if indexed, err := search.BackfillAllTenants(ctx, database, searchClient); err != nil {
+				log.Printf("search: startup backfill: %v", err)
+			} else {
+				log.Printf("search: startup backfill indexed %d document(s) across all tenants", indexed)
+			}
+		}
+	}
+
 	go sales.RunExpirySweeper(ctx, database, time.Minute)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled),
+		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

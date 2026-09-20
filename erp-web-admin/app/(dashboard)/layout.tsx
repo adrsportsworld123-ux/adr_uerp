@@ -15,6 +15,7 @@ const NAV = [
   { href: "/purchase/bills", label: "Purchase Bills" },
   { href: "/purchase/returns", label: "Purchase Returns" },
   { href: "/pricing", label: "Pricing" },
+  { href: "/search", label: "Product Search" },
   { href: "/accounting/chart-of-accounts", label: "Chart of Accounts" },
   { href: "/accounting/journal-entries/new", label: "Journal Entry" },
   { href: "/accounting/party-ledger", label: "Party Ledger" },
