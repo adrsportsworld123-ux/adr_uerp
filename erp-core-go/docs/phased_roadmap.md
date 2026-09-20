@@ -119,7 +119,23 @@ Verified live end to end: dispatching correctly deducted exactly the requested q
 
 **Phase 2 is now feature-complete across Purchase, Accounting, and Multi-Branch, backend and UI both**, for everything the roadmap's original "In" list named.
 
-**Not yet started:** Pricing Management, Product Search (OpenSearch) — the two remaining Phase 2 sub-areas. Each will need its own `erp-web-admin` screens too, built alongside the backend from here on, matching how Multi-Branch's UI (unlike Purchase/Accounting's) didn't lag behind.
+**Sub-area 4, Pricing Management, is also built and verified live** (`migrations/009_pricing.sql`, `internal/pricing/`, `internal/catalog/products.go`):
+
+- `GET /products` — the catalog-browse endpoint `phase0_1_design.md` §3.2 documented from Phase 0/1 but never built (Phase 1 only ever needed the barcode-scan path). Returns each product's variants with cost/MRP/selling price and computed margin %/markup %. Needed regardless of pricing specifically — you can't bulk-reprice a catalog you can't list.
+- `POST /pricing/calculate` — the FRD's cost-plus and target-margin calculator tools in one endpoint (give cost + markup% or cost + margin%, get the selling price and both figures back).
+- `PATCH /pricing/variants/{id}` — the real write, gated by a new `pricing.manage` permission (Branch Manager/Merchant Admin only). Blocks a resulting negative margin unless `override:true` is passed — the FRD's "Block negative margin sales (override required)," applied at price-setting time.
+- `POST /pricing/bulk-update/preview` and `.../apply` — filter by category/brand/price range, adjust by percent/fixed/set, with optional rounding to a denomination. Preview and Apply share the exact same computation path, so what you previewed is guaranteed to be what Apply does.
+- `price_history` — every price change, individual or bulk, is logged (field, old/new value, reason, who) — the FRD's "Price history audit trail."
+
+Scope note: the roadmap's own "Deferred" line for this phase names **wholesale pricing** alongside CRM — so multiple named price tiers (Retail/Wholesale/VIP/Special), customer-specific pricing, price lists assigned to segments/branches/channels, scheduled future-dated changes, and dynamic (time/day/season) pricing are all real FRD §11 content deliberately **not** built here; that's Phase 7 (wholesale/B2B) and Phase 3 (CRM segments) territory.
+
+Verified live end to end: `GET /products` returned the seed product with margin 47.80%/markup 91.58% computed correctly; the calculator's target-margin mode produced an exact ₹2,000.00 for cost ₹1,200 at 40% margin; a Branch Manager was blocked from setting a below-cost price and then allowed through with `override:true`; a bulk +10%-with-rounding preview correctly matched what apply actually wrote (₹1,000 → ₹1,100); a POS User was denied both the single-update and bulk-apply endpoints with `403 FORBIDDEN`; a subsequent sale correctly picked up the newly-applied selling price; RLS confirmed on `price_history`.
+
+**UI, built in this same pass:** `erp-web-admin`'s Pricing screen (product/variant browse with margin display, a calculator widget, single-variant editing with the negative-margin/override flow, and bulk update preview→apply) — verified with a real Playwright test (`e2e/pricing.spec.ts`).
+
+**Phase 2 is now fully complete** — Purchase, Accounting, Multi-Branch, and Pricing, backend and UI, matching everything the roadmap's original "In" list named for this phase.
+
+**Not yet started:** Product Search (OpenSearch) — the one remaining Phase 2 sub-area, and an infrastructure addition (a new service, not just new endpoints) rather than a straightforward continuation of this pattern.
 
 ---
 

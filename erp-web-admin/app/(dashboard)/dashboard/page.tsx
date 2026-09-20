@@ -9,6 +9,7 @@ const SHORTCUTS = [
   { href: "/accounting/party-ledger", title: "Party ledger", description: "What you owe each supplier" },
   { href: "/transfers/new", title: "New branch transfer", description: "Move stock from one branch to another" },
   { href: "/branches", title: "Branches", description: "Manage branches" },
+  { href: "/pricing", title: "Pricing", description: "Margins, calculator, and bulk price updates" },
 ];
 
 export default function DashboardHome() {
@@ -16,7 +17,7 @@ export default function DashboardHome() {
     <div className="flex flex-col gap-6 max-w-3xl">
       <div>
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-zinc-500">Purchase Management, Ledger & Accounting, and Multi-Branch for the ERP backend.</p>
+        <p className="text-sm text-zinc-500">Purchase Management, Ledger & Accounting, Multi-Branch, and Pricing for the ERP backend.</p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {SHORTCUTS.map((s) => (

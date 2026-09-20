@@ -26,12 +26,14 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 - Purchase: GRN (create draft → add line via barcode lookup → complete), Bills (create against a completed GRN → record payments), Returns (create with accumulated lines)
 - Accounting: Chart of Accounts (list + create custom account), manual Journal Entry (dynamic line builder with client-side balance check), Party Ledger (supplier only — see gap below), Day Book, Cash Book
 - Multi-Branch: Branches (list + create), Branch Transfers (request with barcode-driven line entry → status-driven detail page covering Approve/Reject → Dispatch → Complete-with-optional-discrepancy → Cancel) — `e2e/multi-branch.spec.ts` logs in as three different sessions in sequence (POS User denied approval, Branch Manager approves, POS User dispatches/completes) to verify the permission gate isn't just a UI-level disabled button
+- Pricing: product/variant browse with margin/markup display (`GET /products` — the catalog-browse endpoint this app needed and that endpoint's very first real caller), a cost-plus/target-margin calculator, single-variant editing with the negative-margin block→override flow, and bulk update (preview → apply, no category/brand filter in the UI yet even though the API supports one) — `e2e/pricing.spec.ts` runs as Branch Manager since `pricing.manage` is permission-gated
 
 **Known gaps, not yet closed:**
 - **`SEED_BRANCH_ID` is still hardcoded** in `lib/api-client.ts` for the *POS-flow-adjacent* screens (purchase GRN/returns still assume one branch, matching the Flutter app's own `main.dart` simplification) even though a real branch picker is now possible — `GET /branches` exists and the Branches/Transfers screens already use it properly. Worth threading a proper branch selector into the Purchase screens too, not just Multi-Branch's own.
-- **No product/variant search** — GRN, purchase-return, and transfer line entry all resolve a variant via barcode lookup (`GET /products/barcode/{code}`, the same endpoint the POS app scans against) because no general product-search/list endpoint exists server-side. Fine for a barcode-driven retail catalog, awkward for typing a SKU from memory.
+- **No fuzzy product search** — GRN, purchase-return, and transfer line entry all resolve a variant via barcode lookup (`GET /products/barcode/{code}`, the same endpoint the POS app scans against), not the newer `GET /products` browse endpoint the Pricing screen uses. Fine for a barcode-driven retail catalog, awkward for typing a SKU from memory — worth switching those three screens to a `GET /products?q=` search once that's worth the effort.
+- **The Pricing screen's bulk-update form has no category/brand/price-range filter UI** even though `POST /pricing/bulk-update/*` accepts one — it always sends an empty filter (every product).
 - **No customer directory** — the Party Ledger screen's "customer" option requires pasting a raw customer ID; there's no `GET /customers` endpoint, and no credit-sale flow exists yet that would populate a customer ledger anyway (see `erp-core-go`'s CLAUDE.md/roadmap for that gap).
-- **No E2E coverage for Pricing or Search UI** — neither exists yet either client- or server-side.
+- **No E2E coverage for Search UI** — Product Search (OpenSearch) doesn't exist yet either client- or server-side.
 
 ## Working conventions to keep
 

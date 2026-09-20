@@ -12,6 +12,7 @@ import (
 	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/purchase"
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
@@ -31,6 +32,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	refresh := &authn.RefreshHandler{DB: database, Issuer: issuer}
 	logout := &authn.LogoutHandler{DB: database}
 	barcode := &catalog.BarcodeHandler{DB: database}
+	productList := &catalog.ListHandler{DB: database}
+	prc := &pricing.Handler{DB: database}
 	orders := &sales.Handler{DB: database}
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
@@ -68,6 +71,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/auth/logout", logout.ServeHTTP)
 
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
+			protected.Get("/products", productList.ListProducts)
 
 			protected.Post("/sales/orders", orders.CreateOrder)
 			protected.Get("/sales/orders/{id}", orders.GetOrder)
@@ -133,6 +137,13 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/branch-transfers/{id}/dispatch", br.DispatchTransfer)
 			protected.Post("/branch-transfers/{id}/complete", br.CompleteTransfer)
 			protected.Post("/branch-transfers/{id}/cancel", br.CancelTransfer)
+
+			protected.Post("/pricing/calculate", prc.Calculate)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Patch("/pricing/variants/{id}", prc.UpdateVariantPricing)
+			protected.Post("/pricing/bulk-update/preview", prc.PreviewBulkUpdate)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/pricing/bulk-update/apply", prc.ApplyBulkUpdate)
 		})
 	})
 

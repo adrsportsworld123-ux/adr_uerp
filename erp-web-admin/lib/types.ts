@@ -1,6 +1,26 @@
 // Mirrors erp-core-go's JSON response shapes exactly (internal/purchase,
-// internal/accounting, internal/branches) — money/quantity fields stay as
-// strings, same reasoning as api-client.ts's header comment.
+// internal/accounting, internal/branches, internal/pricing) — money/
+// quantity fields stay as strings, same reasoning as api-client.ts's
+// header comment. Pricing's margin_pct/markup_pct come back as JSON
+// numbers (not strings) from the Go side, since they're always
+// server-computed, never round-tripped as a stored NUMERIC value.
+
+export interface ProductVariant {
+  variant_id: string;
+  sku: string;
+  cost_price: string;
+  mrp: string;
+  selling_price: string;
+  margin_pct: number | null;
+  markup_pct: number | null;
+}
+
+export interface Product {
+  product_id: string;
+  name: string;
+  hsn_code: string;
+  variants: ProductVariant[];
+}
 
 export interface Branch {
   branch_id: string;
