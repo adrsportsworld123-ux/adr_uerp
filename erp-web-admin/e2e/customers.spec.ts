@@ -24,7 +24,10 @@ test("register a B2C customer, register a B2B customer, and search/filter", asyn
     await page.waitForURL(/\/customers\/[0-9a-f-]+/);
     await expect(page.getByText("uppercase")).toHaveCount(0); // sanity: page rendered past loading
     await expect(page.getByText("B2C")).toBeVisible();
-    await expect(page.getByText("new")).toBeVisible(); // brand-new customer's segment
+    // exact: true — the sidebar's "New Product" link also contains "new"
+    // as a case-insensitive substring, which a plain getByText("new")
+    // matches too.
+    await expect(page.getByText("new", { exact: true })).toBeVisible(); // brand-new customer's segment
   });
 
   await test.step("B2B registration without a GSTIN is blocked", async () => {

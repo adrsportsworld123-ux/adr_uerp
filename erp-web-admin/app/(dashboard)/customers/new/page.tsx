@@ -58,7 +58,11 @@ export default function NewCustomerPage() {
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <Label>Customer type</Label>
-              <Select value={customerType} onValueChange={(v) => setCustomerType((v as "b2c" | "b2b") ?? "b2c")}>
+              <Select
+                value={customerType}
+                onValueChange={(v) => setCustomerType((v as "b2c" | "b2b") ?? "b2c")}
+                items={{ b2c: "B2C", b2b: "B2B" }}
+              >
                 <SelectTrigger className="w-40">
                   <SelectValue />
                 </SelectTrigger>

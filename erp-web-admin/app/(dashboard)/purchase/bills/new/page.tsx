@@ -54,7 +54,12 @@ export default function NewBillPage() {
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <Label>Completed GRN *</Label>
-              <Select value={grnId} onValueChange={(v) => setGrnId(v ?? "")} required>
+              <Select
+                value={grnId}
+                onValueChange={(v) => setGrnId(v ?? "")}
+                items={Object.fromEntries(grns.map((g) => [g.grn_id, `${g.grn_number} — ₹${g.grand_total}`]))}
+                required
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select a completed GRN" />
                 </SelectTrigger>

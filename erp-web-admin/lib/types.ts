@@ -64,6 +64,9 @@ export interface Customer {
   transaction_count: number;
   last_purchase_at: string | null;
   segment: "new" | "regular" | "vip" | "dormant";
+  credit_limit: string;
+  payment_terms: "due_on_receipt" | "net_7" | "net_15" | "net_30" | "net_60" | "net_90";
+  credit_hold: boolean;
 }
 
 export interface CustomerOrderHistoryEntry {
@@ -300,4 +303,371 @@ export interface LoyaltyBalance {
   customer_id: string;
   available_points: number;
   ledger: LoyaltyLedgerEntry[];
+}
+
+// Mirrors internal/notifications — see that package's doc comment for why
+// it's content-agnostic (channel/category/status only; body/subject are
+// whatever the triggering domain package assembled).
+export interface Notification {
+  notification_id: string;
+  channel: "email" | "sms" | "whatsapp";
+  category: "receipt" | "low_stock" | "payment_reminder";
+  recipient: string;
+  subject: string | null;
+  body: string;
+  reference_type: string | null;
+  reference_id: string | null;
+  status: "sent" | "failed";
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface StockLevel {
+  branch_id: string;
+  variant_id: string;
+  on_hand: string;
+  reserved: string;
+  available: string;
+  reorder_point: string;
+}
+
+// Mirrors internal/customers/credit.go — Phase 4's B2B Credit Facility.
+export interface AgingBuckets {
+  current: string;
+  days_0_30: string;
+  days_30_60: string;
+  days_60_90: string;
+  days_90_plus: string;
+}
+
+export interface OpenInvoice {
+  order_id: string;
+  order_number: string;
+  due_date: string;
+  credit_amount: string;
+  credit_paid: string;
+  outstanding: string;
+}
+
+export interface CustomerCredit {
+  customer_id: string;
+  credit_limit: string;
+  payment_terms: "due_on_receipt" | "net_7" | "net_15" | "net_30" | "net_60" | "net_90";
+  credit_hold: boolean;
+  outstanding_total: string;
+  aging: AgingBuckets;
+  open_invoices: OpenInvoice[];
+}
+
+// Mirrors internal/gst — see that package's own doc comment for the
+// disclaimer on gstr1_json/gstr3b_json's exact field shape.
+export interface GSTReconciliation {
+  computed_gst_output: string;
+  ledger_gst_payable: string;
+  matches: boolean;
+}
+
+export interface GSTR3BSummary {
+  period: string;
+  outward_taxable_value: string;
+  cgst: string;
+  sgst: string;
+  igst: string;
+  cess: string;
+  total_outward_tax: string;
+  itc_available: string;
+  net_tax_payable: string;
+}
+
+export interface GSTR3BResponse {
+  period: string;
+  gstin: string;
+  summary: GSTR3BSummary;
+  gstr3b_json: unknown;
+  reconciliation: GSTReconciliation;
+  disclaimer: string;
+}
+
+export interface GSTR1Summary {
+  period: string;
+  b2b_party_count: number;
+  b2b_invoice_count: number;
+  b2b_taxable_value: string;
+  b2c_taxable_value: string;
+  total_taxable_value: string;
+  total_tax: string;
+}
+
+export interface GSTR1Response {
+  period: string;
+  gstin: string;
+  summary: GSTR1Summary;
+  gstr1_json: unknown;
+  reconciliation: GSTReconciliation;
+  disclaimer: string;
+  notes: string[];
+}
+
+// Mirrors internal/accounting/bank_reconciliation.go.
+export interface BankStatementLine {
+  line_id: string;
+  txn_date: string;
+  description: string;
+  reference: string;
+  amount: string;
+  status: "unmatched" | "matched" | "ignored";
+  matched_journal_line_id: string | null;
+}
+
+export interface BankStatementImportSummary {
+  import_id: string;
+  filename: string;
+  line_count: number;
+  matched_count: number;
+  imported_at: string;
+}
+
+export interface BankStatementImportResult extends BankStatementImportSummary {
+  lines: BankStatementLine[];
+}
+
+export interface JournalLineCandidate {
+  journal_line_id: string;
+  entry_date: string;
+  description: string;
+  source_type: string;
+  debit: string;
+  credit: string;
+}
+
+export interface BankReconciliationReport {
+  start: string;
+  end: string;
+  matched_total: string;
+  unmatched_statement_lines: BankStatementLine[];
+  unmatched_ledger_lines: JournalLineCandidate[];
+}
+
+// Mirrors internal/accounting/payment_gateway_reconciliation.go.
+export interface SettlementLine {
+  line_id: string;
+  settlement_date: string;
+  reference: string;
+  amount: string;
+  status: "unmatched" | "matched" | "duplicate";
+  matched_payment_id: string | null;
+}
+
+export interface SettlementImportSummary {
+  import_id: string;
+  gateway: string;
+  filename: string;
+  line_count: number;
+  matched_count: number;
+  imported_at: string;
+}
+
+export interface SettlementImportResult extends SettlementImportSummary {
+  lines: SettlementLine[];
+}
+
+export interface PaymentCandidate {
+  payment_id: string;
+  sales_order_id: string;
+  method: string;
+  amount: string;
+  reference_no: string;
+  created_at: string;
+}
+
+export interface MissingPayment {
+  payment_id: string;
+  sales_order_id: string;
+  method: string;
+  amount: string;
+  reference_no: string;
+  created_at: string;
+}
+
+export interface PaymentGatewayReconciliationReport {
+  start: string;
+  end: string;
+  matched_total: string;
+  unmatched_settlement_lines: SettlementLine[];
+  duplicate_settlement_lines: SettlementLine[];
+  missing_payments: MissingPayment[];
+}
+
+// Mirrors internal/accounting/cash_reconciliation.go.
+export interface DenominationLine {
+  denomination: string;
+  count: number;
+  subtotal: string;
+}
+
+export interface CashReconciliation {
+  reconciliation_id: string;
+  branch_id: string;
+  recon_date: string;
+  opening_float: string;
+  system_expected: string;
+  counted_total: string;
+  variance: string;
+  reason: string;
+  authorized: boolean;
+  denominations: DenominationLine[];
+  created_at: string;
+}
+
+export interface CashReconciliationSummary {
+  recon_date: string;
+  opening_float: string;
+  system_expected: string;
+  counted_total: string;
+  variance: string;
+  authorized: boolean;
+}
+
+// Mirrors internal/inventory/reconciliation.go.
+export interface InventoryReconciliationLine {
+  variant_id: string;
+  system_qty: string;
+  counted_qty: string;
+  variance: string;
+  variance_value: string;
+}
+
+export interface InventoryReconciliation {
+  reconciliation_id: string;
+  branch_id: string;
+  recon_type: "cycle" | "full";
+  recon_date: string;
+  reason: string;
+  variance_value: string;
+  authorized: boolean;
+  lines: InventoryReconciliationLine[];
+  created_at: string;
+}
+
+export interface InventoryReconciliationSummary {
+  reconciliation_id: string;
+  recon_type: "cycle" | "full";
+  recon_date: string;
+  variance_value: string;
+  authorized: boolean;
+}
+
+// Mirrors internal/reports.
+export interface PaymentBreakdown {
+  method: string;
+  amount: string;
+  count: number;
+}
+
+export interface DailySalesReport {
+  branch_id: string;
+  date: string;
+  order_count: number;
+  subtotal: string;
+  discount_total: string;
+  tax_total: string;
+  grand_total: string;
+  by_payment_method: PaymentBreakdown[];
+}
+
+export interface StockSummaryLine {
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  on_hand: string;
+  reserved: string;
+  available: string;
+}
+
+export interface EODCashReport {
+  branch_id: string;
+  date: string;
+  cash_total: string;
+  cash_order_count: number;
+}
+
+export interface BranchSalesLine {
+  branch_id: string;
+  branch_name: string;
+  order_count: number;
+  grand_total: string;
+}
+
+export interface ConsolidatedSalesReport {
+  date: string;
+  branches: BranchSalesLine[];
+  total_order_count: number;
+  total_grand_total: string;
+}
+
+export interface BranchStockLine {
+  branch_id: string;
+  on_hand: string;
+  reserved: string;
+  available: string;
+}
+
+export interface ConsolidatedStockEntry {
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  by_branch: BranchStockLine[];
+  total_on_hand: string;
+}
+
+// Mirrors internal/inventory's stockResponse.
+export interface StockLevel {
+  branch_id: string;
+  variant_id: string;
+  on_hand: string;
+  reserved: string;
+  available: string;
+  reorder_point: string;
+}
+
+// Mirrors internal/catalog/taxonomy.go and products_write.go.
+export interface Category {
+  category_id: string;
+  parent_id: string | null;
+  name: string;
+  path: string;
+}
+
+export interface CatalogBrand {
+  brand_id: string;
+  name: string;
+}
+
+export interface TaxSlab {
+  tax_slab_id: string;
+  name: string;
+  cgst_rate: string;
+  sgst_rate: string;
+  igst_rate: string;
+  cess_rate: string;
+}
+
+export interface NewProductVariantInput {
+  sku: string;
+  cost_price: number;
+  mrp: number;
+  selling_price: number;
+}
+
+export interface CreatedProduct {
+  product_id: string;
+  name: string;
+  short_description: string;
+  hsn_code: string;
+  category_id: string | null;
+  brand_id: string | null;
+  tax_slab_id: string | null;
+  product_type: string;
+  status: string;
+  variants: { variant_id: string; sku: string; cost_price: string; mrp: string; selling_price: string }[];
 }

@@ -79,7 +79,11 @@ export default function NewTransferPage() {
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
               <Label>From branch *</Label>
-              <Select value={fromBranchId} onValueChange={(v) => setFromBranchId(v ?? "")}>
+              <Select
+                value={fromBranchId}
+                onValueChange={(v) => setFromBranchId(v ?? "")}
+                items={Object.fromEntries(branches.map((b) => [b.branch_id, b.name]))}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Source" />
                 </SelectTrigger>
@@ -94,7 +98,11 @@ export default function NewTransferPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label>To branch *</Label>
-              <Select value={toBranchId} onValueChange={(v) => setToBranchId(v ?? "")}>
+              <Select
+                value={toBranchId}
+                onValueChange={(v) => setToBranchId(v ?? "")}
+                items={Object.fromEntries(branches.filter((b) => b.branch_id !== fromBranchId).map((b) => [b.branch_id, b.name]))}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Destination" />
                 </SelectTrigger>

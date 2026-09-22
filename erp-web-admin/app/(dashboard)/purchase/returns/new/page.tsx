@@ -85,7 +85,11 @@ export default function NewPurchaseReturnPage() {
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label>Supplier *</Label>
-            <Select value={supplierId} onValueChange={(v) => setSupplierId(v ?? "")}>
+            <Select
+              value={supplierId}
+              onValueChange={(v) => setSupplierId(v ?? "")}
+              items={Object.fromEntries(suppliers.map((s) => [s.supplier_id, s.name]))}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Select a supplier" />
               </SelectTrigger>

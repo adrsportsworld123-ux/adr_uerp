@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Product, ProductVariant } from "@/lib/types";
@@ -30,7 +31,12 @@ export default function PricingPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Pricing</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Pricing</h1>
+        <Link href="/products/new">
+          <Button variant="outline">New product</Button>
+        </Link>
+      </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       <Card>
@@ -177,7 +183,11 @@ function Calculator() {
           </div>
           <div className="flex flex-col gap-2">
             <Label>Target</Label>
-            <Select value={mode} onValueChange={(v) => setMode((v as "margin_pct" | "markup_pct") ?? "margin_pct")}>
+            <Select
+              value={mode}
+              onValueChange={(v) => setMode((v as "margin_pct" | "markup_pct") ?? "margin_pct")}
+              items={{ margin_pct: "Margin %", markup_pct: "Markup %" }}
+            >
               <SelectTrigger className="w-36">
                 <SelectValue />
               </SelectTrigger>
@@ -269,7 +279,11 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
         <form onSubmit={preview} className="flex gap-2 items-end flex-wrap">
           <div className="flex flex-col gap-2">
             <Label>Method</Label>
-            <Select value={method} onValueChange={(v) => setMethod((v as "percent" | "fixed" | "set") ?? "percent")}>
+            <Select
+              value={method}
+              onValueChange={(v) => setMethod((v as "percent" | "fixed" | "set") ?? "percent")}
+              items={{ percent: "% change", fixed: "Fixed amount", set: "Set price" }}
+            >
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>

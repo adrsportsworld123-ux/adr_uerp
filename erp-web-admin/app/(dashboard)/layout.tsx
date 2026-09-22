@@ -8,14 +8,18 @@ import { Button } from "@/components/ui/button";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/reports", label: "Reports" },
+  { href: "/inventory", label: "Inventory" },
   { href: "/customers", label: "Customers" },
   { href: "/promotions", label: "Promotions & Loyalty" },
+  { href: "/notifications", label: "Notifications" },
   { href: "/branches", label: "Branches" },
   { href: "/transfers", label: "Branch Transfers" },
   { href: "/suppliers", label: "Suppliers" },
   { href: "/purchase/grn", label: "Goods Receipt (GRN)" },
   { href: "/purchase/bills", label: "Purchase Bills" },
   { href: "/purchase/returns", label: "Purchase Returns" },
+  { href: "/products/new", label: "New Product" },
   { href: "/pricing", label: "Pricing" },
   { href: "/search", label: "Product Search" },
   { href: "/accounting/chart-of-accounts", label: "Chart of Accounts" },
@@ -23,6 +27,11 @@ const NAV = [
   { href: "/accounting/party-ledger", label: "Party Ledger" },
   { href: "/accounting/day-book", label: "Day Book" },
   { href: "/accounting/cash-book", label: "Cash Book" },
+  { href: "/gst", label: "GST Returns" },
+  { href: "/bank-reconciliation", label: "Bank Reconciliation" },
+  { href: "/cash-reconciliation", label: "Cash Reconciliation" },
+  { href: "/payment-gateway-reconciliation", label: "Payment Gateway Reconciliation" },
+  { href: "/inventory-reconciliation", label: "Inventory Reconciliation" },
 ];
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {

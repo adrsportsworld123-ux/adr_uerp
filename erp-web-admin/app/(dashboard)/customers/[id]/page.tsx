@@ -4,13 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { CustomerDetail, LoyaltyBalance } from "@/lib/types";
+import { CustomerCredit, CustomerDetail, LoyaltyBalance } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const SEGMENT_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   vip: "default",
@@ -23,6 +24,7 @@ export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [customer, setCustomer] = useState<CustomerDetail | null>(null);
   const [loyalty, setLoyalty] = useState<LoyaltyBalance | null>(null);
+  const [credit, setCredit] = useState<CustomerCredit | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -50,6 +52,14 @@ export default function CustomerDetailPage() {
       .then(setLoyalty)
       .catch(() => setLoyalty(null));
   }, [id]);
+
+  const loadCredit = useCallback(() => {
+    api
+      .get<CustomerCredit>(`/api/v1/customers/${id}/credit`)
+      .then(setCredit)
+      .catch(() => setCredit(null));
+  }, [id]);
+  useEffect(loadCredit, [loadCredit]);
 
   async function save() {
     setBusy(true);
@@ -155,6 +165,8 @@ export default function CustomerDetailPage() {
         </CardContent>
       </Card>
 
+      {credit && <CreditSection customerId={id} credit={credit} onChanged={loadCredit} />}
+
       {loyalty && (
         <Card>
           <CardHeader>
@@ -239,5 +251,235 @@ export default function CustomerDetailPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Credit facility (Phase 4, sub-area 1) — outstanding balance, aging,
+// settings (limit/terms/hold, gated by credit.manage — attempted and
+// surfaced as a toast error on 403, same pattern Promotions & Loyalty
+// already established for its own gated writes), and a per-invoice
+// "record payment" action. Deliberately no "make a credit sale" control
+// here — that's the POS terminal's job (erp-pos-flutter), same boundary
+// this app draws everywhere else (Pricing, Promotions & Loyalty).
+// ---------------------------------------------------------------------
+
+const PAYMENT_TERMS_LABEL: Record<string, string> = {
+  due_on_receipt: "Due on receipt",
+  net_7: "Net 7",
+  net_15: "Net 15",
+  net_30: "Net 30",
+  net_60: "Net 60",
+  net_90: "Net 90",
+};
+
+function CreditSection({ customerId, credit, onChanged }: { customerId: string; credit: CustomerCredit; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [creditLimit, setCreditLimit] = useState(credit.credit_limit);
+  const [paymentTerms, setPaymentTerms] = useState(credit.payment_terms);
+  const [creditHold, setCreditHold] = useState(credit.credit_hold);
+  const [busy, setBusy] = useState(false);
+  const [payingInvoice, setPayingInvoice] = useState<string | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "upi" | "bank_transfer" | "cheque">("bank_transfer");
+
+  async function saveSettings() {
+    setBusy(true);
+    try {
+      await api.patch(`/api/v1/customers/${customerId}/credit`, {
+        credit_limit: Number(creditLimit),
+        payment_terms: paymentTerms,
+        credit_hold: creditHold,
+      });
+      toast.success("Credit settings saved");
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not save credit settings");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recordPayment(orderId: string) {
+    setBusy(true);
+    try {
+      await api.post(`/api/v1/customers/${customerId}/payments`, {
+        sales_order_id: orderId,
+        amount: Number(paymentAmount),
+        method: paymentMethod,
+      });
+      toast.success("Payment recorded");
+      setPayingInvoice(null);
+      setPaymentAmount("");
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not record payment");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">Credit</CardTitle>
+        <div className="flex items-center gap-2">
+          {credit.credit_hold && <Badge variant="destructive">Credit hold</Badge>}
+          {!editing && (
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {editing ? (
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="creditLimit">Credit limit (₹)</Label>
+                <Input id="creditLimit" type="number" min="0" step="0.01" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Payment terms</Label>
+                <Select
+                  value={paymentTerms}
+                  onValueChange={(v) => setPaymentTerms((v as typeof paymentTerms) ?? "due_on_receipt")}
+                  items={PAYMENT_TERMS_LABEL}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(PAYMENT_TERMS_LABEL).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={creditHold} onChange={(e) => setCreditHold(e.target.checked)} />
+              Credit hold (blocks any new credit sale regardless of limit)
+            </label>
+            <div className="flex gap-2">
+              <Button size="sm" disabled={busy} onClick={saveSettings}>
+                Save
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <dl className="grid grid-cols-2 gap-3 text-sm">
+            <dt className="text-zinc-500">Credit limit</dt>
+            <dd>₹{credit.credit_limit}</dd>
+            <dt className="text-zinc-500">Payment terms</dt>
+            <dd>{PAYMENT_TERMS_LABEL[credit.payment_terms] ?? credit.payment_terms}</dd>
+            <dt className="text-zinc-500">Outstanding</dt>
+            <dd className="font-semibold">₹{credit.outstanding_total}</dd>
+          </dl>
+        )}
+
+        <div className="grid grid-cols-5 gap-2 text-xs border-t pt-3">
+          <div className="flex flex-col gap-1">
+            <span className="text-zinc-500">Current</span>
+            <span>₹{credit.aging.current}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-zinc-500">0-30 days</span>
+            <span>₹{credit.aging.days_0_30}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-zinc-500">30-60 days</span>
+            <span>₹{credit.aging.days_30_60}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-zinc-500">60-90 days</span>
+            <span>₹{credit.aging.days_60_90}</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-red-600">90+ days</span>
+            <span className="text-red-600">₹{credit.aging.days_90_plus}</span>
+          </div>
+        </div>
+
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Order</TableHead>
+              <TableHead>Due</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>Paid</TableHead>
+              <TableHead>Outstanding</TableHead>
+              <TableHead></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {credit.open_invoices.map((inv) => (
+              <TableRow key={inv.order_id}>
+                <TableCell className="font-mono text-xs">{inv.order_number}</TableCell>
+                <TableCell className="text-xs">{inv.due_date || "—"}</TableCell>
+                <TableCell>₹{inv.credit_amount}</TableCell>
+                <TableCell>₹{inv.credit_paid}</TableCell>
+                <TableCell className="font-medium">₹{inv.outstanding}</TableCell>
+                <TableCell>
+                  {payingInvoice === inv.order_id ? (
+                    <div className="flex gap-1 items-center">
+                      <Input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        max={inv.outstanding}
+                        className="w-24 h-7"
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                      />
+                      <Select
+                        value={paymentMethod}
+                        onValueChange={(v) => setPaymentMethod((v as typeof paymentMethod) ?? "bank_transfer")}
+                        items={{ bank_transfer: "Bank transfer", cheque: "Cheque", cash: "Cash", card: "Card", upi: "UPI" }}
+                      >
+                        <SelectTrigger className="w-28 h-7">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="bank_transfer">Bank transfer</SelectItem>
+                          <SelectItem value="cheque">Cheque</SelectItem>
+                          <SelectItem value="cash">Cash</SelectItem>
+                          <SelectItem value="card">Card</SelectItem>
+                          <SelectItem value="upi">UPI</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button size="sm" disabled={busy} onClick={() => recordPayment(inv.order_id)}>
+                        Record
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setPayingInvoice(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button size="sm" variant="outline" onClick={() => setPayingInvoice(inv.order_id)}>
+                      Record payment
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+            {credit.open_invoices.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                  No outstanding credit sales
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }

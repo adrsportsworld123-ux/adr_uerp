@@ -51,7 +51,12 @@ export default function NewGRNPage() {
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
               <Label>Supplier *</Label>
-              <Select value={supplierId} onValueChange={(value) => setSupplierId(value ?? "")} required>
+              <Select
+                value={supplierId}
+                onValueChange={(value) => setSupplierId(value ?? "")}
+                items={Object.fromEntries(suppliers.map((s) => [s.supplier_id, s.name]))}
+                required
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select a supplier" />
                 </SelectTrigger>

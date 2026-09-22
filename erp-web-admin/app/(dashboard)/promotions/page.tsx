@@ -224,7 +224,11 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
         </div>
         <div className="flex flex-col gap-2">
           <Label>Type</Label>
-          <Select value={promoType} onValueChange={(v) => handlePromoTypeChange(v ?? "percent")}>
+          <Select
+            value={promoType}
+            onValueChange={(v) => handlePromoTypeChange(v ?? "percent")}
+            items={Object.fromEntries(PROMO_TYPES.map((t) => [t.value, t.label]))}
+          >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -245,6 +249,7 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
           <Select
             value={applicationLevel}
             onValueChange={(v) => setApplicationLevel((v as typeof applicationLevel) ?? "order")}
+            items={{ order: "Whole order", product: "One product", category: "One category" }}
           >
             <SelectTrigger>
               <SelectValue />
@@ -261,7 +266,11 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
         {applicationLevel === "product" && (
           <div className="flex flex-col gap-2">
             <Label>Product</Label>
-            <Select value={productId} onValueChange={(v) => setProductId(v ?? "")}>
+            <Select
+              value={productId}
+              onValueChange={(v) => setProductId(v ?? "")}
+              items={Object.fromEntries(products.map((p) => [p.product_id, p.name]))}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Select a product" />
               </SelectTrigger>
@@ -284,7 +293,11 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
         )}
         <div className="flex flex-col gap-2">
           <Label>Customer segment (optional)</Label>
-          <Select value={targetSegment || "any"} onValueChange={(v) => setTargetSegment(v === "any" ? "" : (v ?? ""))}>
+          <Select
+            value={targetSegment || "any"}
+            onValueChange={(v) => setTargetSegment(v === "any" ? "" : (v ?? ""))}
+            items={{ any: "Any customer", vip: "VIP", regular: "Regular", new: "New", dormant: "Dormant" }}
+          >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -323,7 +336,11 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
 
       <div className="flex flex-col gap-2 w-48">
         <Label>Stacking</Label>
-        <Select value={stacking} onValueChange={(v) => setStacking((v as typeof stacking) ?? "exclusive")}>
+        <Select
+          value={stacking}
+          onValueChange={(v) => setStacking((v as typeof stacking) ?? "exclusive")}
+          items={{ exclusive: "Exclusive", stackable: "Stackable" }}
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -450,7 +467,11 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
       </div>
       <div className="flex flex-col gap-2 w-40">
         <Label>Discount as</Label>
-        <Select value={p.minValueMode} onValueChange={(v) => p.setMinValueMode((v as typeof p.minValueMode) ?? "discount_amount")}>
+        <Select
+          value={p.minValueMode}
+          onValueChange={(v) => p.setMinValueMode((v as typeof p.minValueMode) ?? "discount_amount")}
+          items={{ discount_amount: "Flat amount (₹)", discount_pct: "Percent (%)" }}
+        >
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -540,7 +561,11 @@ function CouponsSection() {
           </div>
           <div className="flex flex-col gap-2">
             <Label>Type</Label>
-            <Select value={promoType} onValueChange={(v) => setPromoType((v as typeof promoType) ?? "fixed")}>
+            <Select
+              value={promoType}
+              onValueChange={(v) => setPromoType((v as typeof promoType) ?? "fixed")}
+              items={{ fixed: "Flat amount", percent: "Percent" }}
+            >
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>

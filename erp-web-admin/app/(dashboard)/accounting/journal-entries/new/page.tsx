@@ -84,7 +84,11 @@ export default function NewJournalEntryPage() {
               <Label>Lines * (exactly one of debit/credit per line)</Label>
               {lines.map((line, i) => (
                 <div key={i} className="flex gap-2 items-center">
-                  <Select value={line.account_code} onValueChange={(v) => updateLine(i, { account_code: v ?? "" })}>
+                  <Select
+                    value={line.account_code}
+                    onValueChange={(v) => updateLine(i, { account_code: v ?? "" })}
+                    items={Object.fromEntries(accounts.map((a) => [a.code, `${a.code} — ${a.name}`]))}
+                  >
                     <SelectTrigger className="w-56">
                       <SelectValue placeholder="Account" />
                     </SelectTrigger>

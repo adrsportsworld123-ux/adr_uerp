@@ -61,7 +61,11 @@ export default function CustomersPage() {
           </div>
           <div className="flex flex-col gap-2">
             <Label>Type</Label>
-            <Select value={customerType || "all"} onValueChange={(v) => setCustomerType(v === "all" ? "" : (v ?? ""))}>
+            <Select
+              value={customerType || "all"}
+              onValueChange={(v) => setCustomerType(v === "all" ? "" : (v ?? ""))}
+              items={{ all: "All types", b2c: "B2C", b2b: "B2B" }}
+            >
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>
@@ -74,7 +78,11 @@ export default function CustomersPage() {
           </div>
           <div className="flex flex-col gap-2">
             <Label>Segment</Label>
-            <Select value={segment || "all"} onValueChange={(v) => setSegment(v === "all" ? "" : (v ?? ""))}>
+            <Select
+              value={segment || "all"}
+              onValueChange={(v) => setSegment(v === "all" ? "" : (v ?? ""))}
+              items={{ all: "All segments", vip: "VIP", regular: "Regular", new: "New", dormant: "Dormant" }}
+            >
               <SelectTrigger className="w-36">
                 <SelectValue />
               </SelectTrigger>

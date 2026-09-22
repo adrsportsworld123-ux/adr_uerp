@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api-client";
-import { Supplier, LedgerLine } from "@/lib/types";
+import { Supplier, Customer, LedgerLine } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -12,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 export default function PartyLedgerPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [partyType, setPartyType] = useState<"supplier" | "customer">("supplier");
   const [partyId, setPartyId] = useState("");
   const [lines, setLines] = useState<LedgerLine[] | null>(null);
@@ -20,6 +20,12 @@ export default function PartyLedgerPage() {
 
   useEffect(() => {
     api.get<{ suppliers: Supplier[] }>("/api/v1/suppliers").then((d) => setSuppliers(d.suppliers));
+    // Customers Management (Phase 3) added a real customer directory
+    // after this page's original "no customer directory yet, paste a
+    // UUID" note was written — that note was stale by the time B2B
+    // credit sales (Phase 4) made a customer-side party ledger genuinely
+    // useful. Same plain full-list picker the Supplier side already uses.
+    api.get<{ customers: Customer[] }>("/api/v1/customers?limit=200").then((d) => setCustomers(d.customers));
   }, []);
 
   async function handleLoad(e: React.FormEvent) {
@@ -45,7 +51,11 @@ export default function PartyLedgerPage() {
           <form onSubmit={handleLoad} className="flex gap-2 items-end flex-wrap">
             <div className="flex flex-col gap-2">
               <Label>Party type</Label>
-              <Select value={partyType} onValueChange={(v) => setPartyType((v as "supplier" | "customer") ?? "supplier")}>
+              <Select
+                value={partyType}
+                onValueChange={(v) => setPartyType((v as "supplier" | "customer") ?? "supplier")}
+                items={{ supplier: "Supplier", customer: "Customer" }}
+              >
                 <SelectTrigger className="w-36">
                   <SelectValue />
                 </SelectTrigger>
@@ -58,7 +68,11 @@ export default function PartyLedgerPage() {
             {partyType === "supplier" ? (
               <div className="flex flex-col gap-2">
                 <Label>Supplier</Label>
-                <Select value={partyId} onValueChange={(v) => setPartyId(v ?? "")}>
+                <Select
+                  value={partyId}
+                  onValueChange={(v) => setPartyId(v ?? "")}
+                  items={Object.fromEntries(suppliers.map((s) => [s.supplier_id, s.name]))}
+                >
                   <SelectTrigger className="w-64">
                     <SelectValue placeholder="Select a supplier" />
                   </SelectTrigger>
@@ -73,20 +87,29 @@ export default function PartyLedgerPage() {
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                <Label htmlFor="customerId">Customer ID</Label>
-                <Input id="customerId" className="w-64" value={partyId} onChange={(e) => setPartyId(e.target.value)} placeholder="UUID — no customer directory yet" />
+                <Label>Customer</Label>
+                <Select
+                  value={partyId}
+                  onValueChange={(v) => setPartyId(v ?? "")}
+                  items={Object.fromEntries(customers.map((c) => [c.customer_id, c.name]))}
+                >
+                  <SelectTrigger className="w-64">
+                    <SelectValue placeholder="Select a customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {customers.map((c) => (
+                      <SelectItem key={c.customer_id} value={c.customer_id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             )}
             <Button type="submit" disabled={!partyId}>
               Load
             </Button>
           </form>
-          {partyType === "customer" && (
-            <p className="text-xs text-zinc-500 mt-2">
-              No customer directory exists yet (POS sales are always paid in full — there is no credit-sale flow that would create a customer ledger entry).
-              Enter a customer ID directly if you have one.
-            </p>
-          )}
         </CardContent>
       </Card>
 

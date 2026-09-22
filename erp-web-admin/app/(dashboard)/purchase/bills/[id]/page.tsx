@@ -13,6 +13,13 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const METHODS = ["cash", "card", "upi", "bank_transfer", "cheque"];
+const METHOD_LABELS: Record<string, string> = {
+  cash: "Cash",
+  card: "Card",
+  upi: "UPI",
+  bank_transfer: "Bank transfer",
+  cheque: "Cheque",
+};
 
 export default function BillDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -112,14 +119,18 @@ export default function BillDetailPage() {
                 </div>
                 <div className="flex flex-col gap-2">
                   <Label>Method *</Label>
-                  <Select value={method} onValueChange={(v) => setMethod(v ?? "bank_transfer")}>
+                  <Select
+                    value={method}
+                    onValueChange={(v) => setMethod(v ?? "bank_transfer")}
+                    items={Object.fromEntries(METHODS.map((m) => [m, METHOD_LABELS[m]]))}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       {METHODS.map((m) => (
                         <SelectItem key={m} value={m}>
-                          {m}
+                          {METHOD_LABELS[m]}
                         </SelectItem>
                       ))}
                     </SelectContent>
