@@ -24,11 +24,12 @@ type Handler struct {
 }
 
 type stockResponse struct {
-	BranchID  string `json:"branch_id"`
-	VariantID string `json:"variant_id"`
-	OnHand    string `json:"on_hand"`
-	Reserved  string `json:"reserved"`
-	Available string `json:"available"`
+	BranchID     string `json:"branch_id"`
+	VariantID    string `json:"variant_id"`
+	OnHand       string `json:"on_hand"`
+	Reserved     string `json:"reserved"`
+	Available    string `json:"available"`
+	ReorderPoint string `json:"reorder_point"`
 }
 
 // GetStock: GET /inventory?branch_id=&variant_id=
@@ -50,15 +51,66 @@ func (h *Handler) GetStock(w http.ResponseWriter, r *http.Request) {
 	resp.VariantID = variantID
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-			SELECT on_hand::text, reserved::text, (on_hand - reserved)::text
+			SELECT on_hand::text, reserved::text, (on_hand - reserved)::text, reorder_point::text
 			FROM stock_levels WHERE branch_id = $1 AND variant_id = $2`, branchID, variantID,
-		).Scan(&resp.OnHand, &resp.Reserved, &resp.Available)
+		).Scan(&resp.OnHand, &resp.Reserved, &resp.Available, &resp.ReorderPoint)
 	})
 	if err == pgx.ErrNoRows {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "no stock record for this branch/variant")
 		return
 	} else if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not load stock")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, resp)
+}
+
+// ---------------------------------------------------------------------
+// PATCH /inventory/reorder-point — sets the threshold RunLowStockSweeper
+// (sweeper.go) alerts against. reorder_point has existed on stock_levels
+// since 001_schema.sql but was never settable through any endpoint —
+// it silently defaulted to 0 (never triggers) for every row until now.
+// Gated by inventory.adjust, the same permission AdjustStock already
+// uses — setting the alert threshold is the same kind of inventory
+// configuration action, not a distinct concern worth its own permission.
+// ---------------------------------------------------------------------
+
+type reorderPointRequest struct {
+	VariantID    string  `json:"variant_id"`
+	BranchID     string  `json:"branch_id"`
+	ReorderPoint float64 `json:"reorder_point"`
+}
+
+func (h *Handler) SetReorderPoint(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	var req reorderPointRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	if req.VariantID == "" || req.BranchID == "" || req.ReorderPoint < 0 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "variant_id, branch_id, and a non-negative reorder_point are required")
+		return
+	}
+
+	var resp stockResponse
+	resp.BranchID = req.BranchID
+	resp.VariantID = req.VariantID
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			INSERT INTO stock_levels (id, merchant_id, branch_id, variant_id, on_hand, reserved, version, reorder_point)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, 0, 0, 0, $3)
+			ON CONFLICT (branch_id, variant_id) DO UPDATE SET reorder_point = EXCLUDED.reorder_point, updated_at = now()
+			RETURNING on_hand::text, reserved::text, (on_hand - reserved)::text, reorder_point::text`,
+			req.BranchID, req.VariantID, req.ReorderPoint,
+		).Scan(&resp.OnHand, &resp.Reserved, &resp.Available, &resp.ReorderPoint)
+	})
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not set reorder point")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, resp)

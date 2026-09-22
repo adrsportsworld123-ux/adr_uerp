@@ -27,6 +27,26 @@ type Config struct {
 	// "change this account's password" endpoint — a real vulnerability
 	// the moment real user accounts exist.
 	DevAuthToolsEnabled bool
+
+	// SMTP* configure internal/notifications' real email provider. Empty
+	// SMTPHost means "not configured" — degrades to a console/log stand-in
+	// for email too, same graceful-disable pattern as OpenSearchURL, rather
+	// than failing startup over a notification channel nothing else in
+	// this codebase depends on to function.
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+
+	// NotificationsPhoneChannel is "sms" or "whatsapp" — which channel
+	// internal/notifications.Handler.DispatchPhone resolves to. Both route
+	// through the same console/log stand-in today (see
+	// internal/notifications/provider.go's package doc for why: no SMS/
+	// WhatsApp vendor has been chosen, and neither has real credentials in
+	// this environment) — this only decides which label gets recorded and
+	// which channel a future real integration would need to implement.
+	NotificationsPhoneChannel string
 }
 
 func Load() Config {
@@ -39,6 +59,14 @@ func Load() Config {
 		JWTSecret:           getenv("JWT_SECRET", "dev-only-secret-change-me"),
 		OpenSearchURL:       getenv("OPENSEARCH_URL", ""),
 		DevAuthToolsEnabled: getenv("DEV_AUTH_TOOLS_ENABLED", "false") == "true",
+
+		SMTPHost:     getenv("SMTP_HOST", ""),
+		SMTPPort:     getenv("SMTP_PORT", "587"),
+		SMTPUsername: getenv("SMTP_USERNAME", ""),
+		SMTPPassword: getenv("SMTP_PASSWORD", ""),
+		SMTPFrom:     getenv("SMTP_FROM", "no-reply@example.com"),
+
+		NotificationsPhoneChannel: getenv("NOTIFICATIONS_PHONE_CHANNEL", "sms"),
 	}
 }
 

@@ -12,8 +12,10 @@ import (
 	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/customers"
 	"erp-core-go/internal/db"
+	"erp-core-go/internal/gst"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/loyalty"
+	"erp-core-go/internal/notifications"
 	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/promotions"
 	"erp-core-go/internal/purchase"
@@ -23,7 +25,7 @@ import (
 	"erp-core-go/internal/sync"
 )
 
-func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client) http.Handler {
+func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(CORS)
 	r.Use(middleware.RequestID)
@@ -37,11 +39,12 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	logout := &authn.LogoutHandler{DB: database}
 	barcode := &catalog.BarcodeHandler{DB: database}
 	barcodeAssign := &catalog.BarcodeAssignHandler{DB: database}
+	taxonomy := &catalog.TaxonomyHandler{DB: database}
 	label := &catalog.LabelHandler{DB: database}
 	productList := &catalog.ListHandler{DB: database}
 	prc := &pricing.Handler{DB: database, Search: searchClient}
 	loy := &loyalty.Handler{DB: database}
-	orders := &sales.Handler{DB: database, Loyalty: loy}
+	orders := &sales.Handler{DB: database, Loyalty: loy, Notify: notify}
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
 	syncH := &sync.Handler{DB: database}
@@ -51,6 +54,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	srch := &search.Handler{DB: database, Client: searchClient}
 	cust := &customers.Handler{DB: database}
 	promo := &promotions.Handler{DB: database}
+	gstH := &gst.Handler{DB: database}
 
 	// Dev-only, public, no-auth password tooling — see the package comment
 	// on internal/authn/dev_handlers.go for exactly what these two
@@ -84,7 +88,21 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/products/variants/{id}/barcodes", barcodeAssign.AssignBarcode)
 			protected.Get("/products/variants/{id}/label", label.PrintLabel)
 			protected.Get("/products", productList.ListProducts)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/products", productList.CreateProduct)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Patch("/products/{id}", productList.UpdateProduct)
 			protected.Get("/products/search", srch.Search)
+
+			protected.Get("/categories", taxonomy.ListCategories)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/categories", taxonomy.CreateCategory)
+			protected.Get("/brands", taxonomy.ListBrands)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/brands", taxonomy.CreateBrand)
+			protected.Get("/tax-slabs", taxonomy.ListTaxSlabs)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/tax-slabs", taxonomy.CreateTaxSlab)
 			protected.With(authn.RequirePermission(database, "search.reindex")).
 				Post("/search/reindex", srch.Reindex)
 
@@ -92,6 +110,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/sales/orders/{id}", orders.GetOrder)
 			protected.Get("/sales/orders/{id}/receipt", orders.GetReceipt)
 			protected.Get("/sales/orders/{id}/receipt/print", orders.PrintReceipt)
+			protected.Post("/sales/orders/{id}/receipt/notify", orders.NotifyReceipt)
 			protected.Post("/sales/orders/{id}/lines", orders.AddLine)
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)
@@ -107,6 +126,14 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/inventory", inv.GetStock)
 			protected.With(authn.RequirePermission(database, "inventory.adjust")).
 				Post("/inventory/adjustments", inv.AdjustStock)
+			protected.With(authn.RequirePermission(database, "inventory.adjust")).
+				Patch("/inventory/reorder-point", inv.SetReorderPoint)
+			protected.Post("/inventory/reconciliation", inv.CreateReconciliation)
+			protected.Get("/inventory/reconciliation/history", inv.ReconciliationHistory)
+			protected.Get("/inventory/reconciliation/{id}", inv.GetReconciliation)
+
+			protected.With(authn.RequirePermission(database, "notifications.view")).
+				Get("/notifications", notify.ListNotifications)
 
 			protected.Get("/reports/daily-sales", rpt.DailySales)
 			protected.Get("/reports/stock-summary", rpt.StockSummary)
@@ -142,6 +169,32 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/accounting/day-book", acct.DayBook)
 			protected.Get("/accounting/cash-book", acct.CashBook)
 
+			protected.Get("/accounting/bank-statement/imports", acct.ListBankStatementImports)
+			protected.With(authn.RequirePermission(database, "bank_reconciliation.manage")).
+				Post("/accounting/bank-statement/import", acct.ImportBankStatement)
+			protected.Get("/accounting/bank-statement/lines", acct.ListBankStatementLines)
+			protected.Get("/accounting/bank-statement/lines/{id}/candidates", acct.BankStatementLineCandidates)
+			protected.With(authn.RequirePermission(database, "bank_reconciliation.manage")).
+				Post("/accounting/bank-statement/lines/{id}/match", acct.MatchBankStatementLine)
+			protected.With(authn.RequirePermission(database, "bank_reconciliation.manage")).
+				Post("/accounting/bank-statement/lines/{id}/unmatch", acct.UnmatchBankStatementLine)
+			protected.Get("/accounting/bank-reconciliation", acct.BankReconciliationReport)
+
+			protected.Get("/accounting/payment-gateway/settlement/imports", acct.ListPaymentGatewaySettlementImports)
+			protected.With(authn.RequirePermission(database, "payment_gateway_reconciliation.manage")).
+				Post("/accounting/payment-gateway/settlement/import", acct.ImportPaymentGatewaySettlement)
+			protected.Get("/accounting/payment-gateway/settlement/lines", acct.ListPaymentGatewaySettlementLines)
+			protected.Get("/accounting/payment-gateway/settlement/lines/{id}/candidates", acct.PaymentGatewaySettlementLineCandidates)
+			protected.With(authn.RequirePermission(database, "payment_gateway_reconciliation.manage")).
+				Post("/accounting/payment-gateway/settlement/lines/{id}/match", acct.MatchPaymentGatewaySettlementLine)
+			protected.With(authn.RequirePermission(database, "payment_gateway_reconciliation.manage")).
+				Post("/accounting/payment-gateway/settlement/lines/{id}/unmatch", acct.UnmatchPaymentGatewaySettlementLine)
+			protected.Get("/accounting/payment-gateway/reconciliation", acct.PaymentGatewayReconciliationReport)
+
+			protected.Post("/cash-reconciliation", acct.CreateCashReconciliation)
+			protected.Get("/cash-reconciliation", acct.GetCashReconciliation)
+			protected.Get("/cash-reconciliation/history", acct.CashReconciliationHistory)
+
 			protected.Post("/branches", br.CreateBranch)
 			protected.Get("/branches", br.ListBranches)
 			protected.Patch("/branches/{id}", br.UpdateBranch)
@@ -162,6 +215,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/customers/{id}", cust.GetCustomer)
 			protected.Patch("/customers/{id}", cust.UpdateCustomer)
 			protected.Get("/customers/{id}/loyalty", loy.GetCustomerLoyalty)
+			protected.Get("/customers/{id}/credit", cust.GetCustomerCredit)
+			protected.With(authn.RequirePermission(database, "credit.manage")).
+				Patch("/customers/{id}/credit", cust.UpdateCustomerCredit)
+			protected.Post("/customers/{id}/payments", cust.RecordReceivablePayment)
 
 			protected.Get("/promotions", promo.ListPromotions)
 			protected.With(authn.RequirePermission(database, "promotions.manage")).
@@ -178,6 +235,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/loyalty/config", loy.GetConfig)
 			protected.With(authn.RequirePermission(database, "loyalty.manage")).
 				Patch("/loyalty/config", loy.UpdateConfig)
+
+			protected.Get("/gst/gstr1", gstH.GSTR1)
+			protected.Get("/gst/gstr3b", gstH.GSTR3B)
 
 			protected.Post("/pricing/calculate", prc.Calculate)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).

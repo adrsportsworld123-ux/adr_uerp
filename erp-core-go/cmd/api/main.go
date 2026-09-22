@@ -13,8 +13,12 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/config"
+	"erp-core-go/internal/customers"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpserver"
+	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/notifications"
+	"erp-core-go/internal/purchase"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
 )
@@ -59,11 +63,19 @@ func main() {
 		}
 	}
 
+	notifyProvider := notifications.NewProviderFromConfig(cfg.SMTPHost, notifications.SMTPConfig{
+		Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, From: cfg.SMTPFrom,
+	})
+	notify := &notifications.Handler{DB: database, Provider: notifyProvider, PhoneChannel: cfg.NotificationsPhoneChannel}
+
 	go sales.RunExpirySweeper(ctx, database, time.Minute)
+	go inventory.RunLowStockSweeper(ctx, database, notify, 15*time.Minute)
+	go purchase.RunPaymentReminderSweeper(ctx, database, notify, time.Hour)
+	go customers.RunReceivableReminderSweeper(ctx, database, notify, time.Hour)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient),
+		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

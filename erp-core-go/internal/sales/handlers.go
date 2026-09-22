@@ -39,6 +39,9 @@ type Handler struct {
 	// Loyalty is optional (nil is fine — Checkout just skips earning);
 	// every real deployment wires it, same as pricing.Handler.Search.
 	Loyalty LoyaltyEarner
+	// Notify is optional (nil is fine — Checkout/NotifyReceipt just skip
+	// sending); see notify_receipt.go's Notifier doc comment.
+	Notify Notifier
 }
 
 type orderResponse struct {
@@ -316,8 +319,9 @@ func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
 
 type checkoutRequest struct {
 	Payments []struct {
-		Method string  `json:"method"`
-		Amount float64 `json:"amount"`
+		Method    string  `json:"method"`
+		Amount    float64 `json:"amount"`
+		Reference string  `json:"reference"` // card/UPI gateway transaction id (UTR), if the terminal/gateway integration provides one — matched later by accounting.MatchPaymentGatewaySettlementLine
 	} `json:"payments"`
 }
 
@@ -358,9 +362,27 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 			return errOrderNotEditable
 		}
 
-		var paidTotal float64
+		// Found live while verifying the new POST /products endpoint: a
+		// cart with zero lines (subtotal/grand_total both 0) passed the
+		// paidTotal < grandTotalFloat check below trivially for *any*
+		// paidTotal >= 0, letting checkout finalize an empty order and
+		// still record whatever payment amount the client sent — a real
+		// gap, not specific to how this cart ended up empty (AddLine
+		// failing partway through is one way, but not the only one).
+		var lineCount int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM sales_order_lines WHERE sales_order_id = $1`, orderID).Scan(&lineCount); err != nil {
+			return err
+		}
+		if lineCount == 0 {
+			return errEmptyCart
+		}
+
+		var paidTotal, creditPortion float64
 		for _, p := range req.Payments {
 			paidTotal += p.Amount
+			if p.Method == "credit" {
+				creditPortion += p.Amount
+			}
 		}
 		grandTotalFloat, err := strconv.ParseFloat(grandTotal, 64)
 		if err != nil {
@@ -368,6 +390,15 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		}
 		if paidTotal < grandTotalFloat {
 			return errPaymentMismatch
+		}
+
+		var dueDate *time.Time
+		if creditPortion > 0 {
+			var err error
+			dueDate, err = checkCreditAndComputeDueDate(ctx, tx, customerID, creditPortion)
+			if err != nil {
+				return err
+			}
 		}
 
 		rows, err := tx.Query(ctx, `
@@ -411,9 +442,13 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, p := range req.Payments {
+			var reference *string
+			if p.Reference != "" {
+				reference = &p.Reference
+			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO payments (id, sales_order_id, method, amount, status)
-				VALUES (gen_random_uuid(), $1, $2, $3, 'captured')`, orderID, p.Method, p.Amount); err != nil {
+				INSERT INTO payments (id, sales_order_id, method, amount, reference_no, status)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, 'captured')`, orderID, p.Method, p.Amount, reference); err != nil {
 				return err
 			}
 		}
@@ -436,13 +471,26 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		}
 		debitLines := make([]accounting.JournalLine, 0, len(req.Payments))
 		for _, p := range req.Payments {
-			debitLines = append(debitLines, accounting.JournalLine{
-				AccountCode: accounting.AccountCodeForPaymentMethod(p.Method),
-				Debit:       p.Amount * scale,
-			})
+			line := accounting.JournalLine{AccountCode: accounting.AccountCodeForPaymentMethod(p.Method), Debit: p.Amount * scale}
+			if p.Method == "credit" {
+				// Books to Receivable, not a cash/clearing account —
+				// party-tagged so it shows on this customer's
+				// GET /accounting/party-ledger. checkCreditAndComputeDueDate
+				// above already confirmed customerID is set whenever
+				// creditPortion > 0.
+				line = accounting.JournalLine{AccountCode: accounting.AccountReceivable, Debit: p.Amount * scale, PartyType: "customer", PartyID: *customerID}
+			}
+			debitLines = append(debitLines, line)
 		}
 		if err := postSaleJournal(ctx, tx, branchID, orderID, claims.UserID, debitLines, subtotal, discountTotal, taxTotal); err != nil {
 			return err
+		}
+
+		if creditPortion > 0 {
+			if _, err := tx.Exec(ctx, `UPDATE sales_orders SET credit_amount = $1, due_date = $2 WHERE id = $3`,
+				creditPortion, dueDate, orderID); err != nil {
+				return err
+			}
 		}
 
 		// Loyalty earn (discount hierarchy item 5's counterpart — see
@@ -456,6 +504,10 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Receipt notification (best-effort — see notify_receipt.go's doc
+		// comment for why this can never fail the checkout it's part of).
+		notifyReceipt(ctx, tx, h.Notify, orderID)
+
 		return loadOrder(ctx, tx, orderID, &resp)
 	})
 
@@ -467,8 +519,16 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "stock changed since this item was added to the cart")
 	case errors.Is(err, errOrderNotEditable):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order has already been voided or refunded")
+	case errors.Is(err, errEmptyCart):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "cannot check out an order with no lines")
 	case errors.Is(err, errPaymentMismatch):
 		httpx.Error(w, http.StatusBadRequest, "PAYMENT_MISMATCH", "payment total does not cover the order's grand total")
+	case errors.Is(err, errNoCustomerForCredit):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "a credit payment requires a customer already attached to the order")
+	case errors.Is(err, errCreditHold):
+		httpx.Error(w, http.StatusForbidden, "CREDIT_HOLD", "this customer is on credit hold")
+	case errors.Is(err, errCreditLimitExceeded):
+		httpx.Error(w, http.StatusConflict, "CREDIT_LIMIT_EXCEEDED", "this sale would put the customer over their credit limit")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
 	case err != nil:
@@ -579,6 +639,52 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 }
 
 var (
-	errOrderNotEditable = errors.New("order is not editable")
-	errPaymentMismatch  = errors.New("payment total does not match grand total")
+	errOrderNotEditable    = errors.New("order is not editable")
+	errPaymentMismatch     = errors.New("payment total does not match grand total")
+	errEmptyCart           = errors.New("cannot check out an order with no lines")
+	errNoCustomerForCredit = errors.New("a credit payment requires a customer already attached to the order")
+	errCreditHold          = errors.New("customer is on credit hold")
+	errCreditLimitExceeded = errors.New("sale would exceed customer's credit limit")
 )
+
+// paymentTermsDays maps customers.payment_terms to a due-date offset —
+// see migrations/014_credit_facility.sql's CHECK constraint for the exact
+// set of valid values.
+var paymentTermsDays = map[string]int{
+	"due_on_receipt": 0, "net_7": 7, "net_15": 15, "net_30": 30, "net_60": 60, "net_90": 90,
+}
+
+// checkCreditAndComputeDueDate is Phase 4's B2B Credit Facility auto-block
+// (pos_frd_complete.md §6: "Auto-block on limit breach"), enforced at the
+// one point a credit sale is actually created — Checkout. Outstanding is
+// computed fresh from sales_orders (credit_amount - credit_paid summed
+// across every other finalized order for this customer), not cached, the
+// same "compute on read" choice used throughout this codebase (segment,
+// margin, loyalty balance) rather than a running balance that could drift.
+func checkCreditAndComputeDueDate(ctx context.Context, tx pgx.Tx, customerID *string, creditPortion float64) (*time.Time, error) {
+	if customerID == nil {
+		return nil, errNoCustomerForCredit
+	}
+	var creditLimit float64
+	var paymentTerms string
+	var creditHold bool
+	if err := tx.QueryRow(ctx, `SELECT credit_limit, payment_terms, credit_hold FROM customers WHERE id = $1`, *customerID).
+		Scan(&creditLimit, &paymentTerms, &creditHold); err != nil {
+		return nil, err
+	}
+	if creditHold {
+		return nil, errCreditHold
+	}
+	var currentOutstanding float64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(credit_amount - credit_paid), 0) FROM sales_orders
+		WHERE customer_id = $1 AND status = 'finalized' AND credit_amount > credit_paid`, *customerID,
+	).Scan(&currentOutstanding); err != nil {
+		return nil, err
+	}
+	if currentOutstanding+creditPortion > creditLimit+0.01 { // epsilon for float rounding, same as RecordBillPayment
+		return nil, errCreditLimitExceeded
+	}
+	due := time.Now().AddDate(0, 0, paymentTermsDays[paymentTerms]).Truncate(24 * time.Hour)
+	return &due, nil
+}

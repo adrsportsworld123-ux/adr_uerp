@@ -76,6 +76,9 @@ type customerResponse struct {
 	TransactionCount int     `json:"transaction_count"`
 	LastPurchaseAt   *string `json:"last_purchase_at"`
 	Segment          string  `json:"segment"`
+	CreditLimit      string  `json:"credit_limit"`
+	PaymentTerms     string  `json:"payment_terms"`
+	CreditHold       bool    `json:"credit_hold"`
 }
 
 func scanCustomerRow(row pgx.Row) (customerResponse, error) {
@@ -84,6 +87,7 @@ func scanCustomerRow(row pgx.Row) (customerResponse, error) {
 		&c.CustomerID, &c.Name, &c.Phone, &c.Email, &c.CustomerType,
 		&c.Address, &c.DateOfBirth, &c.Anniversary, &c.CompanyName, &c.GSTIN, &c.Status,
 		&c.TotalSpend, &c.TransactionCount, &c.LastPurchaseAt, &c.Segment,
+		&c.CreditLimit, &c.PaymentTerms, &c.CreditHold,
 	)
 	return c, err
 }
@@ -91,7 +95,8 @@ func scanCustomerRow(row pgx.Row) (customerResponse, error) {
 const customerColumns = `
 	id, COALESCE(name,''), COALESCE(phone,''), COALESCE(email,''), customer_type,
 	COALESCE(address,''), date_of_birth::text, anniversary::text, COALESCE(company_name,''), COALESCE(gstin,''), status,
-	total_spend::text, transaction_count, last_purchase_at::text, segment
+	total_spend::text, transaction_count, last_purchase_at::text, segment,
+	credit_limit::text, payment_terms, credit_hold
 `
 
 // ---------------------------------------------------------------------
