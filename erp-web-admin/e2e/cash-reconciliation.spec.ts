@@ -69,7 +69,10 @@ test("zero-variance count auto-closes, a variance needs a manager PIN, and histo
     await page.fill("#authorizedBy", "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"); // Arjun, Merchant Admin
     await page.fill("#authorizedPin", "0000"); // wrong PIN (real one is 1234, set for backend verification)
     await page.getByRole("button", { name: "Submit reconciliation" }).click();
-    await expect(page.getByText(/VARIANCE_NOT_AUTHORIZED|Branch Manager or Merchant Admin/i)).toBeVisible();
+    // .text-red-600 scopes to the actual API error, not the always-shown
+    // amber hint paragraph that also contains "Branch Manager or Merchant
+    // Admin" and would otherwise cause a strict-mode collision.
+    await expect(page.locator(".text-red-600", { hasText: /VARIANCE_NOT_AUTHORIZED|Branch Manager or Merchant Admin/i })).toBeVisible();
   });
 
   await test.step("the same variance succeeds with the correct PIN", async () => {

@@ -219,6 +219,41 @@ class AppSession extends ChangeNotifier {
     return cached.lookup;
   }
 
+  /// Category/subcategory tree for the product-search screen's filters.
+  /// Live-only, like searchProducts below — categories aren't part of the
+  /// offline catalog cache (see CachedProduct's fields), so there's
+  /// nothing to fall back to while offline.
+  Future<List<CatalogCategory>> loadCategories() => api.listCategories();
+
+  /// Name/category/subcategory product lookup — the non-barcode path to
+  /// find something and add it to the cart. Live-network only: the local
+  /// SQLite catalog cache used for offline barcode scans has no category
+  /// data and isn't full-text searchable, so unlike scanBarcode this has
+  /// no offline fallback and refuses cleanly instead, matching
+  /// searchCustomers/applyPromotions/etc.'s existing "Not available
+  /// offline" convention rather than half-supporting it.
+  Future<List<ProductSearchResult>> searchProducts({String query = '', String? categoryId}) async {
+    _lastError = null;
+    if (offlineMode) {
+      _lastError = 'Product search is not available offline';
+      notifyListeners();
+      return [];
+    }
+    try {
+      return await api.searchProducts(query: query, categoryId: categoryId);
+    } on ApiException catch (e) {
+      _lastError = e.code == 'SEARCH_UNAVAILABLE' ? 'Product search is temporarily unavailable' : e.message;
+      notifyListeners();
+      return [];
+    } catch (e) {
+      if (!_isNetworkError(e)) rethrow;
+      offlineMode = true;
+      _lastError = 'Product search is not available offline';
+      notifyListeners();
+      return [];
+    }
+  }
+
   Future<bool> addToCart(ProductLookup product, double quantity) async {
     _lastError = null;
     if (offlineMode) {

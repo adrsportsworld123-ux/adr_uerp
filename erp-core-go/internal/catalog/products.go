@@ -49,6 +49,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	categoryID := q.Get("category_id")
 	brandID := q.Get("brand_id")
+	collectionID := q.Get("collection_id")
 	search := q.Get("q")
 	minPrice := q.Get("min_price")
 	maxPrice := q.Get("max_price")
@@ -71,9 +72,10 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			WHERE ($1 = '' OR p.category_id::text = $1)
 			  AND ($2 = '' OR p.brand_id::text = $2)
 			  AND ($3 = '' OR p.name ILIKE '%' || $3 || '%')
+			  AND ($6 = '' OR p.collection_id::text = $6)
 			  AND p.status = 'active'
 			ORDER BY p.name
-			LIMIT $4 OFFSET $5`, categoryID, brandID, search, limit, offset)
+			LIMIT $4 OFFSET $5`, categoryID, brandID, search, limit, offset, collectionID)
 		if err != nil {
 			return err
 		}

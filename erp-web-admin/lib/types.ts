@@ -67,6 +67,8 @@ export interface Customer {
   credit_limit: string;
   payment_terms: "due_on_receipt" | "net_7" | "net_15" | "net_30" | "net_60" | "net_90";
   credit_hold: boolean;
+  // "" = plain retail pricing (see erp-core-go's internal/pricing.ResolvePrice).
+  price_list_id: string;
 }
 
 export interface CustomerOrderHistoryEntry {
@@ -141,6 +143,8 @@ export interface GRNLine {
   unit_cost: string;
   landed_unit_cost: string;
   line_total: string;
+  batch_no: string;
+  expiry_date: string | null;
 }
 
 export interface GRN {
@@ -643,6 +647,56 @@ export interface CatalogBrand {
   name: string;
 }
 
+// Phase 8: Vertical Expansion — Apparel. Mirrors internal/catalog/collections.go.
+export interface CollectionSummary {
+  collection_id: string;
+  name: string;
+  season: string;
+}
+
+// Phase 8: Vertical Expansion — Grocery/FMCG. Mirrors internal/inventory/batches.go.
+export interface ExpiringBatch {
+  batch_id: string;
+  branch_id: string;
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  batch_no: string;
+  expiry_date: string | null;
+  quantity_remaining: string;
+  days_until_expiry: number | null;
+}
+
+// Phase 8: Vertical Expansion — Pharmacy. Mirrors internal/pharmacy/prescriptions.go.
+export interface Prescription {
+  prescription_id: string;
+  customer_id: string;
+  doctor_name: string;
+  doctor_reg_no: string;
+  notes: string;
+  created_at: string;
+}
+
+// Phase 8: Vertical Expansion — mirrors internal/catalog/attributes.go.
+export interface AttributeValue {
+  value_id: string;
+  value: string;
+  sort_order: number;
+}
+
+export interface CatalogAttribute {
+  attribute_id: string;
+  name: string;
+  input_type: "select" | "text" | "number";
+  values: AttributeValue[];
+}
+
+export interface CategoryAttribute extends CatalogAttribute {
+  required: boolean;
+  unit: string;
+  sort_order: number;
+}
+
 export interface TaxSlab {
   tax_slab_id: string;
   name: string;
@@ -657,6 +711,9 @@ export interface NewProductVariantInput {
   cost_price: number;
   mrp: number;
   selling_price: number;
+  track_batch?: boolean;
+  plu_code?: string;
+  attribute_combo?: Record<string, string>;
 }
 
 export interface CreatedProduct {
@@ -667,7 +724,302 @@ export interface CreatedProduct {
   category_id: string | null;
   brand_id: string | null;
   tax_slab_id: string | null;
+  collection_id: string | null;
   product_type: string;
   status: string;
   variants: { variant_id: string; sku: string; cost_price: string; mrp: string; selling_price: string }[];
+}
+
+// Mirrors internal/audit.
+export interface AuditLogEntry {
+  id: number;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  performed_by: string | null;
+  before_value: string | null;
+  after_value: string | null;
+  reason: string;
+  created_at: string;
+  checksum: string | null;
+}
+
+export interface AuditVerifyResult {
+  valid: boolean;
+  rows_checked: number;
+  legacy_rows_skipped: number;
+  broken_at_id: number | null;
+  broken_reason: string | null;
+}
+
+// Mirrors internal/einvoice.
+export interface EInvoice {
+  sales_order_id: string;
+  gsp_provider: string;
+  irn: string;
+  ack_no: string;
+  ack_date: string;
+  signed_qr_code: string;
+  status: string;
+}
+
+export interface EWayBill {
+  sales_order_id: string;
+  gsp_provider: string;
+  ewb_no: string;
+  ewb_date: string;
+  valid_until: string;
+  vehicle_no: string;
+  transporter_id: string;
+  distance_km: number;
+  status: string;
+  interstate: boolean;
+  required_by_rule: boolean;
+}
+
+// Mirrors internal/hr and internal/payroll (Phase 5).
+export interface Employee {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  employee_code: string;
+  branch_id?: string;
+  status: string;
+  designation?: string;
+  department?: string;
+  employment_type: string;
+  date_of_joining?: string;
+  date_of_exit?: string;
+  pan_number?: string;
+  uan_number?: string;
+  esi_number?: string;
+  bank_account_no?: string;
+  bank_ifsc?: string;
+  shift_id?: string;
+  roles: string[];
+}
+
+export interface Shift {
+  id: string;
+  branch_id?: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+}
+
+export interface SalaryStructure {
+  effective_from: string;
+  basic: string;
+  hra: string;
+  special_allowance: string;
+  other_allowances: string;
+  pf_applicable: boolean;
+}
+
+export interface PTSlab {
+  min: number;
+  max: number | null;
+  amount: number;
+}
+
+export interface StatutoryConfig {
+  pf_employee_rate: number;
+  pf_employer_rate: number;
+  pf_wage_ceiling: number;
+  esi_employee_rate: number;
+  esi_employer_rate: number;
+  esi_wage_ceiling: number;
+  pt_slabs: PTSlab[];
+  lwf_employee_amount: number;
+  lwf_employer_amount: number;
+  tds_rate_percent: number;
+}
+
+export interface CommissionTier {
+  min_net_sales: number;
+  rate_percent: number;
+}
+
+export interface CommissionRule {
+  id: string;
+  name: string;
+  category_id?: string;
+  tiers: CommissionTier[];
+  status: string;
+}
+
+export interface Payslip {
+  user_id: string;
+  name: string;
+  basic: string;
+  hra: string;
+  special_allowance: string;
+  other_allowances: string;
+  commission_amount: string;
+  gross_earnings: string;
+  days_in_period: string;
+  days_present: string;
+  pf_employee: string;
+  pf_employer: string;
+  esi_employee: string;
+  esi_employer: string;
+  pt_amount: string;
+  tds_amount: string;
+  lwf_employee: string;
+  lwf_employer: string;
+  total_deductions: string;
+  net_pay: string;
+}
+
+export interface PayrollRun {
+  id: string;
+  period_month: number;
+  period_year: number;
+  status: string;
+  total_gross: string;
+  total_deductions: string;
+  total_net: string;
+  finalized_at?: string;
+  skipped_employees?: string[];
+  payslips?: Payslip[];
+}
+
+export interface ChallanSummary {
+  period_month: number;
+  period_year: number;
+  pf_total: string;
+  pf_employer_eps: string;
+  pf_employer_epf: string;
+  esi_total: string;
+  pt_total: string;
+  tds_total: string;
+  lwf_total: string;
+}
+
+// Mirrors internal/rbac (UACL — role/permission administration).
+export interface RBACPermission {
+  id: string;
+  code: string;
+  description: string;
+}
+
+export interface RBACRole {
+  id: string;
+  name: string;
+  is_system_default: boolean;
+  permission_codes: string[];
+  user_count: number;
+}
+
+// Mirrors internal/ai (Phase 6 v1 — reorder suggestions & recommendations).
+export interface ReorderSuggestion {
+  branch_id: string;
+  variant_id: string;
+  product_name: string;
+  sku: string;
+  on_hand: string;
+  reserved: string;
+  available: string;
+  reorder_point: string;
+  daily_velocity: string;
+  days_of_stock_remaining: string | null;
+  suggested_reorder_qty: string;
+  reason: string;
+}
+
+export interface Recommendation {
+  variant_id: string;
+  product_name: string;
+  sku: string;
+  selling_price: string;
+  co_occurrence_count: number;
+  confidence: string;
+}
+
+// Mirrors internal/ai/nlpbi.go (Phase 6 v1 — NLP-BI).
+export interface ChartPoint {
+  label: string;
+  value: string;
+}
+
+export interface ChartSpec {
+  type: "bar" | "stat";
+  title: string;
+  series?: ChartPoint[];
+  value?: string;
+}
+
+export interface AskResponse {
+  question: string;
+  intent: string;
+  answer: string;
+  chart: ChartSpec;
+  data: unknown;
+}
+
+// Mirrors internal/ai/copilot.go (Phase 6 v1 — AI Copilot).
+export interface CopilotMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// Phase 7: Wholesale/B2B & Omnichannel — mirrors internal/pricing/price_lists.go.
+export interface PriceListSummary {
+  price_list_id: string;
+  name: string;
+  item_count: number;
+}
+
+export interface PriceListItem {
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  price: string;
+}
+
+export interface PriceListDetail {
+  price_list_id: string;
+  name: string;
+  items: PriceListItem[];
+}
+
+// Mirrors internal/quotations/handlers.go.
+export type QuotationStatus = "draft" | "sent" | "accepted" | "rejected" | "expired" | "converted";
+
+export interface QuotationLine {
+  line_id: string;
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  quantity: string;
+  unit_price: string;
+  tax_amount: string;
+  line_total: string;
+}
+
+export interface Quotation {
+  quotation_id: string;
+  quote_number: string;
+  branch_id: string;
+  customer_id: string;
+  status: QuotationStatus;
+  valid_until: string;
+  subtotal: string;
+  tax_total: string;
+  grand_total: string;
+  notes: string;
+  converted_sales_order_id: string | null;
+  created_at: string;
+  lines: QuotationLine[];
+}
+
+export interface QuotationSummary {
+  quotation_id: string;
+  quote_number: string;
+  customer_id: string;
+  status: QuotationStatus;
+  valid_until: string;
+  grand_total: string;
+  created_at: string;
 }

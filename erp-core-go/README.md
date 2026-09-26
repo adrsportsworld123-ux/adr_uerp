@@ -79,6 +79,16 @@ security tradeoffs, and why `set-password` must never be enabled outside
 your own machine. If you'd rather not rely on that flag, the manual path
 below still works unchanged.
 
+**One exception: `admin@adrsw.com` / password set by whoever created it (a
+Merchant Admin superadmin account added 2026-09-24) has a REAL bcrypt hash
+baked into `migrations/002_seed.sql`, not the placeholder below — it logs
+in immediately on a fresh environment with no extra setup step. It was
+added there specifically because this environment's Postgres data volume
+has reset unexpectedly multiple times, each time wiping a runtime-created
+admin account (made via `POST /hr/employees`) that had no migration to
+recreate it from. See `docker-compose.yml`'s comment on the migrations
+mount for the full story and a diagnostic if data disappears again.**
+
 `migrations/002_seed.sql`'s `password_hash` for `ravi@acme-sports.test` is
 the literal string `$2a$10$placeholderplaceholderplaceholderplaceholderp`
 — not a real bcrypt hash of any password. There is no "default password"
@@ -237,9 +247,14 @@ cross a tenant boundary even in a bug scenario.
 docker compose up --build
 ```
 
-This starts Postgres (auto-running `migrations/001_schema.sql` then
-`002_seed.sql` on first boot), Redis (present for later phases, unused by
-Phase 0/1 code yet), and the API on `:8080`.
+This starts Postgres — on a genuinely fresh volume only, its entrypoint
+auto-runs *every* `.sql` file under `migrations/` in filename order, not
+just `001_schema.sql`/`002_seed.sql` (confirmed live 2026-09-24 after an
+unexpected volume reset silently replayed all of them, restoring schema
+and every migration's own seed data but not runtime data created via the
+API afterward — see `docker-compose.yml`'s comment on the mount for the
+full account and a diagnostic if this happens to you) — Redis (present
+for later phases, unused by Phase 0/1 code yet), and the API on `:8080`.
 
 Then:
 

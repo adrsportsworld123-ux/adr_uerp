@@ -7,25 +7,34 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"erp-core-go/internal/accounting"
+	"erp-core-go/internal/ai"
+	"erp-core-go/internal/ai/llm"
+	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/branches"
 	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/customers"
 	"erp-core-go/internal/db"
+	"erp-core-go/internal/einvoice"
 	"erp-core-go/internal/gst"
+	"erp-core-go/internal/hr"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/loyalty"
 	"erp-core-go/internal/notifications"
+	"erp-core-go/internal/payroll"
+	"erp-core-go/internal/pharmacy"
 	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/promotions"
 	"erp-core-go/internal/purchase"
+	"erp-core-go/internal/quotations"
+	"erp-core-go/internal/rbac"
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
 	"erp-core-go/internal/sync"
 )
 
-func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler) http.Handler {
+func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client) http.Handler {
 	r := chi.NewRouter()
 	r.Use(CORS)
 	r.Use(middleware.RequestID)
@@ -37,6 +46,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	pinLogin := &authn.PinLoginHandler{DB: database, Issuer: issuer}
 	refresh := &authn.RefreshHandler{DB: database, Issuer: issuer}
 	logout := &authn.LogoutHandler{DB: database}
+	passwordReset := &authn.PasswordResetHandler{DB: database, Notify: notify}
 	barcode := &catalog.BarcodeHandler{DB: database}
 	barcodeAssign := &catalog.BarcodeAssignHandler{DB: database}
 	taxonomy := &catalog.TaxonomyHandler{DB: database}
@@ -55,6 +65,13 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	cust := &customers.Handler{DB: database}
 	promo := &promotions.Handler{DB: database}
 	gstH := &gst.Handler{DB: database}
+	auditH := &audit.Handler{DB: database}
+	hrH := &hr.Handler{DB: database}
+	payrollH := &payroll.Handler{DB: database}
+	rbacH := &rbac.Handler{DB: database}
+	aiH := &ai.Handler{DB: database, LLM: llmClient}
+	quoH := &quotations.Handler{DB: database}
+	pharmH := &pharmacy.Handler{DB: database}
 
 	// Dev-only, public, no-auth password tooling — see the package comment
 	// on internal/authn/dev_handlers.go for exactly what these two
@@ -76,6 +93,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		api.Post("/auth/login", login.ServeHTTP)
 		api.Post("/auth/pin-login", pinLogin.ServeHTTP)
 		api.Post("/auth/refresh", refresh.ServeHTTP)
+		api.Post("/auth/forgot-password", passwordReset.ForgotPassword)
+		api.Post("/auth/reset-password", passwordReset.ResetPassword)
 
 		// Authenticated — everything below requires a valid Bearer token,
 		// and every handler inside this group gets its tenant from
@@ -103,6 +122,24 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/tax-slabs", taxonomy.ListTaxSlabs)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Post("/tax-slabs", taxonomy.CreateTaxSlab)
+			protected.Get("/collections", taxonomy.ListCollections)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/collections", taxonomy.CreateCollection)
+
+			// Phase 8: Vertical Expansion — attribute-set configuration.
+			protected.Get("/attributes", taxonomy.ListAttributes)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/attributes", taxonomy.CreateAttribute)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/attributes/{id}/values", taxonomy.CreateAttributeValue)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Delete("/attributes/{id}/values/{value_id}", taxonomy.DeleteAttributeValue)
+			protected.Get("/categories/{id}/attributes", taxonomy.ListCategoryAttributes)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/categories/{id}/attributes", taxonomy.SetCategoryAttribute)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Delete("/categories/{id}/attributes/{attribute_id}", taxonomy.DeleteCategoryAttribute)
+
 			protected.With(authn.RequirePermission(database, "search.reindex")).
 				Post("/search/reindex", srch.Reindex)
 
@@ -115,6 +152,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)
 			protected.Post("/sales/orders/{id}/customer", orders.AttachCustomer)
+			protected.Post("/sales/orders/{id}/prescription", orders.AttachPrescription)
+			protected.Post("/prescriptions", pharmH.CreatePrescription)
+			protected.Get("/prescriptions", pharmH.ListPrescriptions)
 			protected.Post("/sales/orders/{id}/discounts", orders.ApplyDiscount)
 			protected.Post("/sales/orders/{id}/promotions/apply", promo.ApplyPromotions)
 			protected.Post("/sales/orders/{id}/coupons", promo.ApplyCoupon)
@@ -125,12 +165,17 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 
 			protected.Get("/inventory", inv.GetStock)
 			protected.With(authn.RequirePermission(database, "inventory.adjust")).
+				Post("/inventory/reservations", orders.CreateReservation)
+			protected.With(authn.RequirePermission(database, "inventory.adjust")).
+				Delete("/inventory/reservations/{id}", orders.ReleaseManualReservation)
+			protected.With(authn.RequirePermission(database, "inventory.adjust")).
 				Post("/inventory/adjustments", inv.AdjustStock)
 			protected.With(authn.RequirePermission(database, "inventory.adjust")).
 				Patch("/inventory/reorder-point", inv.SetReorderPoint)
 			protected.Post("/inventory/reconciliation", inv.CreateReconciliation)
 			protected.Get("/inventory/reconciliation/history", inv.ReconciliationHistory)
 			protected.Get("/inventory/reconciliation/{id}", inv.GetReconciliation)
+			protected.Get("/inventory/expiring-batches", inv.GetExpiringBatches)
 
 			protected.With(authn.RequirePermission(database, "notifications.view")).
 				Get("/notifications", notify.ListNotifications)
@@ -140,6 +185,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/reports/eod-cash", rpt.EODCash)
 			protected.Get("/reports/consolidated-sales", rpt.ConsolidatedSales)
 			protected.Get("/reports/consolidated-stock", rpt.ConsolidatedStock)
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/reports/schedule-drug-sales", rpt.GetScheduleDrugSales)
 
 			protected.Post("/sync/push", syncH.Push)
 			protected.Get("/sync/pull", syncH.Pull)
@@ -239,12 +286,131 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/gst/gstr1", gstH.GSTR1)
 			protected.Get("/gst/gstr3b", gstH.GSTR3B)
 
+			protected.Get("/sales/orders/{id}/e-invoice", einv.GetEInvoice)
+			protected.With(authn.RequirePermission(database, "einvoice.manage")).
+				Post("/sales/orders/{id}/e-invoice", einv.GenerateEInvoice)
+			protected.With(authn.RequirePermission(database, "einvoice.manage")).
+				Post("/sales/orders/{id}/e-invoice/cancel", einv.CancelEInvoice)
+			protected.Get("/sales/orders/{id}/e-way-bill", einv.GetEWayBill)
+			protected.With(authn.RequirePermission(database, "einvoice.manage")).
+				Post("/sales/orders/{id}/e-way-bill", einv.GenerateEWayBill)
+			protected.With(authn.RequirePermission(database, "einvoice.manage")).
+				Post("/sales/orders/{id}/e-way-bill/cancel", einv.CancelEWayBill)
+
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/audit-logs", auditH.ListLogs)
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/audit-logs/verify", auditH.VerifyChain)
+
 			protected.Post("/pricing/calculate", prc.Calculate)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Patch("/pricing/variants/{id}", prc.UpdateVariantPricing)
 			protected.Post("/pricing/bulk-update/preview", prc.PreviewBulkUpdate)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Post("/pricing/bulk-update/apply", prc.ApplyBulkUpdate)
+
+			// Phase 7: wholesale price lists. Reads open to any authenticated
+			// user (a sales rep building a quote needs to see wholesale
+			// prices); writes gated behind pricing.manage, same tier as a
+			// single variant's price change above.
+			protected.Get("/pricing/price-lists", prc.ListPriceLists)
+			protected.Get("/pricing/price-lists/{id}", prc.GetPriceList)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/pricing/price-lists", prc.CreatePriceList)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Delete("/pricing/price-lists/{id}", prc.DeletePriceList)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Put("/pricing/price-lists/{id}/items/{variant_id}", prc.UpsertPriceListItem)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Delete("/pricing/price-lists/{id}/items/{variant_id}", prc.DeletePriceListItem)
+
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Get("/hr/roles", hrH.ListRoles)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/employees", hrH.CreateEmployee)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Get("/hr/employees", hrH.ListEmployees)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Get("/hr/employees/{id}", hrH.GetEmployee)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Patch("/hr/employees/{id}", hrH.UpdateEmployee)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/shifts", hrH.CreateShift)
+			protected.Get("/hr/shifts", hrH.ListShifts)
+			protected.Post("/hr/attendance/clock-in", hrH.ClockIn)
+			protected.Post("/hr/attendance/clock-out", hrH.ClockOut)
+			protected.Get("/hr/attendance", hrH.ListAttendance)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Patch("/hr/attendance/{id}", hrH.CorrectAttendance)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Get("/hr/statutory-config", hrH.GetStatutoryConfig)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Patch("/hr/statutory-config", hrH.UpdateStatutoryConfig)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Post("/hr/employees/{id}/salary-structure", hrH.SetSalaryStructure)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Get("/hr/employees/{id}/salary-structure", hrH.GetSalaryStructure)
+
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Post("/payroll/commission-rules", payrollH.CreateCommissionRule)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Get("/payroll/commission-rules", payrollH.ListCommissionRules)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Patch("/payroll/commission-rules/{id}", payrollH.UpdateCommissionRule)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Post("/payroll/commission/compute", payrollH.ComputeCommission)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Post("/payroll/runs", payrollH.CreateOrRecomputeRun)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Post("/payroll/runs/{id}/finalize", payrollH.FinalizeRun)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Get("/payroll/runs", payrollH.ListRuns)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Get("/payroll/runs/{id}", payrollH.GetRun)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Get("/payroll/runs/{id}/challan", payrollH.GetChallanSummary)
+			protected.Get("/payroll/employees/{id}/payslips", payrollH.GetMyPayslips)
+
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Get("/rbac/permissions", rbacH.ListPermissions)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Post("/rbac/roles", rbacH.CreateRole)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Get("/rbac/roles", rbacH.ListRoles)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Get("/rbac/roles/{id}", rbacH.GetRole)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Patch("/rbac/roles/{id}", rbacH.UpdateRole)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Delete("/rbac/roles/{id}", rbacH.DeleteRole)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Patch("/rbac/roles/{id}/permissions", rbacH.SetRolePermissions)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Post("/rbac/users/{id}/roles", rbacH.AssignUserRole)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Delete("/rbac/users/{id}/roles/{role_id}", rbacH.RevokeUserRole)
+
+			protected.Get("/ai/reorder-suggestions", aiH.GetReorderSuggestions)
+			protected.Get("/ai/recommendations/{variant_id}", aiH.GetRecommendations)
+			protected.Get("/ai/demand-forecast/{variant_id}", aiH.GetDemandForecast)
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/ai/anomalies", aiH.GetAnomalies)
+			protected.Post("/ai/ask", aiH.Ask)
+			protected.Post("/ai/copilot/chat", aiH.CopilotChat)
+
+			// Phase 7: B2B quotations. Open to any authenticated user, same
+			// tier as creating/editing a POS cart — a quote is a proposal,
+			// not yet a financial commitment; the real risk (stock leaving
+			// the building) only happens at ConvertQuotation, which reuses
+			// internal/sales' own cart pipeline and its existing checks.
+			protected.Post("/quotations", quoH.CreateQuotation)
+			protected.Get("/quotations", quoH.ListQuotations)
+			protected.Get("/quotations/{id}", quoH.GetQuotation)
+			protected.Post("/quotations/{id}/send", quoH.SendQuotation)
+			protected.Post("/quotations/{id}/accept", quoH.AcceptQuotation)
+			protected.Post("/quotations/{id}/reject", quoH.RejectQuotation)
+			protected.Post("/quotations/{id}/convert", quoH.ConvertQuotation)
+			protected.Delete("/quotations/{id}", quoH.DeleteQuotation)
 		})
 	})
 

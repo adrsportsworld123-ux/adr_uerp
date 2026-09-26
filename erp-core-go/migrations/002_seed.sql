@@ -70,6 +70,37 @@ INSERT INTO user_roles (user_id, role_id) VALUES
   ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'),
   ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'dddddddd-dddd-dddd-dddd-dddddddddddd');
 
+-- Real superadmin login, unlike every other row in this file — added
+-- 2026-09-24 after the account was created live via POST /hr/employees
+-- (Phase 5) and then lost when this dev environment's Postgres volume
+-- reset (confirmed 4 times now: the container's start timestamp jumps
+-- forward and only this file's seed rows survive, since
+-- docker-entrypoint-initdb.d replays every migration on a genuinely
+-- fresh volume — see docker-compose.yml's comment on the mount — but a
+-- runtime-created row like this admin account, made through the API
+-- rather than a migration, has nothing to replay it from). Putting it
+-- here means the NEXT reset recreates it automatically instead of
+-- needing another manual POST /hr/employees + role-assign cycle.
+-- password_hash below is a REAL bcrypt hash (via POST /dev/hash-password),
+-- not the placeholder every other row in this file uses — this is the
+-- one seed account meant to actually be logged into on a fresh
+-- environment without any extra setup step.
+--
+-- Deliberately only the base columns 001_schema.sql already defines
+-- (no designation/department/employment_type — those are
+-- migrations/023_hr_payroll.sql ALTER TABLE additions that don't exist
+-- yet at the point in a fresh-volume replay where this file runs,
+-- 002 before 023) — a real bug caught before it shipped: the first
+-- version of this INSERT referenced those columns and would have broken
+-- every fresh install, not just this account.
+INSERT INTO users (id, merchant_id, branch_id, name, email, employee_code, password_hash, pin_hash)
+VALUES ('00000000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+        NULL, 'Super Admin', 'admin@adrsw.com', 'SUPERADMIN',
+        '$2a$10$2ewqndn9FP2Xzo1wQG187O3Hny8JlC9ycvhZO8jgc6w4REQRdW.dW', NULL);
+
+INSERT INTO user_roles (user_id, role_id)
+VALUES ('00000000-0000-0000-0000-000000000001', 'dddddddd-dddd-dddd-dddd-dddddddddddd');
+
 INSERT INTO tax_slabs (id, merchant_id, name, cgst_rate, sgst_rate)
 VALUES ('66666666-6666-6666-6666-666666666666', '11111111-1111-1111-1111-111111111111', 'GST 18%', 9, 9);
 

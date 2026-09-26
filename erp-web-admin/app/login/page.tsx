@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -66,6 +67,9 @@ export default function LoginPage() {
             <Button type="submit" disabled={submitting}>
               {submitting ? "Signing in..." : "Sign in"}
             </Button>
+            <Link href="/forgot-password" className="text-sm text-zinc-500 text-center hover:underline">
+              Forgot password?
+            </Link>
           </form>
         </CardContent>
       </Card>

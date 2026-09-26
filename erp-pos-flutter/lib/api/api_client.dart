@@ -68,6 +68,80 @@ class ProductLookup {
       );
 }
 
+/// Mirrors internal/catalog/taxonomy.go's categoryResponse — a flat list
+/// with a self-referencing parent_id, the same materialized-hierarchy
+/// shape the backend already exposes. `null` parentId means a top-level
+/// category; anything else is a subcategory of that id. No separate
+/// "subcategory" type exists on the backend — this app derives the
+/// distinction purely from parentId, same as erp-web-admin would if it
+/// ever needed a category tree.
+class CatalogCategory {
+  final String categoryId;
+  final String? parentId;
+  final String name;
+  final String path;
+
+  CatalogCategory({required this.categoryId, this.parentId, required this.name, required this.path});
+
+  factory CatalogCategory.fromJson(Map<String, dynamic> json) => CatalogCategory(
+        categoryId: json['category_id'] as String,
+        parentId: json['parent_id'] as String?,
+        name: json['name'] as String,
+        path: json['path'] as String? ?? '',
+      );
+}
+
+/// One OpenSearch hit from GET /products/search — mirrors
+/// internal/search.Document exactly. Unlike every other money field in
+/// this file, selling_price/mrp arrive as JSON numbers here, not strings:
+/// they come straight from OpenSearch's own document, never through a
+/// Postgres NUMERIC::text cast, so there's no "string all the way down"
+/// convention to preserve on this one path. toProductLookup() re-stringifies
+/// them (fixed to 2dp) purely to reuse AppSession.addToCart's existing
+/// ProductLookup-shaped call site — not a claim that a double ever holds
+/// this value for arithmetic.
+class ProductSearchResult {
+  final String variantId;
+  final String productId;
+  final String name;
+  final String sku;
+  final String? categoryId;
+  final String? categoryName;
+  final double sellingPrice;
+  final double mrp;
+
+  ProductSearchResult({
+    required this.variantId,
+    required this.productId,
+    required this.name,
+    required this.sku,
+    this.categoryId,
+    this.categoryName,
+    required this.sellingPrice,
+    required this.mrp,
+  });
+
+  factory ProductSearchResult.fromJson(Map<String, dynamic> json) => ProductSearchResult(
+        variantId: json['variant_id'] as String,
+        productId: json['product_id'] as String,
+        name: json['name'] as String,
+        sku: json['sku'] as String,
+        categoryId: json['category_id'] as String?,
+        categoryName: json['category_name'] as String?,
+        sellingPrice: (json['selling_price'] as num).toDouble(),
+        mrp: (json['mrp'] as num).toDouble(),
+      );
+
+  ProductLookup toProductLookup() => ProductLookup(
+        productId: productId,
+        productName: name,
+        variantId: variantId,
+        sku: sku,
+        sellingPrice: sellingPrice.toStringAsFixed(2),
+        mrp: mrp.toStringAsFixed(2),
+      );
+}
+
 /// One sales_order_lines row, joined server-side with product_variants for
 /// display fields (name/sku) — see internal/sales/handlers.go's
 /// loadOrderLines. Money/quantity fields are strings for the same reason as
@@ -375,6 +449,32 @@ class ApiClient {
       headers: _authHeaders,
     );
     return ProductLookup.fromJson(_decode(resp));
+  }
+
+  Future<List<CatalogCategory>> listCategories() async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/categories'), headers: _authHeaders);
+    final body = _decode(resp);
+    return (body['categories'] as List<dynamic>)
+        .map((e) => CatalogCategory.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Name/category/subcategory browse for the cart's "look it up, don't
+  /// just scan it" path (erp-core-go's internal/search — OpenSearch-backed,
+  /// fuzzy/typo-tolerant on name/sku/category/brand). An empty `query`
+  /// with a `categoryId` set is a valid, common call shape — it means
+  /// "browse this whole category," not "search for nothing" (the backend
+  /// falls back to match-all when query is blank).
+  Future<List<ProductSearchResult>> searchProducts({String query = '', String? categoryId, int limit = 50}) async {
+    final params = <String, String>{'limit': '$limit'};
+    if (query.isNotEmpty) params['q'] = query;
+    if (categoryId != null && categoryId.isNotEmpty) params['category_id'] = categoryId;
+    final uri = Uri.parse('$baseUrl/api/v1/products/search').replace(queryParameters: params);
+    final resp = await _http.get(uri, headers: _authHeaders);
+    final body = _decode(resp);
+    return (body['results'] as List<dynamic>)
+        .map((e) => ProductSearchResult.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<OrderSummary> createOrder({

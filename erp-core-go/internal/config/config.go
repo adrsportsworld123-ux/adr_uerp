@@ -47,6 +47,32 @@ type Config struct {
 	// this environment) — this only decides which label gets recorded and
 	// which channel a future real integration would need to implement.
 	NotificationsPhoneChannel string
+
+	// LLMProvider selects which internal/ai/llm.Client backs NLP-BI
+	// (POST /ai/ask) and the AI Copilot (POST /ai/copilot/chat): "ollama"
+	// or "anthropic". Empty means "not configured" — the same
+	// graceful-disable pattern as OpenSearchURL above, so those two
+	// endpoints answer a clean 503 LLM_UNAVAILABLE instead of the service
+	// failing to start. The user explicitly chose to support both behind
+	// one interface (see internal/ai/llm) rather than commit to a single
+	// vendor, after initially picking Anthropic alone and then asking for
+	// Ollama (self-hosted, no data leaves this stack) to be considered too.
+	LLMProvider string
+
+	// AnthropicAPIKey/AnthropicModel configure internal/ai/llm.AnthropicClient.
+	// Never hardcoded and never asked for in chat — read from the
+	// environment only. Empty key means the anthropic provider can't be
+	// selected; checked at client-construction time, not at startup, so a
+	// deployment that only uses "ollama" never needs this set.
+	AnthropicAPIKey string
+	AnthropicModel  string
+
+	// OllamaBaseURL/OllamaModel configure internal/ai/llm.OllamaClient — a
+	// self-hosted model server (see docker-compose.yml's "ollama" service).
+	// Unlike Anthropic, nothing here is a secret: it's a plain HTTP
+	// endpoint on the same docker network the api service already runs on.
+	OllamaBaseURL string
+	OllamaModel   string
 }
 
 func Load() Config {
@@ -67,6 +93,12 @@ func Load() Config {
 		SMTPFrom:     getenv("SMTP_FROM", "no-reply@example.com"),
 
 		NotificationsPhoneChannel: getenv("NOTIFICATIONS_PHONE_CHANNEL", "sms"),
+
+		LLMProvider:     getenv("LLM_PROVIDER", ""),
+		AnthropicAPIKey: getenv("ANTHROPIC_API_KEY", ""),
+		AnthropicModel:  getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+		OllamaBaseURL:   getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+		OllamaModel:     getenv("OLLAMA_MODEL", "llama3.2:3b"),
 	}
 }
 

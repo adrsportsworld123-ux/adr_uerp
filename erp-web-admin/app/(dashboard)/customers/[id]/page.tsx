@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { CustomerCredit, CustomerDetail, LoyaltyBalance } from "@/lib/types";
+import { CustomerCredit, CustomerDetail, LoyaltyBalance, PriceListSummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -166,6 +166,10 @@ export default function CustomerDetailPage() {
       </Card>
 
       {credit && <CreditSection customerId={id} credit={credit} onChanged={loadCredit} />}
+
+      {customer && (
+        <PriceListSection key={customer.price_list_id} customerId={id} customer={customer} onChanged={load} />
+      )}
 
       {loyalty && (
         <Card>
@@ -479,6 +483,70 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
             )}
           </TableBody>
         </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Phase 7: wholesale price list assignment. "" (no price list) means this
+// customer keeps buying at plain retail selling_price — see erp-core-go's
+// internal/pricing.ResolvePrice. Price lists themselves are managed on
+// the Pricing > Price Lists screen; this is just the assignment.
+// ---------------------------------------------------------------------
+
+function PriceListSection({ customerId, customer, onChanged }: { customerId: string; customer: CustomerDetail; onChanged: () => void }) {
+  const [lists, setLists] = useState<PriceListSummary[]>([]);
+  const [selected, setSelected] = useState(customer.price_list_id);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{ price_lists: PriceListSummary[] }>("/api/v1/pricing/price-lists")
+      .then((d) => setLists(d.price_lists))
+      .catch(() => setLists([]));
+  }, []);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await api.patch(`/api/v1/customers/${customerId}`, { price_list_id: selected });
+      toast.success("Price list assignment saved");
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not save price list assignment");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const listNames: Record<string, string> = { "": "Retail (no price list)", ...Object.fromEntries(lists.map((l) => [l.price_list_id, l.name])) };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Wholesale price list</CardTitle>
+      </CardHeader>
+      <CardContent className="flex items-end gap-2">
+        <div className="flex flex-col gap-2 w-64">
+          <Label>Assigned price list</Label>
+          <Select value={selected} onValueChange={(v) => setSelected(v ?? "")} items={listNames}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Retail (no price list)</SelectItem>
+              {lists.map((l) => (
+                <SelectItem key={l.price_list_id} value={l.price_list_id}>
+                  {l.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button size="sm" disabled={busy || selected === customer.price_list_id} onClick={save}>
+          Assign
+        </Button>
       </CardContent>
     </Card>
   );

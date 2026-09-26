@@ -13,6 +13,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/inventory"
 )
 
 var errGRNNotEditable = errors.New("grn is not editable")
@@ -31,14 +32,16 @@ type grnResponse struct {
 }
 
 type grnLineResp struct {
-	LineID         string `json:"line_id"`
-	VariantID      string `json:"variant_id"`
-	SKU            string `json:"sku"`
-	ProductName    string `json:"product_name"`
-	Quantity       string `json:"quantity"`
-	UnitCost       string `json:"unit_cost"`
-	LandedUnitCost string `json:"landed_unit_cost"`
-	LineTotal      string `json:"line_total"`
+	LineID         string  `json:"line_id"`
+	VariantID      string  `json:"variant_id"`
+	SKU            string  `json:"sku"`
+	ProductName    string  `json:"product_name"`
+	Quantity       string  `json:"quantity"`
+	UnitCost       string  `json:"unit_cost"`
+	LandedUnitCost string  `json:"landed_unit_cost"`
+	LineTotal      string  `json:"line_total"`
+	BatchNo        string  `json:"batch_no"`
+	ExpiryDate     *string `json:"expiry_date"`
 }
 
 // ---------------------------------------------------------------------
@@ -97,10 +100,14 @@ func (h *Handler) CreateGRN(w http.ResponseWriter, r *http.Request) {
 // POST /purchase/grn/{id}/lines
 // ---------------------------------------------------------------------
 
+var errBatchRequired = errors.New("batch_no is required for a batch-tracked variant")
+
 type addGRNLineRequest struct {
-	VariantID string  `json:"variant_id"`
-	Quantity  float64 `json:"quantity"`
-	UnitCost  float64 `json:"unit_cost"`
+	VariantID  string  `json:"variant_id"`
+	Quantity   float64 `json:"quantity"`
+	UnitCost   float64 `json:"unit_cost"`
+	BatchNo    string  `json:"batch_no"`    // Phase 8 (Grocery/FMCG) — required if the variant has track_batch = true
+	ExpiryDate string  `json:"expiry_date"` // "YYYY-MM-DD", optional even for a batch-tracked variant (not everything expires)
 }
 
 func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
@@ -131,11 +138,19 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 			return errGRNNotEditable
 		}
 
+		var trackBatch bool
+		if err := tx.QueryRow(ctx, `SELECT track_batch FROM product_variants WHERE id = $1`, req.VariantID).Scan(&trackBatch); err != nil {
+			return err
+		}
+		if trackBatch && req.BatchNo == "" {
+			return errBatchRequired
+		}
+
 		lineTotal := req.Quantity * req.UnitCost
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO goods_receipt_lines (id, grn_id, variant_id, quantity, unit_cost, line_total)
-			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
-			grnID, req.VariantID, req.Quantity, req.UnitCost, lineTotal); err != nil {
+			INSERT INTO goods_receipt_lines (id, grn_id, variant_id, quantity, unit_cost, line_total, batch_no, expiry_date)
+			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULLIF($6,''), NULLIF($7,'')::date)`,
+			grnID, req.VariantID, req.Quantity, req.UnitCost, lineTotal, req.BatchNo, req.ExpiryDate); err != nil {
 			return err
 		}
 
@@ -145,6 +160,8 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errGRNNotEditable):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this GRN is no longer a draft")
+	case errors.Is(err, errBatchRequired):
+		httpx.Error(w, http.StatusBadRequest, "BATCH_REQUIRED", errBatchRequired.Error())
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "GRN not found")
 	case err != nil:
@@ -258,7 +275,9 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 			return errGRNNotEditable
 		}
 
-		rows, err := tx.Query(ctx, `SELECT id, variant_id, quantity, unit_cost, line_total FROM goods_receipt_lines WHERE grn_id = $1`, grnID)
+		rows, err := tx.Query(ctx, `
+			SELECT id, variant_id, quantity, unit_cost, line_total, COALESCE(batch_no,''), expiry_date::text
+			FROM goods_receipt_lines WHERE grn_id = $1`, grnID)
 		if err != nil {
 			return err
 		}
@@ -266,11 +285,13 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 			id, variantID      string
 			quantity, unitCost float64
 			lineTotal          float64
+			batchNo            string
+			expiryDate         *string
 		}
 		var lines []line
 		for rows.Next() {
 			var l line
-			if err := rows.Scan(&l.id, &l.variantID, &l.quantity, &l.unitCost, &l.lineTotal); err != nil {
+			if err := rows.Scan(&l.id, &l.variantID, &l.quantity, &l.unitCost, &l.lineTotal, &l.batchNo, &l.expiryDate); err != nil {
 				rows.Close()
 				return err
 			}
@@ -298,6 +319,17 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 				UPDATE goods_receipt_lines SET landed_unit_cost = $1 WHERE id = $2`,
 				landedUnitCost, l.id); err != nil {
 				return err
+			}
+
+			// Phase 8 (Grocery/FMCG): a real batch/lot, with its own landed
+			// cost and expiry, comes into existence here — the actual point
+			// of origin this vertical's tracking needs, not invented
+			// separately. No-op (empty batchNo) for a variant that was
+			// never asked to supply one at AddGRNLine time.
+			if l.batchNo != "" {
+				if err := inventory.ReceiveBatch(ctx, tx, branchID, l.variantID, l.batchNo, l.expiryDate, landedUnitCost, l.quantity); err != nil {
+					return err
+				}
 			}
 
 			// Weighted Average Cost across the whole merchant's stock of
@@ -396,7 +428,8 @@ func loadGRN(ctx context.Context, tx pgx.Tx, grnID string, resp *grnResponse) er
 func loadGRNLines(ctx context.Context, tx pgx.Tx, grnID string) ([]grnLineResp, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT gl.id, gl.variant_id, pv.sku, p.name, gl.quantity::text, gl.unit_cost::text,
-		       COALESCE(gl.landed_unit_cost::text, ''), gl.line_total::text
+		       COALESCE(gl.landed_unit_cost::text, ''), gl.line_total::text,
+		       COALESCE(gl.batch_no,''), gl.expiry_date::text
 		FROM goods_receipt_lines gl
 		JOIN product_variants pv ON pv.id = gl.variant_id
 		JOIN products p ON p.id = pv.product_id
@@ -410,7 +443,8 @@ func loadGRNLines(ctx context.Context, tx pgx.Tx, grnID string) ([]grnLineResp, 
 	lines := []grnLineResp{}
 	for rows.Next() {
 		var l grnLineResp
-		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity, &l.UnitCost, &l.LandedUnitCost, &l.LineTotal); err != nil {
+		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity, &l.UnitCost, &l.LandedUnitCost, &l.LineTotal,
+			&l.BatchNo, &l.ExpiryDate); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

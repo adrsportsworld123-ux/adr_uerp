@@ -79,6 +79,9 @@ type customerResponse struct {
 	CreditLimit      string  `json:"credit_limit"`
 	PaymentTerms     string  `json:"payment_terms"`
 	CreditHold       bool    `json:"credit_hold"`
+	// PriceListID is "" when unassigned — that customer buys at plain
+	// product_variants.selling_price (see internal/pricing.ResolvePrice).
+	PriceListID string `json:"price_list_id"`
 }
 
 func scanCustomerRow(row pgx.Row) (customerResponse, error) {
@@ -87,7 +90,7 @@ func scanCustomerRow(row pgx.Row) (customerResponse, error) {
 		&c.CustomerID, &c.Name, &c.Phone, &c.Email, &c.CustomerType,
 		&c.Address, &c.DateOfBirth, &c.Anniversary, &c.CompanyName, &c.GSTIN, &c.Status,
 		&c.TotalSpend, &c.TransactionCount, &c.LastPurchaseAt, &c.Segment,
-		&c.CreditLimit, &c.PaymentTerms, &c.CreditHold,
+		&c.CreditLimit, &c.PaymentTerms, &c.CreditHold, &c.PriceListID,
 	)
 	return c, err
 }
@@ -96,7 +99,7 @@ const customerColumns = `
 	id, COALESCE(name,''), COALESCE(phone,''), COALESCE(email,''), customer_type,
 	COALESCE(address,''), date_of_birth::text, anniversary::text, COALESCE(company_name,''), COALESCE(gstin,''), status,
 	total_spend::text, transaction_count, last_purchase_at::text, segment,
-	credit_limit::text, payment_terms, credit_hold
+	credit_limit::text, payment_terms, credit_hold, COALESCE(price_list_id::text,'')
 `
 
 // ---------------------------------------------------------------------
@@ -118,6 +121,7 @@ type createCustomerRequest struct {
 	Anniversary  string `json:"anniversary"`   // "YYYY-MM-DD", optional
 	CompanyName  string `json:"company_name"`
 	GSTIN        string `json:"gstin"`
+	PriceListID  string `json:"price_list_id"` // optional — a wholesale customer can be assigned one at creation instead of a separate PATCH
 }
 
 func (h *Handler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
@@ -150,10 +154,10 @@ func (h *Handler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 	var customerID string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-			INSERT INTO customers (id, merchant_id, name, phone, email, customer_type, address, date_of_birth, anniversary, company_name, gstin)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, NULLIF($6,'')::date, NULLIF($7,'')::date, $8, $9)
+			INSERT INTO customers (id, merchant_id, name, phone, email, customer_type, address, date_of_birth, anniversary, company_name, gstin, price_list_id)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, NULLIF($6,'')::date, NULLIF($7,'')::date, $8, $9, NULLIF($10,'')::uuid)
 			RETURNING id`,
-			req.Name, req.Phone, req.Email, req.CustomerType, req.Address, req.DateOfBirth, req.Anniversary, req.CompanyName, req.GSTIN,
+			req.Name, req.Phone, req.Email, req.CustomerType, req.Address, req.DateOfBirth, req.Anniversary, req.CompanyName, req.GSTIN, req.PriceListID,
 		).Scan(&customerID)
 	})
 	if err != nil {
@@ -313,6 +317,12 @@ type updateCustomerRequest struct {
 	CompanyName  *string `json:"company_name"`
 	GSTIN        *string `json:"gstin"`
 	Status       *string `json:"status"`
+	// PriceListID: omitted (nil) leaves the current assignment untouched;
+	// "" explicitly clears it back to plain retail pricing; any other
+	// value assigns that price_list_id (a bad/foreign one fails on the
+	// column's own FK constraint, surfaced as a generic 500 same as any
+	// other FK violation in this codebase today).
+	PriceListID *string `json:"price_list_id"`
 }
 
 func (h *Handler) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
@@ -362,10 +372,13 @@ func (h *Handler) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 				company_name = COALESCE($8, company_name),
 				gstin = COALESCE($9, gstin),
 				status = COALESCE($10, status),
+				price_list_id = CASE WHEN $12::text IS NULL THEN price_list_id
+				                      WHEN $12 = '' THEN NULL
+				                      ELSE $12::uuid END,
 				updated_at = now()
 			WHERE id = $11`,
 			req.Name, req.Phone, req.Email, req.CustomerType, req.Address,
-			req.DateOfBirth, req.Anniversary, req.CompanyName, req.GSTIN, req.Status, customerID)
+			req.DateOfBirth, req.Anniversary, req.CompanyName, req.GSTIN, req.Status, customerID, req.PriceListID)
 		return err
 	})
 

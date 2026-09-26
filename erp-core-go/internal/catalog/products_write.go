@@ -26,6 +26,8 @@ type createVariantInput struct {
 	MRP            float64        `json:"mrp"`
 	SellingPrice   float64        `json:"selling_price"`
 	TrackSerial    bool           `json:"track_serial"`
+	TrackBatch     bool           `json:"track_batch"` // Phase 8 (Grocery/FMCG) — opts this variant into batch/lot + expiry tracking
+	PLUCode        string         `json:"plu_code"`    // Phase 8 (Grocery/FMCG) — weighing-scale barcode short code, optional
 }
 
 type createProductRequest struct {
@@ -35,7 +37,8 @@ type createProductRequest struct {
 	CategoryID       string               `json:"category_id"`
 	BrandID          string               `json:"brand_id"`
 	TaxSlabID        string               `json:"tax_slab_id"`
-	ProductType      string               `json:"product_type"` // "simple" | "variant" | "composite"; defaults to "simple"
+	CollectionID     string               `json:"collection_id"` // Phase 8 (Apparel) — optional, "" = no collection
+	ProductType      string               `json:"product_type"`  // "simple" | "variant" | "composite"; defaults to "simple"
 	Variants         []createVariantInput `json:"variants"`
 }
 
@@ -55,6 +58,7 @@ type productResponse struct {
 	CategoryID       *string           `json:"category_id"`
 	BrandID          *string           `json:"brand_id"`
 	TaxSlabID        *string           `json:"tax_slab_id"`
+	CollectionID     *string           `json:"collection_id"`
 	ProductType      string            `json:"product_type"`
 	Status           string            `json:"status"`
 	Variants         []variantResponse `json:"variants"`
@@ -100,15 +104,16 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 	categoryID := nullableUUID(req.CategoryID)
 	brandID := nullableUUID(req.BrandID)
 	taxSlabID := nullableUUID(req.TaxSlabID)
+	collectionID := nullableUUID(req.CollectionID)
 
 	var resp productResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var productID string
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, name, short_description, hsn_code, product_type)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7)
+			INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, collection_id, name, short_description, hsn_code, product_type)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8)
 			RETURNING id`,
-			categoryID, brandID, taxSlabID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType,
+			categoryID, brandID, taxSlabID, collectionID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType,
 		).Scan(&productID); err != nil {
 			return err
 		}
@@ -119,16 +124,23 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 			if combo == nil {
 				combo = map[string]any{}
 			}
+			// Phase 8: validates attribute_combo against whatever attribute
+			// set this product's category declares (attributes.go) — a
+			// no-op for a category with no declared set, or no category at
+			// all, so this is purely additive over Phase 1's behavior.
+			if err := validateAttributeCombo(ctx, tx, categoryID, combo); err != nil {
+				return err
+			}
 			comboJSON, err := json.Marshal(combo)
 			if err != nil {
 				return err
 			}
 			var variantID string
 			if err := tx.QueryRow(ctx, `
-				INSERT INTO product_variants (id, merchant_id, product_id, sku, attribute_combo, cost_price, mrp, selling_price, track_serial)
-				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7)
+				INSERT INTO product_variants (id, merchant_id, product_id, sku, attribute_combo, cost_price, mrp, selling_price, track_serial, track_batch, plu_code)
+				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9,''))
 				RETURNING id`,
-				productID, v.SKU, comboJSON, v.CostPrice, v.MRP, v.SellingPrice, v.TrackSerial,
+				productID, v.SKU, comboJSON, v.CostPrice, v.MRP, v.SellingPrice, v.TrackSerial, v.TrackBatch, v.PLUCode,
 			).Scan(&variantID); err != nil {
 				return err
 			}
@@ -161,7 +173,7 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 
 		resp = productResponse{
 			ProductID: productID, Name: req.Name, ShortDescription: req.ShortDescription, HSNCode: req.HSNCode,
-			CategoryID: categoryID, BrandID: brandID, TaxSlabID: taxSlabID,
+			CategoryID: categoryID, BrandID: brandID, TaxSlabID: taxSlabID, CollectionID: collectionID,
 			ProductType: req.ProductType, Status: "active", Variants: variants,
 		}
 		return nil
@@ -170,6 +182,10 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case isUniqueViolation(err):
 		httpx.Error(w, http.StatusConflict, "SKU_EXISTS", "one of these SKUs is already in use")
+	case errors.Is(err, errAttributeRequired):
+		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_REQUIRED", err.Error())
+	case errors.Is(err, errAttributeInvalidValue):
+		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_INVALID_VALUE", err.Error())
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create product")
 	default:
@@ -184,6 +200,7 @@ type updateProductRequest struct {
 	CategoryID       *string `json:"category_id"`
 	BrandID          *string `json:"brand_id"`
 	TaxSlabID        *string `json:"tax_slab_id"`
+	CollectionID     *string `json:"collection_id"`
 	Status           *string `json:"status"` // "active" | "inactive" | "discontinued"
 }
 
@@ -220,9 +237,10 @@ func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 				brand_id = COALESCE($5::uuid, brand_id),
 				tax_slab_id = COALESCE($6::uuid, tax_slab_id),
 				status = COALESCE($7, status),
+				collection_id = COALESCE($9::uuid, collection_id),
 				updated_at = now()
 			WHERE id = $8`,
-			req.Name, req.ShortDescription, req.HSNCode, req.CategoryID, req.BrandID, req.TaxSlabID, req.Status, productID,
+			req.Name, req.ShortDescription, req.HSNCode, req.CategoryID, req.BrandID, req.TaxSlabID, req.Status, productID, req.CollectionID,
 		)
 		if err != nil {
 			return err

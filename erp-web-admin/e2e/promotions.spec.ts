@@ -94,7 +94,10 @@ test("promotion/coupon CRUD, permission gate, and a customer's loyalty ledger", 
     await page.fill("#promoName", `Denied ${unique}`);
     await page.fill("#valuePercent", "5");
     await page.click('button[type="submit"]:has-text("Create promotion")');
-    await expect(page.getByText(/permission|forbidden/i)).toBeVisible();
+    // .text-red-600 scopes to the actual API error, not the sidebar's
+    // "Roles & Permissions" nav link, which a bare text search also
+    // matches now that that screen exists.
+    await expect(page.locator(".text-red-600", { hasText: /permission|forbidden/i })).toBeVisible();
   });
 
   let customerId = "";

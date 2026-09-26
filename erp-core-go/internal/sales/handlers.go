@@ -22,6 +22,8 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/pricing"
 )
 
 // LoyaltyEarner lets Checkout award loyalty points on a finalized sale
@@ -48,6 +50,7 @@ type orderResponse struct {
 	OrderID       string      `json:"order_id"`
 	OrderNumber   string      `json:"order_number"`
 	Status        string      `json:"status"`
+	Channel       string      `json:"channel"` // "pos" | "online" — see migrations/026_wholesale_b2b.sql
 	Subtotal      string      `json:"subtotal"`
 	DiscountTotal string      `json:"discount_total"`
 	TaxTotal      string      `json:"tax_total"`
@@ -107,24 +110,13 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		row := tx.QueryRow(ctx, `
-			INSERT INTO sales_orders (id, merchant_id, branch_id, pos_terminal_id, cashier_id, order_number, status, idempotency_key)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, 'cart', $5)
-			ON CONFLICT (merchant_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
-			RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text`,
-			req.BranchID, req.POSTerminalID, claims.UserID, orderNumber, req.IdempotencyKey)
-		if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
-			&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
-			return err
-		}
-		// A replayed idempotency_key returns the pre-existing cart, which may
-		// already have lines from the original call — not necessarily empty.
-		lines, err := loadOrderLines(ctx, tx, resp.OrderID)
-		if err != nil {
-			return err
-		}
-		resp.Lines = lines
-		return nil
+		var err error
+		// "" customerID: a POS cart starts anonymous, same as always —
+		// AttachCustomer (customer.go) is the existing separate step for
+		// attaching one, unlike a quotation conversion which already knows
+		// its customer at creation time (see CreateCart's doc comment).
+		resp, err = CreateCart(ctx, tx, req.BranchID, req.POSTerminalID, claims.UserID, "", req.IdempotencyKey, orderNumber)
+		return err
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create order")
@@ -132,6 +124,56 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusCreated, resp)
+}
+
+// CreateCart is CreateOrder's core, exported so internal/quotations'
+// ConvertQuotation can open a real cart through the exact same pipeline a
+// walk-in POS sale uses — no separate "B2B order" insert path, so there's
+// nowhere for a quote-converted order to diverge from a POS one.
+// customerID is "" for an anonymous POS cart (the common case); a
+// quotation conversion passes its own customer_id so the resulting
+// order — and every AddLineToCart call against it — resolves wholesale
+// pricing correctly from the very first line, not just after a later
+// AttachCustomer call (see the real bug this fixed: a converted quote's
+// first live test produced retail-priced lines because the cart had no
+// customer yet when AddLineToCart ran).
+func CreateCart(ctx context.Context, tx pgx.Tx, branchID, posTerminalID, cashierID, customerID, idempotencyKey, orderNumber string) (orderResponse, error) {
+	var resp orderResponse
+	// Channel (pos|online) is stamped from the terminal used to create
+	// this order, never a client-supplied field — the same "online"
+	// virtual terminal every branch has (migrations/026_wholesale_b2b.sql)
+	// is how a future storefront's orders would be tagged, without
+	// trusting the caller to self-report which channel it is.
+	var channel string
+	if err := tx.QueryRow(ctx, `SELECT channel FROM pos_terminals WHERE id = $1`, posTerminalID).Scan(&channel); err != nil {
+		return resp, err
+	}
+
+	row := tx.QueryRow(ctx, `
+		INSERT INTO sales_orders (id, merchant_id, branch_id, pos_terminal_id, cashier_id, order_number, status, idempotency_key, channel, customer_id)
+		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, 'cart', $5, $6, NULLIF($7,'')::uuid)
+		ON CONFLICT (merchant_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+		RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text`,
+		branchID, posTerminalID, cashierID, orderNumber, idempotencyKey, channel, customerID)
+	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
+		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+		return resp, err
+	}
+	// A replayed idempotency_key returns the pre-existing cart, which may
+	// already have lines from the original call — not necessarily empty.
+	// Its channel is whatever it was stamped with originally, not
+	// necessarily this call's `channel` local (a replay could in theory
+	// name a different terminal) — reload it from the row itself rather
+	// than assume.
+	if err := tx.QueryRow(ctx, `SELECT channel FROM sales_orders WHERE id = $1`, resp.OrderID).Scan(&resp.Channel); err != nil {
+		return resp, err
+	}
+	lines, err := loadOrderLines(ctx, tx, resp.OrderID)
+	if err != nil {
+		return resp, err
+	}
+	resp.Lines = lines
+	return resp, nil
 }
 
 // ---------------------------------------------------------------------
@@ -165,65 +207,16 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var branchID, status string
-		if err := tx.QueryRow(ctx, `SELECT branch_id, status FROM sales_orders WHERE id = $1`, orderID).
-			Scan(&branchID, &status); err != nil {
-			return err
-		}
-		if status != "cart" {
-			return errOrderNotEditable
-		}
-
-		var sellingPrice, cgst, sgst, igst, cess float64
-		if err := tx.QueryRow(ctx, `
-			SELECT pv.selling_price, COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0)
-			FROM product_variants pv
-			JOIN products p ON p.id = pv.product_id
-			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-			WHERE pv.id = $1`, req.VariantID,
-		).Scan(&sellingPrice, &cgst, &sgst, &igst, &cess); err != nil {
-			return err
-		}
-
-		if err := reserveStock(ctx, tx, branchID, req.VariantID, req.Quantity); err != nil {
-			return err
-		}
-
-		// NOTE on float64 for money: this computes in float64 and relies on
-		// the destination columns being NUMERIC(14,2), which round cleanly on
-		// insert regardless of any sub-paisa binary-float noise upstream —
-		// verified against representative price/quantity/tax-rate combinations
-		// to show no meaningful drift. That's an acceptable trade-off for
-		// Phase 1's INR retail price range, but don't carry this pattern into
-		// high-value B2B invoicing, multi-currency conversion, or anywhere
-		// compounding roundoff across many lines would matter — switch to
-		// integer-paise (or a decimal library) arithmetic before then.
-		lineSubtotal := sellingPrice * req.Quantity
-		taxRatePct := cgst + sgst + igst + cess
-		taxAmount := lineSubtotal * taxRatePct / 100
-		lineTotal := lineSubtotal + taxAmount
-
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO stock_reservations (id, merchant_id, branch_id, variant_id, sales_order_id, quantity, status, expires_at)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, 'active', now() + interval '15 minutes')`,
-			branchID, req.VariantID, orderID, req.Quantity); err != nil {
-			return err
-		}
-
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total)
-			VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6)`,
-			orderID, req.VariantID, req.Quantity, sellingPrice, taxAmount, lineTotal); err != nil {
-			return err
-		}
-
-		return recalcOrderTotals(ctx, tx, orderID, &resp)
+		var err error
+		resp, err = AddLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity)
+		return err
 	})
 
 	switch {
 	case errors.Is(err, ErrInsufficientStock):
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "requested quantity exceeds available stock")
+	case errors.Is(err, inventory.ErrExpiredOrUntrackedStock):
+		httpx.Error(w, http.StatusConflict, "STOCK_EXPIRED", "no unexpired, batch-tracked stock is available to fulfill this quantity")
 	case errors.Is(err, errOrderNotEditable):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order is no longer a cart")
 	case errors.Is(err, pgx.ErrNoRows):
@@ -233,6 +226,115 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.JSON(w, http.StatusOK, resp)
 	}
+}
+
+// AddLineToCart is AddLine's core, exported for the same reason
+// CreateCart is — internal/quotations' ConvertQuotation calls this
+// directly so a converted quote's lines go through the exact same
+// stock-reservation/pricing path a POS add-line does.
+func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, quantity float64) (orderResponse, error) {
+	var resp orderResponse
+	var branchID, status, customerID string
+	if err := tx.QueryRow(ctx, `SELECT branch_id, status, COALESCE(customer_id::text,'') FROM sales_orders WHERE id = $1`, orderID).
+		Scan(&branchID, &status, &customerID); err != nil {
+		return resp, err
+	}
+	if status != "cart" {
+		return resp, errOrderNotEditable
+	}
+
+	var cgst, sgst, igst, cess float64
+	var trackBatch bool
+	var minShelfLifeDays int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
+		       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), pv.track_batch,
+		       COALESCE(c.min_shelf_life_days, 0)
+		FROM product_variants pv
+		JOIN products p ON p.id = pv.product_id
+		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+		LEFT JOIN categories c ON c.id = p.category_id
+		WHERE pv.id = $1`, variantID,
+	).Scan(&cgst, &sgst, &igst, &cess, &trackBatch, &minShelfLifeDays); err != nil {
+		return resp, err
+	}
+
+	// Resolved AFTER the tax-rate query above has already confirmed
+	// variantID is real (a bad variant_id fails there with
+	// pgx.ErrNoRows -> 404, before this ever runs). Wholesale pricing
+	// (Phase 7, internal/pricing.ResolvePrice) applies automatically
+	// whenever this cart has a customer with a price_list_id assigned —
+	// the same cart/add-line path a walk-in retail sale already uses,
+	// satisfying "no double-entry between retail and B2B" by construction
+	// rather than a separate B2B order type.
+	sellingPriceStr, err := pricing.ResolvePrice(ctx, tx, customerID, variantID)
+	if err != nil {
+		return resp, err
+	}
+	sellingPrice, err := strconv.ParseFloat(sellingPriceStr, 64)
+	if err != nil {
+		return resp, err
+	}
+
+	if err := reserveStock(ctx, tx, branchID, variantID, quantity); err != nil {
+		return resp, err
+	}
+
+	// Phase 8 (Grocery/FMCG): a batch-tracked variant additionally needs
+	// real, non-expired batch stock to cover this quantity — reserveStock
+	// above only confirmed stock_levels' total is enough, not that any of
+	// it is unexpired and batch-attributed. Release the reservation just
+	// taken if batch allocation can't cover it, so a refused line never
+	// leaves a dangling reservation behind.
+	var batchAllocations []inventory.BatchAllocation
+	if trackBatch {
+		var err error
+		batchAllocations, err = inventory.AllocateBatchesFIFO(ctx, tx, branchID, variantID, quantity, minShelfLifeDays)
+		if err != nil {
+			if releaseErr := releaseReservation(ctx, tx, branchID, variantID, quantity); releaseErr != nil {
+				return resp, releaseErr
+			}
+			return resp, err
+		}
+	}
+
+	// NOTE on float64 for money: this computes in float64 and relies on
+	// the destination columns being NUMERIC(14,2), which round cleanly on
+	// insert regardless of any sub-paisa binary-float noise upstream —
+	// verified against representative price/quantity/tax-rate combinations
+	// to show no meaningful drift. That's an acceptable trade-off for
+	// Phase 1's INR retail price range, but don't carry this pattern into
+	// high-value B2B invoicing, multi-currency conversion, or anywhere
+	// compounding roundoff across many lines would matter — switch to
+	// integer-paise (or a decimal library) arithmetic before then.
+	lineSubtotal := sellingPrice * quantity
+	taxRatePct := cgst + sgst + igst + cess
+	taxAmount := lineSubtotal * taxRatePct / 100
+	lineTotal := lineSubtotal + taxAmount
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO stock_reservations (id, merchant_id, branch_id, variant_id, sales_order_id, quantity, status, expires_at)
+		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, 'active', now() + interval '15 minutes')`,
+		branchID, variantID, orderID, quantity); err != nil {
+		return resp, err
+	}
+
+	var lineID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6)
+		RETURNING id`,
+		orderID, variantID, quantity, sellingPrice, taxAmount, lineTotal).Scan(&lineID); err != nil {
+		return resp, err
+	}
+	if trackBatch {
+		if err := inventory.RecordLineBatchAllocations(ctx, tx, lineID, batchAllocations); err != nil {
+			return resp, err
+		}
+	}
+
+	err = recalcOrderTotals(ctx, tx, orderID, &resp)
+	return resp, err
 }
 
 // ---------------------------------------------------------------------
@@ -294,6 +396,15 @@ func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Phase 8 (Grocery/FMCG): give back whatever batch quantity this
+		// line had drawn (a no-op, zero rows, for a non-batch-tracked
+		// variant) — must run before the line itself is deleted, since
+		// sales_order_line_batches' ON DELETE CASCADE would otherwise drop
+		// the very rows this reads to know what to restore.
+		if err := inventory.ReleaseLineBatchAllocations(ctx, tx, lineID); err != nil {
+			return err
+		}
+
 		if _, err := tx.Exec(ctx, `DELETE FROM sales_order_lines WHERE id = $1 AND sales_order_id = $2`, lineID, orderID); err != nil {
 			return err
 		}
@@ -342,12 +453,12 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var branchID, status, grandTotal string
-		var customerID *string
+		var customerID, prescriptionID *string
 		var subtotal, discountTotal, taxTotal float64
 		if err := tx.QueryRow(ctx, `
-			SELECT branch_id, status, grand_total::text, subtotal, discount_total, tax_total, customer_id
+			SELECT branch_id, status, grand_total::text, subtotal, discount_total, tax_total, customer_id, prescription_id::text
 			FROM sales_orders WHERE id = $1`, orderID,
-		).Scan(&branchID, &status, &grandTotal, &subtotal, &discountTotal, &taxTotal, &customerID); err != nil {
+		).Scan(&branchID, &status, &grandTotal, &subtotal, &discountTotal, &taxTotal, &customerID, &prescriptionID); err != nil {
 			return err
 		}
 
@@ -375,6 +486,27 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		}
 		if lineCount == 0 {
 			return errEmptyCart
+		}
+
+		// Phase 8 (Pharmacy): "Drug Schedule" is Phase 8's own attribute-set
+		// mechanism (internal/catalog/attributes.go), not new schema — a
+		// disclosed convention, not a general checkout-policy engine: any
+		// line whose variant declares a "Drug Schedule" value other than
+		// "OTC" requires this order to have a real prescription attached
+		// (AttachPrescription) before it can be finalized.
+		if prescriptionID == nil {
+			var scheduledCount int
+			if err := tx.QueryRow(ctx, `
+				SELECT COUNT(*) FROM sales_order_lines sol
+				JOIN product_variants pv ON pv.id = sol.variant_id
+				WHERE sol.sales_order_id = $1
+				  AND COALESCE(pv.attribute_combo->>'Drug Schedule', 'OTC') != 'OTC'`, orderID,
+			).Scan(&scheduledCount); err != nil {
+				return err
+			}
+			if scheduledCount > 0 {
+				return errPrescriptionRequired
+			}
 		}
 
 		var paidTotal, creditPortion float64
@@ -529,6 +661,8 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "CREDIT_HOLD", "this customer is on credit hold")
 	case errors.Is(err, errCreditLimitExceeded):
 		httpx.Error(w, http.StatusConflict, "CREDIT_LIMIT_EXCEEDED", "this sale would put the customer over their credit limit")
+	case errors.Is(err, errPrescriptionRequired):
+		httpx.Error(w, http.StatusConflict, "PRESCRIPTION_REQUIRED", errPrescriptionRequired.Error())
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
 	case err != nil:
@@ -566,9 +700,9 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 
 func loadOrder(ctx context.Context, tx pgx.Tx, orderID string, resp *orderResponse) error {
 	row := tx.QueryRow(ctx, `
-		SELECT id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text
+		SELECT id, order_number, status, channel, subtotal::text, discount_total::text, tax_total::text, grand_total::text
 		FROM sales_orders WHERE id = $1`, orderID)
-	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
+	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status, &resp.Channel,
 		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
 		return err
 	}
@@ -596,8 +730,8 @@ func recalcOrderTotals(ctx context.Context, tx pgx.Tx, orderID string, resp *ord
 		  discount_total = (SELECT COALESCE(SUM(discount_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
 		  grand_total = (SELECT COALESCE(SUM(unit_price*quantity - discount_amount + tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1)
 		WHERE id = $1
-		RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text`, orderID)
-	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
+		RETURNING id, order_number, status, channel, subtotal::text, discount_total::text, tax_total::text, grand_total::text`, orderID)
+	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status, &resp.Channel,
 		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
 		return err
 	}
@@ -639,12 +773,13 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 }
 
 var (
-	errOrderNotEditable    = errors.New("order is not editable")
-	errPaymentMismatch     = errors.New("payment total does not match grand total")
-	errEmptyCart           = errors.New("cannot check out an order with no lines")
-	errNoCustomerForCredit = errors.New("a credit payment requires a customer already attached to the order")
-	errCreditHold          = errors.New("customer is on credit hold")
-	errCreditLimitExceeded = errors.New("sale would exceed customer's credit limit")
+	errOrderNotEditable     = errors.New("order is not editable")
+	errPaymentMismatch      = errors.New("payment total does not match grand total")
+	errEmptyCart            = errors.New("cannot check out an order with no lines")
+	errNoCustomerForCredit  = errors.New("a credit payment requires a customer already attached to the order")
+	errCreditHold           = errors.New("customer is on credit hold")
+	errCreditLimitExceeded  = errors.New("sale would exceed customer's credit limit")
+	errPrescriptionRequired = errors.New("one or more lines require a prescription to be attached before checkout")
 )
 
 // paymentTermsDays maps customers.payment_terms to a due-date offset —

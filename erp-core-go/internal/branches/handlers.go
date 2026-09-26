@@ -60,12 +60,24 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 
 	var resp branchResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO branches (id, merchant_id, name, code, timezone, gstin)
 			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4)
 			RETURNING id, name, code, timezone, COALESCE(gstin,''), status`,
 			req.Name, req.Code, timezone, req.GSTIN,
-		).Scan(&resp.BranchID, &resp.Name, &resp.Code, &resp.Timezone, &resp.GSTIN, &resp.Status)
+		).Scan(&resp.BranchID, &resp.Name, &resp.Code, &resp.Timezone, &resp.GSTIN, &resp.Status); err != nil {
+			return err
+		}
+		// Every branch needs a real pos_terminal_id an "online" channel
+		// order can reference (sales_orders.pos_terminal_id is NOT NULL,
+		// same as any in-person order) — see
+		// migrations/026_wholesale_b2b.sql's header for why this is a
+		// virtual terminal rather than relaxing that constraint.
+		_, err := tx.Exec(ctx, `
+			INSERT INTO pos_terminals (id, merchant_id, branch_id, name, channel, status)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, 'Online Storefront', 'online', 'active')`,
+			resp.BranchID)
+		return err
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create branch — code may already be in use")

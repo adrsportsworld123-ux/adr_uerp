@@ -166,4 +166,47 @@ void main() {
     // Checkout's credit-limit check keys off of.
     expect(customerId, isNotEmpty);
   });
+
+  test('product search: name search, category browse, and add-to-cart via a search hit', () async {
+    if (!serverUp) return;
+
+    // Name search (fuzzy, via internal/search) should find the seed
+    // product even with a deliberate typo — same tolerance
+    // erp-web-admin's own search.spec.ts already proves server-side;
+    // this just confirms this app's ApiClient decodes the response shape
+    // correctly.
+    final byName = await api.searchProducts(query: 'crikcet bat');
+    expect(byName, isNotEmpty);
+    final hit = byName.firstWhere((r) => r.sku == 'SG-BAT-SH');
+    expect(hit.name, 'SG Cricket Bat');
+    expect(hit.sellingPrice, greaterThan(0));
+
+    // Category browse: an empty query with a real category_id should
+    // still return results (the backend falls back to match-all), and
+    // every result should actually belong to that category.
+    final categories = await api.listCategories();
+    expect(categories, isNotEmpty);
+    if (hit.categoryId != null) {
+      final byCategory = await api.searchProducts(categoryId: hit.categoryId);
+      expect(byCategory, isNotEmpty);
+      expect(byCategory.every((r) => r.categoryId == hit.categoryId), isTrue);
+    }
+
+    // A search hit's toProductLookup() must be a drop-in for the exact
+    // cart-mutating call site scanBarcode's result already uses — proven
+    // by actually adding it to a real cart, not just shape-checking the
+    // conversion.
+    const branchId = '22222222-2222-2222-2222-222222222222';
+    const terminalId = '33333333-3333-3333-3333-333333333333';
+    final idempotencyKey = 'flutter-live-test-search-${DateTime.now().microsecondsSinceEpoch}';
+    var order = await api.createOrder(branchId: branchId, posTerminalId: terminalId, idempotencyKey: idempotencyKey);
+    final lookup = hit.toProductLookup();
+    order = await api.addLine(orderId: order.orderId, variantId: lookup.variantId, quantity: 1);
+    expect(order.lines, hasLength(1));
+    expect(order.lines.first.sku, 'SG-BAT-SH');
+
+    // Clean up: this reservation would otherwise sit until the
+    // reservation-expiry sweeper releases it 15 minutes later.
+    await api.deleteLine(orderId: order.orderId, lineId: order.lines.first.lineId);
+  });
 }

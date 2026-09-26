@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/api_client.dart';
 import '../state/session.dart';
 import 'printer_settings_screen.dart';
+import 'product_search_screen.dart';
 import 'receipt_screen.dart';
 
 /// The core POS screen: scan → cart → checkout, in one continuous flow —
@@ -243,6 +244,11 @@ class _PosScreenState extends State<PosScreen> {
               session.attachedCustomerName ?? 'Customer',
               style: const TextStyle(color: Colors.white),
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Find a product (name/category)',
+            onPressed: session.offlineMode ? null : () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen())),
           ),
           IconButton(
             icon: const Icon(Icons.settings_ethernet),
@@ -510,12 +516,22 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
             TextField(
               controller: _walkInNameController,
               decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder(), isDense: true),
+              // Bug fix: this dialog is a real State (not a StatefulBuilder),
+              // so without onChanged->setState here, typing a name/phone
+              // never rebuilds it — the "Add walk-in" button's disabled
+              // check below reads these controllers' .text but was only
+              // ever evaluated once, at the dialog's first build, when both
+              // fields were still empty. That's the "Add Walk-in button not
+              // working" symptom reported live: the button visually exists
+              // but silently stays disabled no matter what's typed.
+              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _walkInPhoneController,
               keyboardType: TextInputType.phone,
               decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder(), isDense: true),
+              onChanged: (_) => setState(() {}),
             ),
           ],
         ),
@@ -597,6 +613,15 @@ class _DiscountDialogState extends State<_DiscountDialog> {
               TextField(
                 controller: _reasonController,
                 decoration: const InputDecoration(labelText: 'Reason', border: OutlineInputBorder()),
+                // Bug fix: without this, typing a reason never rebuilds the
+                // dialog, so the Apply button's disabled check below (which
+                // reads _reasonController.text) can stay stuck on a stale
+                // "empty" evaluation from before the reason was typed —
+                // the exact "Apply button not working" symptom reported
+                // live: percent typed first (rebuilds via its own
+                // onChanged) reads reason as empty and disables Apply;
+                // typing the reason afterward never re-enables it.
+                onChanged: (_) => setState(() {}),
               ),
               if (_needsApproval) ...[
                 const SizedBox(height: 8),

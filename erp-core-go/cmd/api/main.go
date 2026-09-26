@@ -11,14 +11,17 @@ import (
 	"syscall"
 	"time"
 
+	"erp-core-go/internal/ai/llm"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/config"
 	"erp-core-go/internal/customers"
 	"erp-core-go/internal/db"
+	"erp-core-go/internal/einvoice"
 	"erp-core-go/internal/httpserver"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/notifications"
 	"erp-core-go/internal/purchase"
+	"erp-core-go/internal/quotations"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
 )
@@ -68,14 +71,43 @@ func main() {
 	})
 	notify := &notifications.Handler{DB: database, Provider: notifyProvider, PhoneChannel: cfg.NotificationsPhoneChannel}
 
+	// einvoice.NewStubGSPClient is the only GSPClient today — real IRN/
+	// e-way-bill generation needs a licensed GSP (GST Suvidha Provider)
+	// vendor decision the operator hasn't made yet (see
+	// migrations/022_einvoice.sql's header comment). Swapping in a real
+	// vendor later is a new GSPClient implementation constructed here,
+	// nothing else in the stack changes.
+	einv := &einvoice.Handler{DB: database, GSP: einvoice.NewStubGSPClient(), Provider: einvoice.ProviderStub}
+
+	// llm.NewFromConfig returns ErrNotConfigured when LLM_PROVIDER is
+	// unset — logged and left nil, not a startup failure, matching
+	// OpenSearchURL's graceful-disable pattern above: NLP-BI and the AI
+	// Copilot (internal/ai's Ask/CopilotChat) just answer 503
+	// LLM_UNAVAILABLE until a provider is configured.
+	llmClient, err := llm.NewFromConfig(llm.Config{
+		Provider:        cfg.LLMProvider,
+		AnthropicAPIKey: cfg.AnthropicAPIKey,
+		AnthropicModel:  cfg.AnthropicModel,
+		OllamaBaseURL:   cfg.OllamaBaseURL,
+		OllamaModel:     cfg.OllamaModel,
+	})
+	if err != nil {
+		if err == llm.ErrNotConfigured {
+			log.Printf("llm: no provider configured — NLP-BI and the AI Copilot will answer 503 LLM_UNAVAILABLE")
+		} else {
+			log.Printf("llm: %v — NLP-BI and the AI Copilot will answer 503 LLM_UNAVAILABLE", err)
+		}
+	}
+
 	go sales.RunExpirySweeper(ctx, database, time.Minute)
+	go quotations.RunExpirySweeper(ctx, database, time.Hour)
 	go inventory.RunLowStockSweeper(ctx, database, notify, 15*time.Minute)
 	go purchase.RunPaymentReminderSweeper(ctx, database, notify, time.Hour)
 	go customers.RunReceivableReminderSweeper(ctx, database, notify, time.Hour)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify),
+		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify, einv, llmClient),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

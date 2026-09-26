@@ -22,8 +22,12 @@ export default function PricingPage() {
   const [error, setError] = useState<string | null>(null);
 
   function load() {
+    // limit=200 (the backend's own cap) rather than the default 50 —
+    // found live: as the catalog grows (many e2e specs each creating
+    // real products), a brand-new product can sort alphabetically past
+    // the default page-1 window and never appear here at all.
     api
-      .get<{ products: Product[] }>("/api/v1/products")
+      .get<{ products: Product[] }>("/api/v1/products?limit=200")
       .then((d) => setProducts(d.products))
       .catch((e) => setError(e.message));
   }

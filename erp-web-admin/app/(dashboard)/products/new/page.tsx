@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Category, CatalogBrand, TaxSlab, CreatedProduct } from "@/lib/types";
+import { Category, CatalogBrand, TaxSlab, CreatedProduct, CategoryAttribute, CollectionSummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,9 +39,26 @@ export default function NewProductPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<CatalogBrand[]>([]);
   const [taxSlabs, setTaxSlabs] = useState<TaxSlab[]>([]);
+  const [collections, setCollections] = useState<CollectionSummary[]>([]);
+  const [collectionId, setCollectionId] = useState("");
+
+  // Phase 8: Vertical Expansion — Grocery/FMCG. trackBatch opts this
+  // variant into batch/lot + expiry tracking (received via GRN, sold
+  // FIFO); pluCode is only meaningful alongside a weighing-scale barcode.
+  const [trackBatch, setTrackBatch] = useState(false);
+  const [pluCode, setPluCode] = useState("");
+
+  // Phase 8: Vertical Expansion — the category's own declared attribute
+  // set (Product Attributes screen), rendered as real form fields here
+  // instead of a free-form JSON blob. Empty set (no category, or a
+  // category with nothing configured) means no fields render at all —
+  // identical to this page's behavior before Phase 8 existed.
+  const [categoryAttributes, setCategoryAttributes] = useState<CategoryAttribute[]>([]);
+  const [attributeValues, setAttributeValues] = useState<Record<string, string>>({});
 
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newBrandName, setNewBrandName] = useState("");
+  const [newCollectionName, setNewCollectionName] = useState("");
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,8 +67,28 @@ export default function NewProductPage() {
     api.get<{ categories: Category[] }>("/api/v1/categories").then((d) => setCategories(d.categories)).catch(() => {});
     api.get<{ brands: CatalogBrand[] }>("/api/v1/brands").then((d) => setBrands(d.brands)).catch(() => {});
     api.get<{ tax_slabs: TaxSlab[] }>("/api/v1/tax-slabs").then((d) => setTaxSlabs(d.tax_slabs)).catch(() => {});
+    api.get<{ collections: CollectionSummary[] }>("/api/v1/collections").then((d) => setCollections(d.collections)).catch(() => {});
   }
   useEffect(loadLookups, []);
+
+  useEffect(() => {
+    // No setState directly in the effect body (even for the "no category"
+    // case) — every branch goes through a promise resolution instead, so
+    // this stays a "synchronize with an external fetch" effect rather than
+    // the synchronous-setState-in-effect anti-pattern.
+    const load = categoryId
+      ? api.get<{ attributes: CategoryAttribute[] }>(`/api/v1/categories/${categoryId}/attributes`).then((d) => d.attributes)
+      : Promise.resolve<CategoryAttribute[]>([]);
+    load
+      .then((attrs) => {
+        setCategoryAttributes(attrs);
+        setAttributeValues({});
+      })
+      .catch(() => {
+        setCategoryAttributes([]);
+        setAttributeValues({});
+      });
+  }, [categoryId]);
 
   async function addCategory() {
     if (!newCategoryName.trim()) return;
@@ -77,6 +114,18 @@ export default function NewProductPage() {
     }
   }
 
+  async function addCollection() {
+    if (!newCollectionName.trim()) return;
+    try {
+      const c = await api.post<CollectionSummary>("/api/v1/collections", { name: newCollectionName.trim() });
+      setCollections((prev) => [...prev, c]);
+      setCollectionId(c.collection_id);
+      setNewCollectionName("");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not create collection");
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -89,12 +138,16 @@ export default function NewProductPage() {
         category_id: categoryId || undefined,
         brand_id: brandId || undefined,
         tax_slab_id: taxSlabId || undefined,
+        collection_id: collectionId || undefined,
         variants: [
           {
             sku,
             cost_price: Number(costPrice) || 0,
             mrp: Number(mrp),
             selling_price: Number(sellingPrice),
+            track_batch: trackBatch,
+            plu_code: pluCode || undefined,
+            attribute_combo: Object.fromEntries(Object.entries(attributeValues).filter(([, v]) => v !== "")),
           },
         ],
       });
@@ -160,6 +213,44 @@ export default function NewProductPage() {
               </Button>
             </div>
 
+            {categoryAttributes.length > 0 && (
+              <div className="flex flex-col gap-3 border rounded p-3">
+                <p className="text-xs text-zinc-500">
+                  This category has a configured attribute set (Product Attributes screen) — fill in what applies.
+                </p>
+                {categoryAttributes.map((a) => (
+                  <div key={a.attribute_id} className="flex flex-col gap-2">
+                    <Label>
+                      {a.name}
+                      {a.unit ? ` (${a.unit})` : ""}
+                      {a.required ? " *" : ""}
+                    </Label>
+                    {a.input_type === "select" ? (
+                      <Select
+                        value={attributeValues[a.name] ?? ""}
+                        onValueChange={(v) => setAttributeValues((prev) => ({ ...prev, [a.name]: v ?? "" }))}
+                        items={Object.fromEntries(a.values.map((v) => [v.value, v.value]))}
+                      >
+                        <SelectTrigger><SelectValue placeholder={a.required ? "Required" : "Optional"} /></SelectTrigger>
+                        <SelectContent>
+                          {a.values.map((v) => (
+                            <SelectItem key={v.value_id} value={v.value}>{v.value}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        type={a.input_type === "number" ? "number" : "text"}
+                        required={a.required}
+                        value={attributeValues[a.name] ?? ""}
+                        onChange={(e) => setAttributeValues((prev) => ({ ...prev, [a.name]: e.target.value }))}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="flex items-end gap-2">
               <div className="flex flex-col gap-2 flex-1">
                 <Label>Brand (optional)</Label>
@@ -205,6 +296,33 @@ export default function NewProductPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="flex items-end gap-2">
+              <div className="flex flex-col gap-2 flex-1">
+                <Label>Collection (optional — Apparel)</Label>
+                <Select value={collectionId} onValueChange={(v) => setCollectionId(v ?? "")} items={Object.fromEntries(collections.map((c) => [c.collection_id, c.name]))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="None" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {collections.map((c) => (
+                      <SelectItem key={c.collection_id} value={c.collection_id}>
+                        {c.name}{c.season ? ` (${c.season})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Input
+                placeholder="New collection"
+                value={newCollectionName}
+                onChange={(e) => setNewCollectionName(e.target.value)}
+                className="w-40"
+              />
+              <Button type="button" variant="outline" onClick={addCollection} disabled={!newCollectionName.trim()}>
+                Add
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -241,6 +359,18 @@ export default function NewProductPage() {
                   value={sellingPrice}
                   onChange={(e) => setSellingPrice(e.target.value)}
                 />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border rounded p-3">
+              <p className="text-xs text-zinc-500">Phase 8: Vertical Expansion — Grocery/FMCG</p>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={trackBatch} onChange={(e) => setTrackBatch(e.target.checked)} />
+                Track batch/lot number and expiry (perishables)
+              </label>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="pluCode">Weighing-scale PLU code (optional — for items sold by weight)</Label>
+                <Input id="pluCode" value={pluCode} onChange={(e) => setPluCode(e.target.value)} placeholder="e.g. 12345" maxLength={5} />
               </div>
             </div>
 

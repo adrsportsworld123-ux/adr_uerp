@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/db"
+	"erp-core-go/internal/inventory"
 )
 
 // RunExpirySweeper releases stock reservations whose 15-minute hold
@@ -68,19 +69,19 @@ func sweepOnce(ctx context.Context, database *db.DB) {
 func sweepTenant(ctx context.Context, database *db.DB, merchantID string) error {
 	return database.WithTenant(ctx, merchantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, branch_id, variant_id, quantity FROM stock_reservations
+			SELECT id, branch_id, variant_id, quantity, sales_order_id FROM stock_reservations
 			WHERE status = 'active' AND expires_at < now()`)
 		if err != nil {
 			return err
 		}
 		type expired struct {
-			id, branchID, variantID string
-			quantity                float64
+			id, branchID, variantID, salesOrderID string
+			quantity                              float64
 		}
 		var expiredReservations []expired
 		for rows.Next() {
 			var e expired
-			if err := rows.Scan(&e.id, &e.branchID, &e.variantID, &e.quantity); err != nil {
+			if err := rows.Scan(&e.id, &e.branchID, &e.variantID, &e.quantity, &e.salesOrderID); err != nil {
 				rows.Close()
 				return err
 			}
@@ -94,6 +95,29 @@ func sweepTenant(ctx context.Context, database *db.DB, merchantID string) error 
 		for _, e := range expiredReservations {
 			if err := releaseReservation(ctx, tx, e.branchID, e.variantID, e.quantity); err != nil {
 				return err
+			}
+			// Phase 8 (Grocery/FMCG): a reservation that expires here (the
+			// cashier walked away, never explicitly removed the line) needs
+			// the same batch-quantity restoration DeleteLine already does —
+			// otherwise an expired-away cart permanently "leaks" batch
+			// stock that stock_levels itself correctly got back. Same
+			// (order, variant, quantity) matching DeleteLine's own reverse
+			// lookup uses, since stock_reservations has no direct FK to the
+			// line it was created for; a no-op if no matching line exists
+			// (already checked out or deleted through a different path).
+			var lineID string
+			err := tx.QueryRow(ctx, `
+				SELECT id FROM sales_order_lines
+				WHERE sales_order_id = $1 AND variant_id = $2 AND quantity = $3
+				ORDER BY created_at DESC LIMIT 1`, e.salesOrderID, e.variantID, e.quantity,
+			).Scan(&lineID)
+			if err != nil && err != pgx.ErrNoRows {
+				return err
+			}
+			if err == nil {
+				if err := inventory.ReleaseLineBatchAllocations(ctx, tx, lineID); err != nil {
+					return err
+				}
 			}
 			if _, err := tx.Exec(ctx, `UPDATE stock_reservations SET status = 'expired' WHERE id = $1`, e.id); err != nil {
 				return err

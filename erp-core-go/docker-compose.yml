@@ -11,7 +11,20 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d   # auto-runs 001_schema.sql + 002_seed.sql on first boot
+      - ./migrations:/docker-entrypoint-initdb.d   # on a genuinely fresh volume only, Postgres's entrypoint runs
+                                                    # EVERY .sql file here in filename order — all of them, not just
+                                                    # 001_schema.sql/002_seed.sql as this comment used to (wrongly)
+                                                    # claim. Confirmed live (2026-09-24): the pgdata volume was reset
+                                                    # at some point outside this session's control, and the next
+                                                    # `docker compose up` silently replayed migrations 001 through
+                                                    # the latest, restoring schema + every migration's own seed/
+                                                    # backfill INSERTs correctly — but not any runtime data created
+                                                    # via the API afterward (real orders, payroll runs, e-invoices,
+                                                    # extra employees), which a fresh volume has no way to recreate.
+                                                    # If dev data vanishes unexpectedly, check `docker inspect
+                                                    # erp-core-go-postgres-1 --format '{{.State.StartedAt}}'` against
+                                                    # when you'd expect the volume to have persisted — a suspiciously
+                                                    # recent start time is the tell.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app_user -d erp"]
       interval: 5s
@@ -57,6 +70,24 @@ services:
       timeout: 5s
       retries: 30
 
+  # Self-hosted LLM backend for internal/ai/llm.OllamaClient — powers
+  # POST /ai/ask (NLP-BI) and POST /ai/copilot/chat when LLM_PROVIDER=ollama
+  # below. No API key, no data leaves this docker network. The image ships
+  # with no model preloaded — after `docker compose up`, pull one once:
+  #   docker compose exec ollama ollama pull llama3.2:3b
+  # (or whatever OLLAMA_MODEL is set to). The api service does NOT
+  # depends_on this with a health condition: an LLM backend that isn't
+  # ready yet is a per-request 502/503 on the two AI endpoints that need
+  # it, never a reason the rest of the API should fail to start — same
+  # posture as OPENSEARCH_URL being optional, just without a startup
+  # backfill step to wait for.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
   api:
     build: .
     depends_on:
@@ -82,9 +113,21 @@ services:
       # set it to "false") in any compose/deployment file that isn't
       # running solely on your own machine.
       DEV_AUTH_TOOLS_ENABLED: "true"
+      # "ollama" here (self-hosted, free, local) by default in this dev
+      # compose file, per the user's explicit choice — set to "anthropic"
+      # plus ANTHROPIC_API_KEY for real production-grade answers instead;
+      # see internal/ai/llm's package doc for the interface both sit
+      # behind. Leave LLM_PROVIDER unset entirely to disable both AI
+      # endpoints (they answer 503 LLM_UNAVAILABLE) rather than fail to
+      # start the whole service.
+      LLM_PROVIDER: "ollama"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "llama3.2:3b"
+      # ANTHROPIC_API_KEY: ""   # set this (and LLM_PROVIDER: "anthropic") to switch backends
     ports:
       - "8080:8080"
 
 volumes:
   pgdata:
   opensearch-data:
+  ollama-data:

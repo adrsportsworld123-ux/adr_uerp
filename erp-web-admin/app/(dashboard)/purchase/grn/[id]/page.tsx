@@ -29,6 +29,11 @@ export default function GRNDetailPage() {
   const [resolved, setResolved] = useState<BarcodeLookup | null>(null);
   const [quantity, setQuantity] = useState("");
   const [unitCost, setUnitCost] = useState("");
+  // Phase 8 (Grocery/FMCG) — optional; the backend itself refuses with
+  // BATCH_REQUIRED if the scanned variant has track_batch=true and this
+  // is left blank, so the form doesn't need to know that flag up front.
+  const [batchNo, setBatchNo] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -64,11 +69,15 @@ export default function GRNDetailPage() {
         variant_id: resolved.variant_id,
         quantity: Number(quantity),
         unit_cost: Number(unitCost),
+        batch_no: batchNo || undefined,
+        expiry_date: expiryDate || undefined,
       });
       setBarcode("");
       setResolved(null);
       setQuantity("");
       setUnitCost("");
+      setBatchNo("");
+      setExpiryDate("");
       load();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not add line");
@@ -125,6 +134,7 @@ export default function GRNDetailPage() {
                   <TableHead>Unit Cost</TableHead>
                   <TableHead>Landed Unit Cost</TableHead>
                   <TableHead>Line Total</TableHead>
+                  <TableHead>Batch / Expiry</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -137,6 +147,7 @@ export default function GRNDetailPage() {
                     <TableCell>₹{l.unit_cost}</TableCell>
                     <TableCell>{l.landed_unit_cost ? `₹${l.landed_unit_cost}` : "—"}</TableCell>
                     <TableCell>₹{l.line_total}</TableCell>
+                    <TableCell>{l.batch_no ? `${l.batch_no}${l.expiry_date ? ` (exp. ${l.expiry_date})` : ""}` : "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -195,6 +206,16 @@ export default function GRNDetailPage() {
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="unitCost">Unit cost (₹) *</Label>
                     <Input id="unitCost" type="number" min="0" step="0.01" required value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="batchNo">Batch/lot no. (only if this product tracks batches)</Label>
+                    <Input id="batchNo" value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="e.g. LOT-2026-09-A" />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="expiryDate">Expiry date (optional)</Label>
+                    <Input id="expiryDate" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
                   </div>
                 </div>
                 <Button type="submit" disabled={busy}>

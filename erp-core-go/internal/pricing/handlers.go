@@ -1,8 +1,13 @@
 // Package pricing implements Phase 2's Pricing Management sub-area
-// (phased_roadmap.md; pos_frd_complete.md §11), narrowed to what the
-// roadmap actually asks for this phase — see migrations/009_pricing.sql's
-// header comment for what's deliberately deferred (wholesale/multi-tier
-// pricing, price lists, dynamic/scheduled pricing).
+// (phased_roadmap.md; pos_frd_complete.md §11) — cost/MRP/selling price
+// management, margin calculation, and bulk updates against the one
+// selling_price product_variants has — plus, since Phase 7
+// (price_lists.go, resolve.go), wholesale price lists: named per-variant
+// override price sets a customer can be assigned to. Still deliberately
+// deferred (see migrations/009_pricing.sql's header, and
+// migrations/026_wholesale_b2b.sql's for the Phase 7 follow-up on this
+// same note): scheduled future-dated price changes and dynamic/
+// time-based pricing.
 package pricing
 
 import (

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/accounting"
+	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
@@ -163,11 +164,14 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 		}
 
 		if negativeStock {
-			beforeJSON, _ := json.Marshal(map[string]any{"note": "sync push"})
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO audit_logs (merchant_id, entity_type, entity_id, action, performed_by, before_value, reason)
-				VALUES (current_setting('app.tenant_id')::uuid, 'stock_levels', $1, 'update', $2, $3, 'NEGATIVE_STOCK: oversold during offline sync')`,
-				orderID, claims.UserID, beforeJSON); err != nil {
+			if err := audit.Log(ctx, tx, audit.Entry{
+				EntityType:  "stock_levels",
+				EntityID:    orderID,
+				Action:      "update",
+				PerformedBy: claims.UserID,
+				Before:      map[string]any{"note": "sync push"},
+				Reason:      "NEGATIVE_STOCK: oversold during offline sync",
+			}); err != nil {
 				return err
 			}
 		}

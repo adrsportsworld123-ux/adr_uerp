@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"erp-core-go/internal/accounting"
+	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 )
@@ -207,12 +208,15 @@ func (h *Handler) CreateReconciliation(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
-			beforeJSON, _ := json.Marshal(map[string]float64{"on_hand": l.systemQty})
-			afterJSON, _ := json.Marshal(map[string]float64{"on_hand": l.systemQty + l.variance})
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO audit_logs (merchant_id, entity_type, entity_id, action, performed_by, before_value, after_value, reason)
-				VALUES (current_setting('app.tenant_id')::uuid, 'stock_levels', $1, 'update', $2, $3, $4, $5)`,
-				l.variantID, claims.UserID, beforeJSON, afterJSON, req.Reason); err != nil {
+			if err := audit.Log(ctx, tx, audit.Entry{
+				EntityType:  "stock_levels",
+				EntityID:    l.variantID,
+				Action:      "update",
+				PerformedBy: claims.UserID,
+				Before:      map[string]float64{"on_hand": l.systemQty},
+				After:       map[string]float64{"on_hand": l.systemQty + l.variance},
+				Reason:      req.Reason,
+			}); err != nil {
 				return err
 			}
 
