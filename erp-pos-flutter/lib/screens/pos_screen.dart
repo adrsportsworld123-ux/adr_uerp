@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
 import '../state/session.dart';
+import 'held_orders_screen.dart';
 import 'printer_settings_screen.dart';
 import 'product_search_screen.dart';
 import 'receipt_screen.dart';
@@ -185,6 +186,66 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
+  Future<void> _holdOrder() async {
+    final session = context.read<AppSession>();
+    final noteController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Hold this cart'),
+        content: TextField(
+          controller: noteController,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Note (optional)', border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Hold')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _busy = true);
+    final note = noteController.text.trim();
+    final ok = await session.holdCurrentOrder(note: note.isEmpty ? null : note);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? 'Cart held — recall it from Held Orders' : (session.lastError ?? 'Could not hold cart'))),
+    );
+  }
+
+  Future<void> _openHeldOrders() async {
+    final unavailable = await Navigator.of(context).push<List<UnavailableLine>>(
+      MaterialPageRoute(builder: (_) => const HeldOrdersScreen()),
+    );
+    if (unavailable == null) return; // cancelled, nothing recalled
+    if (!mounted) return;
+    if (unavailable.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cart recalled')));
+    } else {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Cart recalled — some items need attention'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Stock could not be held for:'),
+              const SizedBox(height: 8),
+              for (final line in unavailable) Text('• ${line.reason}'),
+              const SizedBox(height: 8),
+              const Text('Remove or adjust these lines before checkout.'),
+            ],
+          ),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
+    }
+  }
+
   Future<void> _checkout() async {
     final session = context.read<AppSession>();
     final order = session.currentOrder;
@@ -251,6 +312,11 @@ class _PosScreenState extends State<PosScreen> {
             onPressed: session.offlineMode ? null : () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen())),
           ),
           IconButton(
+            icon: const Icon(Icons.pause_circle_outline),
+            tooltip: 'Held orders',
+            onPressed: _busy || session.offlineMode ? null : _openHeldOrders,
+          ),
+          IconButton(
             icon: const Icon(Icons.settings_ethernet),
             tooltip: 'Printer settings',
             onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrinterSettingsScreen())),
@@ -313,6 +379,7 @@ class _PosScreenState extends State<PosScreen> {
                 children: [
                   OutlinedButton(onPressed: _busy ? null : _applyDiscount, child: const Text('Discount')),
                   OutlinedButton(onPressed: _busy ? null : _applyPromotions, child: const Text('Apply promotions')),
+                  OutlinedButton(onPressed: _busy ? null : _holdOrder, child: const Text('Hold')),
                   if (session.attachedCustomerId != null && (session.loyaltyAvailablePoints ?? 0) > 0)
                     OutlinedButton(onPressed: _busy ? null : _redeemLoyalty, child: const Text('Redeem points')),
                   SizedBox(

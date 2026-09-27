@@ -13,6 +13,12 @@ export interface ProductVariant {
   selling_price: string;
   margin_pct: number | null;
   markup_pct: number | null;
+  // This variant's two possible barcodes (internal/catalog/barcode_assign.go) —
+  // the real one already on the product (manually entered) and this
+  // system's own auto-generated one. Either or both can be null; they
+  // coexist rather than one replacing the other.
+  original_barcode: string | null;
+  generated_barcode: string | null;
 }
 
 export interface Product {
@@ -714,6 +720,12 @@ export interface NewProductVariantInput {
   track_batch?: boolean;
   plu_code?: string;
   attribute_combo?: Record<string, string>;
+  // The real barcode already on the product (manually entered — EAN-13
+  // auto-detected/validated server-side for a 13-digit code) and/or this
+  // system's own auto-generated one — both can be set together and
+  // coexist, see internal/catalog/barcode_assign.go's assignBarcodeInTx.
+  original_barcode?: string;
+  generate_barcode?: boolean;
 }
 
 export interface CreatedProduct {
@@ -727,7 +739,15 @@ export interface CreatedProduct {
   collection_id: string | null;
   product_type: string;
   status: string;
-  variants: { variant_id: string; sku: string; cost_price: string; mrp: string; selling_price: string }[];
+  variants: {
+    variant_id: string;
+    sku: string;
+    cost_price: string;
+    mrp: string;
+    selling_price: string;
+    original_barcode: string | null;
+    generated_barcode: string | null;
+  }[];
 }
 
 // Mirrors internal/audit.

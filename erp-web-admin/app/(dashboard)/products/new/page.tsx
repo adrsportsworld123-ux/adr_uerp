@@ -48,6 +48,13 @@ export default function NewProductPage() {
   const [trackBatch, setTrackBatch] = useState(false);
   const [pluCode, setPluCode] = useState("");
 
+  // Barcode: the real one already on the product (manually entered — the
+  // backend auto-detects/validates EAN-13 for a 13-digit code) and/or a
+  // system-generated one. Both can be set together; they coexist rather
+  // than one replacing the other — see internal/catalog/barcode_assign.go.
+  const [originalBarcode, setOriginalBarcode] = useState("");
+  const [generateBarcode, setGenerateBarcode] = useState(false);
+
   // Phase 8: Vertical Expansion — the category's own declared attribute
   // set (Product Attributes screen), rendered as real form fields here
   // instead of a free-form JSON blob. Empty set (no category, or a
@@ -147,11 +154,17 @@ export default function NewProductPage() {
             selling_price: Number(sellingPrice),
             track_batch: trackBatch,
             plu_code: pluCode || undefined,
+            original_barcode: originalBarcode || undefined,
+            generate_barcode: generateBarcode,
             attribute_combo: Object.fromEntries(Object.entries(attributeValues).filter(([, v]) => v !== "")),
           },
         ],
       });
-      toast.success(`Created ${product.name}`);
+      const barcodeBits = [
+        product.variants[0]?.original_barcode ? `original ${product.variants[0].original_barcode}` : null,
+        product.variants[0]?.generated_barcode ? `system ${product.variants[0].generated_barcode}` : null,
+      ].filter(Boolean);
+      toast.success(`Created ${product.name}${barcodeBits.length ? ` — barcode: ${barcodeBits.join(", ")}` : ""}`);
       router.push("/pricing");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not create product");
@@ -332,8 +345,8 @@ export default function NewProductPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <p className="text-xs text-zinc-500">
-              A product needs at least one sellable variant to exist — this creates the first one. Add size/color variants and
-              barcodes afterward from Pricing and the product&apos;s own barcode-assignment endpoint.
+              A product needs at least one sellable variant to exist — this creates the first one. Add further size/color
+              variants afterward from Pricing; barcodes can be entered/generated right here, or later from Pricing too.
             </p>
             <div className="flex flex-col gap-2">
               <Label htmlFor="sku">SKU</Label>
@@ -360,6 +373,26 @@ export default function NewProductPage() {
                   onChange={(e) => setSellingPrice(e.target.value)}
                 />
               </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border rounded p-3">
+              <p className="text-xs text-zinc-500">
+                Barcode — enter the real one already on the product, generate one of our own, or both (they&apos;re kept
+                separately, not one replacing the other).
+              </p>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="originalBarcode">Original barcode (optional)</Label>
+                <Input
+                  id="originalBarcode"
+                  value={originalBarcode}
+                  onChange={(e) => setOriginalBarcode(e.target.value)}
+                  placeholder="Scan or type the barcode printed on the product"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={generateBarcode} onChange={(e) => setGenerateBarcode(e.target.checked)} />
+                Also generate a system barcode
+              </label>
             </div>
 
             <div className="flex flex-col gap-3 border rounded p-3">

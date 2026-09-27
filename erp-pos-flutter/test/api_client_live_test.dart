@@ -209,4 +209,34 @@ void main() {
     // reservation-expiry sweeper releases it 15 minutes later.
     await api.deleteLine(orderId: order.orderId, lineId: order.lines.first.lineId);
   });
+
+  test('hold and recall: a held cart is excluded from held-orders once recalled, then checks out normally', () async {
+    if (!serverUp) return;
+
+    const branchId = '22222222-2222-2222-2222-222222222222';
+    const terminalId = '33333333-3333-3333-3333-333333333333';
+    const variantId = '99999999-9999-9999-9999-999999999999';
+    final idempotencyKey = 'flutter-live-test-hold-${DateTime.now().microsecondsSinceEpoch}';
+
+    var order = await api.createOrder(branchId: branchId, posTerminalId: terminalId, idempotencyKey: idempotencyKey);
+    order = await api.addLine(orderId: order.orderId, variantId: variantId, quantity: 1);
+
+    final held = await api.holdOrder(orderId: order.orderId, note: 'flutter live test hold');
+    expect(held.status, 'held');
+
+    final heldList = await api.listHeldOrders(branchId);
+    expect(heldList.any((h) => h.orderId == order.orderId), isTrue);
+
+    final recalled = await api.recallOrder(order.orderId);
+    expect(recalled.order.status, 'cart');
+    expect(recalled.unavailableLines, isEmpty); // stock was never lost within this short test
+
+    final heldListAfter = await api.listHeldOrders(branchId);
+    expect(heldListAfter.any((h) => h.orderId == order.orderId), isFalse);
+
+    order = await api.checkout(orderId: order.orderId, payments: [
+      PaymentInput(method: 'cash', amount: double.parse(recalled.order.grandTotal)),
+    ]);
+    expect(order.status, 'finalized');
+  });
 }

@@ -24,6 +24,15 @@ type variantSummary struct {
 	SellingPrice string   `json:"selling_price"`
 	MarginPct    *float64 `json:"margin_pct"`
 	MarkupPct    *float64 `json:"markup_pct"`
+	// OriginalBarcode/GeneratedBarcode are this variant's two possible
+	// barcodes (internal/catalog/barcode_assign.go,
+	// migrations/032_barcode_source.sql): the real one already on the
+	// product (manually entered) and this system's own auto-generated
+	// one, which coexist rather than one replacing the other. Either or
+	// both can be nil — lets the product list (erp-web-admin's Pricing
+	// page) show and assign both without a second per-variant round trip.
+	OriginalBarcode  *string `json:"original_barcode"`
+	GeneratedBarcode *string `json:"generated_barcode"`
 }
 
 type productSummary struct {
@@ -96,12 +105,14 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 
 		for _, pr := range productRows {
 			variantRows, err := tx.Query(ctx, `
-				SELECT id, sku, cost_price::text, mrp::text, selling_price::text, cost_price, selling_price
-				FROM product_variants
-				WHERE product_id = $1
-				  AND ($2 = '' OR selling_price >= $2::numeric)
-				  AND ($3 = '' OR selling_price <= $3::numeric)
-				ORDER BY sku`, pr.id, minPrice, maxPrice)
+				SELECT pv.id, pv.sku, pv.cost_price::text, pv.mrp::text, pv.selling_price::text, pv.cost_price, pv.selling_price,
+				       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'original' ORDER BY created_at LIMIT 1),
+				       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'generated' ORDER BY created_at LIMIT 1)
+				FROM product_variants pv
+				WHERE pv.product_id = $1
+				  AND ($2 = '' OR pv.selling_price >= $2::numeric)
+				  AND ($3 = '' OR pv.selling_price <= $3::numeric)
+				ORDER BY pv.sku`, pr.id, minPrice, maxPrice)
 			if err != nil {
 				return err
 			}
@@ -109,7 +120,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			for variantRows.Next() {
 				var v variantSummary
 				var costPrice, sellingPrice float64
-				if err := variantRows.Scan(&v.VariantID, &v.SKU, &v.CostPrice, &v.MRP, &v.SellingPrice, &costPrice, &sellingPrice); err != nil {
+				if err := variantRows.Scan(&v.VariantID, &v.SKU, &v.CostPrice, &v.MRP, &v.SellingPrice, &costPrice, &sellingPrice, &v.OriginalBarcode, &v.GeneratedBarcode); err != nil {
 					variantRows.Close()
 					return err
 				}

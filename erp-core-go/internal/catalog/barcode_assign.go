@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +30,9 @@ type assignBarcodeResponse struct {
 	Symbology string `json:"symbology"`
 	IsPrimary bool   `json:"is_primary"`
 	Generated bool   `json:"generated"`
+	// Source mirrors Generated as the string the barcodes table itself
+	// stores ("original" | "generated") — see migrations/032_barcode_source.sql.
+	Source string `json:"source"`
 }
 
 var validSymbologies = map[string]bool{
@@ -66,9 +70,19 @@ func (h *BarcodeAssignHandler) AssignBarcode(w http.ResponseWriter, r *http.Requ
 	generated := req.Code == ""
 	symbology := req.Symbology
 	if symbology == "" {
-		if generated {
+		switch {
+		case generated:
 			symbology = "EAN13"
-		} else {
+		// A manually-entered 13-digit code is, in practice, always meant
+		// to be a real EAN-13 (the vast majority of "original barcode
+		// already on the product" cases) — auto-detect it rather than
+		// requiring the caller to know to pass symbology explicitly, and
+		// validate its check digit the same way a generated code already
+		// is by construction. Anything else (a shorter internal code,
+		// CODE128, etc.) keeps the old CODE128 default.
+		case len(req.Code) == 13:
+			symbology = "EAN13"
+		default:
 			symbology = "CODE128"
 		}
 	}
@@ -81,6 +95,10 @@ func (h *BarcodeAssignHandler) AssignBarcode(w http.ResponseWriter, r *http.Requ
 			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
+	}
+	source := "original"
+	if generated {
+		source = "generated"
 	}
 
 	var resp assignBarcodeResponse
@@ -106,11 +124,11 @@ func (h *BarcodeAssignHandler) AssignBarcode(w http.ResponseWriter, r *http.Requ
 				return err
 			}
 			code = generatedCode
-		} else if err := insertBarcode(ctx, tx, variantID, code, symbology, isPrimary); err != nil {
+		} else if err := insertBarcode(ctx, tx, variantID, code, symbology, source, isPrimary); err != nil {
 			return err
 		}
 
-		resp = assignBarcodeResponse{Code: code, Symbology: symbology, IsPrimary: isPrimary, Generated: generated}
+		resp = assignBarcodeResponse{Code: code, Symbology: symbology, IsPrimary: isPrimary, Generated: generated, Source: source}
 		return nil
 	})
 
@@ -126,11 +144,11 @@ func (h *BarcodeAssignHandler) AssignBarcode(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func insertBarcode(ctx context.Context, tx pgx.Tx, variantID, code, symbology string, isPrimary bool) error {
+func insertBarcode(ctx context.Context, tx pgx.Tx, variantID, code, symbology, source string, isPrimary bool) error {
 	_, err := tx.Exec(ctx, `
-		INSERT INTO barcodes (id, merchant_id, variant_id, code, symbology, is_primary)
-		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4)`,
-		variantID, code, symbology, isPrimary)
+		INSERT INTO barcodes (id, merchant_id, variant_id, code, symbology, source, is_primary)
+		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5)`,
+		variantID, code, symbology, source, isPrimary)
 	return err
 }
 
@@ -160,7 +178,7 @@ func assignGeneratedCode(ctx context.Context, tx pgx.Tx, variantID string, isPri
 		if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
 			return "", err
 		}
-		if err := insertBarcode(ctx, tx, variantID, code, "EAN13", isPrimary); err != nil {
+		if err := insertBarcode(ctx, tx, variantID, code, "EAN13", "generated", isPrimary); err != nil {
 			if isUniqueViolation(err) {
 				if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint); rbErr != nil {
 					return "", rbErr
@@ -177,4 +195,55 @@ func assignGeneratedCode(ctx context.Context, tx pgx.Tx, variantID string, isPri
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// uniqueViolationConstraint returns which unique constraint a "23505"
+// error actually violated (empty string if it wasn't one at all) — needed
+// wherever more than one unique constraint could plausibly fire in the
+// same transaction (e.g. CreateProduct now inserts both a SKU and,
+// optionally, a barcode), so the right error code reaches the caller
+// instead of a generic/wrong one.
+func uniqueViolationConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
+var errInvalidBarcode = errors.New("invalid barcode")
+
+// assignBarcodeInTx assigns a barcode to a variant within an
+// already-open transaction — the at-creation-time counterpart to
+// AssignBarcode's standalone endpoint (which this deliberately doesn't
+// call into, to avoid touching that already-verified path). code == ""
+// auto-generates one, exactly like AssignBarcode's own "omit code"
+// convention; a non-empty code is always treated as this variant's real,
+// original barcode (source = 'original'), auto-detecting EAN-13 (and
+// validating its check digit) for a 13-digit code, CODE128 otherwise.
+func assignBarcodeInTx(ctx context.Context, tx pgx.Tx, variantID, code string) (assignedCode string, err error) {
+	generated := code == ""
+	symbology := "CODE128"
+	if generated || len(code) == 13 {
+		symbology = "EAN13"
+		if !generated {
+			if err := validateEAN13(code); err != nil {
+				return "", fmt.Errorf("%w: %s", errInvalidBarcode, err)
+			}
+		}
+	}
+
+	var existingCount int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM barcodes WHERE variant_id = $1`, variantID).Scan(&existingCount); err != nil {
+		return "", err
+	}
+	isPrimary := existingCount == 0
+
+	if generated {
+		return assignGeneratedCode(ctx, tx, variantID, isPrimary)
+	}
+	if err := insertBarcode(ctx, tx, variantID, code, symbology, "original", isPrimary); err != nil {
+		return "", err
+	}
+	return code, nil
 }

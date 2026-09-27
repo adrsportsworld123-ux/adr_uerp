@@ -434,6 +434,21 @@ Pharmacy reuses the attribute-set mechanism for drug scheduling (a "Drug Schedul
 
 ---
 
+## Phase 9 — POS Hold & Recall, Barcode Manual-Entry/Generate Visibility
+
+**Size: M — closed 2026-09-27**
+
+Two user-requested additions to the core POS loop, not part of the original five-phase plan above:
+
+- **Hold & Recall**: a cashier can park an in-progress cart to serve someone else, and recall it later, without losing its lines or (within a configurable window) its stock hold. New `sales_orders.status = 'held'`, deliberately separate from `'cart'` so every existing cart-editing endpoint refuses a held order for free. Extends reservations to `HOLD_DURATION_MINUTES` (default 120) on hold rather than reusing the FRD's 15-minute abandoned-cart window — a hold is an explicit action, abandonment is not. Recall re-validates every line and re-reserves any whose hold didn't survive, surfacing (never silently dropping) any line that genuinely can't get its stock back.
+- **A real correctness gap closed along the way, not introduced by this feature**: `Checkout` was found to only ever consume `active` reservations without checking that every line still had one — harmless as a narrow pre-existing race, but Hold/Recall would have made "a cart open far longer than 15 minutes" routine, turning that race into a real, everyday way to finalize a sale without decrementing stock. Closed with a cheap aggregate check (`409 RESERVATION_MISMATCH`) rather than a broader redesign of the (already-disclosed) reservation-to-line matching limitation.
+- **Barcode visibility**: `POST /products/variants/{id}/barcodes` already supported manual entry and auto-generate from an earlier phase — the real gap was that the product list (the Pricing page's product table, the only one that exists) never showed or offered either. Closed by joining each variant's primary barcode into `GET /products`.
+- **Scope**: backend (`erp-core-go`) + the Flutter POS app (`erp-pos-flutter`) for Hold/Recall's actual UI, since that's a counter action with no web-admin equivalent screen; barcode visibility landed in the web-admin Pricing page, the real "product list."
+
+Live-verified end to end via direct API/DB calls: hold extends reservation expiry correctly; double-hold, checkout-while-held, and double-recall all refuse with the right codes; a forced-lapsed reservation correctly trips `RESERVATION_MISMATCH` at checkout; recalling a cart whose hold outlived its window correctly re-reserves and checks out cleanly afterward. Full account in `phase0_1_design.md` §3.28.
+
+---
+
 ## Solo-Builder Notes
 
 A few honest calls worth making as you execute this, given it's 1-2 people:
@@ -456,4 +471,5 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 5     | HR & Payroll                                         | L       | Complete — employee records (extends `users`, not a new table), attendance/shifts, versioned salary structures, merchant-configurable statutory config, commission engine, payroll run with challan summary, see above |
 | 6     | AI Platform v1                                       | L       | Complete except OCR (deliberately deferred) — reorder suggestions, recommendation engine, demand forecast, anomaly detection (all real math/SQL, no trained model), NLP-BI, and the AI Copilot (both via a pluggable Ollama/Anthropic `LLMClient` interface) all done, see above |
 | 7     | Wholesale/B2B, Omnichannel                           | L       | Definition of Done met — B2B quotations, wholesale price lists, and a channel-agnostic backend all done; a real storefront app is a deliberately separate, unbuilt follow-up, see above |
-| 8     | Vertical expansion (grocery, pharmacy, apparel, ...) | Ongoing | Attribute-set configuration done (Jewelry/Electronics/Sports, all live-verified); grocery/pharmacy/apparel not started — see above |
+| 8     | Vertical expansion (grocery, pharmacy, apparel, ...) | Ongoing | All five verticals done and live-verified (Jewelry/Electronics/Sports via attribute-sets; Apparel via collections; Grocery/FMCG via batch/expiry tracking; Pharmacy via prescription linkage + shelf-life policy) — see above |
+| 9     | POS Hold & Recall, barcode visibility                | M       | Done — backend + Flutter POS UI for Hold/Recall, barcode manual-entry/generate visible on the web-admin product list, see above |

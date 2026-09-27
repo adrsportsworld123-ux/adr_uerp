@@ -58,6 +58,7 @@ export default function PricingPage() {
                 <TableHead>Selling</TableHead>
                 <TableHead>Margin</TableHead>
                 <TableHead>Markup</TableHead>
+                <TableHead>Barcode</TableHead>
                 <TableHead></TableHead>
               </TableRow>
             </TableHeader>
@@ -125,6 +126,9 @@ function VariantRow({ productName, variant, onSaved }: { productName: string; va
       <TableCell className={marginClass(variant.margin_pct)}>{variant.margin_pct ?? "—"}%</TableCell>
       <TableCell className={marginClass(variant.markup_pct)}>{variant.markup_pct ?? "—"}%</TableCell>
       <TableCell>
+        <BarcodeCell variant={variant} onAssigned={onSaved} />
+      </TableCell>
+      <TableCell>
         {editing ? (
           <div className="flex flex-col gap-2 w-56">
             <Input placeholder="Reason" value={reason} onChange={(e) => setReason(e.target.value)} className="h-7 text-xs" />
@@ -150,6 +154,65 @@ function VariantRow({ productName, variant, onSaved }: { productName: string; va
         )}
       </TableCell>
     </TableRow>
+  );
+}
+
+// Manual-enter-or-generate barcode assignment, keeping the product's
+// original barcode and this system's own generated one as two separate,
+// independently-managed slots — neither call replaces the other, see
+// internal/catalog/barcode_assign.go's assignBarcodeInTx/source column.
+// POST /products/variants/{id}/barcodes already supported both paths;
+// this is the UI for it on the one real product-list screen this admin has
+// (New Product also offers this at creation time now).
+function BarcodeCell({ variant, onAssigned }: { variant: ProductVariant; onAssigned: () => void }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function assign(manualCode: string | null) {
+    setBusy(true);
+    try {
+      await api.post(`/api/v1/products/variants/${variant.variant_id}/barcodes`, manualCode ? { code: manualCode } : {});
+      toast.success("Barcode assigned");
+      setCode("");
+      onAssigned();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not assign barcode");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 text-xs">
+      <div className="flex items-center gap-1">
+        <span className="text-zinc-400 w-14 shrink-0">Original</span>
+        {variant.original_barcode ? (
+          <span className="font-mono">{variant.original_barcode}</span>
+        ) : (
+          <>
+            <Input
+              placeholder="Enter code"
+              className="h-7 w-24 text-xs"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+            <Button size="sm" variant="outline" disabled={busy || !code} onClick={() => assign(code)}>
+              Assign
+            </Button>
+          </>
+        )}
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-zinc-400 w-14 shrink-0">System</span>
+        {variant.generated_barcode ? (
+          <span className="font-mono">{variant.generated_barcode}</span>
+        ) : (
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => assign(null)}>
+            Generate
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 

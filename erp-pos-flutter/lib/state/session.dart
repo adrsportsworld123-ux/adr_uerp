@@ -548,6 +548,67 @@ class AppSession extends ChangeNotifier {
     }
   }
 
+  /// Parks the current cart so the cashier can serve someone else, then
+  /// clears it from the active screen (startNewSale) — the cart itself
+  /// stays alive server-side as 'held', recallable later. No offline
+  /// equivalent, same as every other live-only feature above.
+  Future<bool> holdCurrentOrder({String? note}) async {
+    if (!_canUseLiveOnlyFeatures) {
+      _lastError = 'Not available offline';
+      notifyListeners();
+      return false;
+    }
+    _lastError = null;
+    try {
+      await api.holdOrder(orderId: currentOrder!.orderId, note: note);
+      startNewSale();
+      return true;
+    } on ApiException catch (e) {
+      _lastError = e.code == 'INVALID_REQUEST' ? 'Cannot hold an empty cart' : e.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<List<HeldOrderSummary>> listHeldOrders() async {
+    try {
+      return await api.listHeldOrders(branchId);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Recalls a held cart back into the active one. Refuses if there's
+  /// already an unsaved live cart in progress — recalling would otherwise
+  /// silently orphan it — the cashier holds or finishes it first.
+  Future<RecallResult?> recallOrder(String orderId) async {
+    if (offlineMode) {
+      _lastError = 'Not available offline';
+      notifyListeners();
+      return null;
+    }
+    if (currentOrder != null && !_currentOrderIsLocal && currentOrder!.status == 'cart' && currentOrder!.lines.isNotEmpty) {
+      _lastError = 'Hold or finish the current cart before recalling another one';
+      notifyListeners();
+      return null;
+    }
+    _lastError = null;
+    try {
+      final result = await api.recallOrder(orderId);
+      currentOrder = result.order;
+      _currentOrderIsLocal = false;
+      attachedCustomerId = null;
+      attachedCustomerName = null;
+      loyaltyAvailablePoints = null;
+      notifyListeners();
+      return result;
+    } on ApiException catch (e) {
+      _lastError = e.message;
+      notifyListeners();
+      return null;
+    }
+  }
+
   /// Voids a *finalized* sale — see internal/sales/void.go. Enforced
   /// server-side by the `sales.void` permission; this client doesn't
   /// gate the button itself on `roles` (a POS User attempting it just

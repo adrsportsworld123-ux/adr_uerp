@@ -230,6 +230,60 @@ class OrderSummary {
       );
 }
 
+/// A line Recall couldn't get stock back for — see internal/sales/hold.go's
+/// doc comment. Never silently dropped: the cashier decides what to do
+/// with it (remove/adjust before checkout).
+class UnavailableLine {
+  final String lineId;
+  final String variantId;
+  final String reason;
+
+  UnavailableLine({required this.lineId, required this.variantId, required this.reason});
+
+  factory UnavailableLine.fromJson(Map<String, dynamic> json) => UnavailableLine(
+        lineId: json['line_id'] as String,
+        variantId: json['variant_id'] as String,
+        reason: json['reason'] as String,
+      );
+}
+
+/// POST /sales/orders/{id}/recall's response — a normal orderResponse plus
+/// an optional list of lines whose stock hold didn't survive.
+class RecallResult {
+  final OrderSummary order;
+  final List<UnavailableLine> unavailableLines;
+
+  RecallResult({required this.order, this.unavailableLines = const []});
+}
+
+/// One row from GET /sales/orders/held — the recall screen's list.
+class HeldOrderSummary {
+  final String orderId;
+  final String orderNumber;
+  final String heldAt;
+  final String holdNote;
+  final int lineCount;
+  final String grandTotal;
+
+  HeldOrderSummary({
+    required this.orderId,
+    required this.orderNumber,
+    required this.heldAt,
+    required this.holdNote,
+    required this.lineCount,
+    required this.grandTotal,
+  });
+
+  factory HeldOrderSummary.fromJson(Map<String, dynamic> json) => HeldOrderSummary(
+        orderId: json['order_id'] as String,
+        orderNumber: json['order_number'] as String,
+        heldAt: json['held_at'] as String,
+        holdNote: json['hold_note'] as String? ?? '',
+        lineCount: json['line_count'] as int? ?? 0,
+        grandTotal: json['grand_total'] as String,
+      );
+}
+
 class PaymentInput {
   final String method; // 'cash' | 'card' | 'upi' | 'credit'
   final double amount;
@@ -681,6 +735,44 @@ class ApiClient {
       body: jsonEncode({'reason': reason}),
     );
     return OrderSummary.fromJson(_decode(resp));
+  }
+
+  /// Parks the current cart — see internal/sales/hold.go's Hold. Extends
+  /// its reservations well past the ordinary 15-minute cart window
+  /// server-side; this client doesn't need to know the exact duration.
+  Future<OrderSummary> holdOrder({required String orderId, String? note}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/hold'),
+      headers: _authHeaders,
+      body: jsonEncode({if (note != null && note.isNotEmpty) 'note': note}),
+    );
+    return OrderSummary.fromJson(_decode(resp));
+  }
+
+  /// Brings a held cart back into an editable one — see hold.go's Recall.
+  /// `unavailable_lines` (never silently dropped) surfaces any line whose
+  /// stock hold didn't survive.
+  Future<RecallResult> recallOrder(String orderId) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/recall'),
+      headers: _authHeaders,
+    );
+    final body = _decode(resp);
+    return RecallResult(
+      order: OrderSummary.fromJson(body),
+      unavailableLines: (body['unavailable_lines'] as List<dynamic>? ?? const [])
+          .map((e) => UnavailableLine.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  Future<List<HeldOrderSummary>> listHeldOrders(String branchId) async {
+    final uri = Uri.parse('$baseUrl/api/v1/sales/orders/held').replace(queryParameters: {'branch_id': branchId});
+    final resp = await _http.get(uri, headers: _authHeaders);
+    final body = _decode(resp);
+    return (body['held_orders'] as List<dynamic>)
+        .map((e) => HeldOrderSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<ReceiptData> getReceipt(String orderId) async {

@@ -42,7 +42,11 @@ export default function InventoryPage() {
       .then((d) => setBranches(d.branches))
       .catch(() => {});
     api
-      .get<{ products: Product[] }>("/api/v1/products")
+      // limit=200 (the backend's own cap), not the default 50 — see
+      // inventory-reconciliation/page.tsx's matching comment: a variant
+      // picker sourced from the unbounded default page can lose a seed
+      // variant off the end as the catalog grows.
+      .get<{ products: Product[] }>("/api/v1/products?limit=200")
       .then((d) => {
         const options: VariantOption[] = [];
         for (const p of d.products) {

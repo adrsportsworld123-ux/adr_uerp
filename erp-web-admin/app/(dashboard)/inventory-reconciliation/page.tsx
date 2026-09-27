@@ -71,7 +71,11 @@ function NewCountSection() {
       .then((d) => setBranches(d.branches))
       .catch(() => {});
     api
-      .get<{ products: Product[] }>("/api/v1/products")
+      // limit=200 (the backend's own cap), not the default 50 — same
+      // pagination fragility already found and fixed on the Pricing page:
+      // as the catalog grows, the seed variant this picker's own e2e test
+      // depends on can sort alphabetically past a smaller page.
+      .get<{ products: Product[] }>("/api/v1/products?limit=200")
       .then((d) => {
         const options: VariantOption[] = [];
         for (const p of d.products) {

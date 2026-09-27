@@ -28,6 +28,15 @@ type createVariantInput struct {
 	TrackSerial    bool           `json:"track_serial"`
 	TrackBatch     bool           `json:"track_batch"` // Phase 8 (Grocery/FMCG) — opts this variant into batch/lot + expiry tracking
 	PLUCode        string         `json:"plu_code"`    // Phase 8 (Grocery/FMCG) — weighing-scale barcode short code, optional
+	// OriginalBarcode/GenerateBarcode let a caller provision either or
+	// both of this variant's barcodes right at creation time, instead of
+	// a separate POST .../barcodes call afterward — see barcode_assign.go's
+	// assignBarcodeInTx. Both can be set together: the real barcode
+	// already on the product (OriginalBarcode) and this system's own
+	// internal one (GenerateBarcode) coexist rather than one replacing
+	// the other.
+	OriginalBarcode string `json:"original_barcode"`
+	GenerateBarcode bool   `json:"generate_barcode"`
 }
 
 type createProductRequest struct {
@@ -43,11 +52,13 @@ type createProductRequest struct {
 }
 
 type variantResponse struct {
-	VariantID    string `json:"variant_id"`
-	SKU          string `json:"sku"`
-	CostPrice    string `json:"cost_price"`
-	MRP          string `json:"mrp"`
-	SellingPrice string `json:"selling_price"`
+	VariantID        string  `json:"variant_id"`
+	SKU              string  `json:"sku"`
+	CostPrice        string  `json:"cost_price"`
+	MRP              string  `json:"mrp"`
+	SellingPrice     string  `json:"selling_price"`
+	OriginalBarcode  *string `json:"original_barcode"`
+	GeneratedBarcode *string `json:"generated_barcode"`
 }
 
 type productResponse struct {
@@ -165,10 +176,32 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
-			variants = append(variants, variantResponse{
+			vr := variantResponse{
 				VariantID: variantID, SKU: v.SKU,
 				CostPrice: formatMoney(v.CostPrice), MRP: formatMoney(v.MRP), SellingPrice: formatMoney(v.SellingPrice),
-			})
+			}
+			// Original first, so it naturally becomes this variant's primary
+			// barcode (assignBarcodeInTx's is_primary logic is "whichever
+			// gets inserted first") whenever both are given — the real
+			// barcode already on the item is what a scanner at the
+			// register should match, not an internal one nothing
+			// physically carries yet.
+			if v.OriginalBarcode != "" {
+				code, err := assignBarcodeInTx(ctx, tx, variantID, v.OriginalBarcode)
+				if err != nil {
+					return err
+				}
+				vr.OriginalBarcode = &code
+			}
+			if v.GenerateBarcode {
+				code, err := assignBarcodeInTx(ctx, tx, variantID, "")
+				if err != nil {
+					return err
+				}
+				vr.GeneratedBarcode = &code
+			}
+
+			variants = append(variants, vr)
 		}
 
 		resp = productResponse{
@@ -180,12 +213,16 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 	})
 
 	switch {
+	case uniqueViolationConstraint(err) == "barcodes_merchant_id_code_key":
+		httpx.Error(w, http.StatusConflict, "BARCODE_EXISTS", "this barcode is already assigned to another variant")
 	case isUniqueViolation(err):
 		httpx.Error(w, http.StatusConflict, "SKU_EXISTS", "one of these SKUs is already in use")
 	case errors.Is(err, errAttributeRequired):
 		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_REQUIRED", err.Error())
 	case errors.Is(err, errAttributeInvalidValue):
 		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_INVALID_VALUE", err.Error())
+	case errors.Is(err, errInvalidBarcode):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create product")
 	default:

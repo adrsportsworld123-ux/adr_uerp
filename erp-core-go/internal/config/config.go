@@ -2,7 +2,10 @@
 // Kept deliberately tiny for Phase 0 — grows as new modules need settings.
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 type Config struct {
 	HTTPAddr    string // e.g. ":8080"
@@ -73,6 +76,13 @@ type Config struct {
 	// endpoint on the same docker network the api service already runs on.
 	OllamaBaseURL string
 	OllamaModel   string
+
+	// HoldDurationMinutes is how long a POS "held" cart's stock
+	// reservations stay extended before the same 15-minute-sweeper logic
+	// would otherwise reclaim them (internal/sales/hold.go) — deliberately
+	// separate from, and longer than, the FRD's 15-minute abandoned-cart
+	// window: a hold is an explicit cashier action, not idle abandonment.
+	HoldDurationMinutes int
 }
 
 func Load() Config {
@@ -99,12 +109,23 @@ func Load() Config {
 		AnthropicModel:  getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
 		OllamaBaseURL:   getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
 		OllamaModel:     getenv("OLLAMA_MODEL", "llama3.2:3b"),
+
+		HoldDurationMinutes: getenvInt("HOLD_DURATION_MINUTES", 120),
 	}
 }
 
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getenvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

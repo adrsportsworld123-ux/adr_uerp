@@ -44,6 +44,10 @@ type Handler struct {
 	// Notify is optional (nil is fine — Checkout/NotifyReceipt just skip
 	// sending); see notify_receipt.go's Notifier doc comment.
 	Notify Notifier
+	// HoldDurationMinutes configures Hold (hold.go); <= 0 falls back to a
+	// safe default there, so a zero-value Handler in a test/tool never
+	// silently un-extends a hold's reservations.
+	HoldDurationMinutes int
 }
 
 type orderResponse struct {
@@ -488,6 +492,28 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 			return errEmptyCart
 		}
 
+		// Hold & Recall: a held cart's reservations may have been
+		// re-acquired against only some of its lines (Recall surfaces the
+		// rest as unavailable_lines rather than failing outright — see
+		// hold.go), and even an ordinary cart can in principle reach
+		// checkout after a reservation lapsed underneath it. Checkout must
+		// not silently finalize a sale that consumes fewer active
+		// reservations than it has line quantity — that would finalize
+		// without decrementing stock for the uncovered lines. Compared in
+		// aggregate (sum of quantities), not line-by-line, since
+		// stock_reservations has no direct FK to the line it backs (a
+		// known, disclosed simplification — see DeleteLine's doc comment).
+		var lineQtyTotal, reservedQtyTotal float64
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(quantity),0) FROM sales_order_lines WHERE sales_order_id = $1`, orderID).Scan(&lineQtyTotal); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(quantity),0) FROM stock_reservations WHERE sales_order_id = $1 AND status = 'active'`, orderID).Scan(&reservedQtyTotal); err != nil {
+			return err
+		}
+		if reservedQtyTotal < lineQtyTotal {
+			return errReservationMismatch
+		}
+
 		// Phase 8 (Pharmacy): "Drug Schedule" is Phase 8's own attribute-set
 		// mechanism (internal/catalog/attributes.go), not new schema — a
 		// disclosed convention, not a general checkout-policy engine: any
@@ -650,7 +676,7 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		// and checkout — surfacing it rather than silently overselling.
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "stock changed since this item was added to the cart")
 	case errors.Is(err, errOrderNotEditable):
-		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order has already been voided or refunded")
+		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order is not an open cart — it may be held, already finalized, voided, or refunded")
 	case errors.Is(err, errEmptyCart):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "cannot check out an order with no lines")
 	case errors.Is(err, errPaymentMismatch):
@@ -663,6 +689,8 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "CREDIT_LIMIT_EXCEEDED", "this sale would put the customer over their credit limit")
 	case errors.Is(err, errPrescriptionRequired):
 		httpx.Error(w, http.StatusConflict, "PRESCRIPTION_REQUIRED", errPrescriptionRequired.Error())
+	case errors.Is(err, errReservationMismatch):
+		httpx.Error(w, http.StatusConflict, "RESERVATION_MISMATCH", "one or more items' stock hold has lapsed — remove and re-add them, or recall this cart again, before checkout")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
 	case err != nil:
@@ -780,6 +808,7 @@ var (
 	errCreditHold           = errors.New("customer is on credit hold")
 	errCreditLimitExceeded  = errors.New("sale would exceed customer's credit limit")
 	errPrescriptionRequired = errors.New("one or more lines require a prescription to be attached before checkout")
+	errReservationMismatch  = errors.New("active reservations no longer cover every line's quantity")
 )
 
 // paymentTermsDays maps customers.payment_terms to a due-date offset —

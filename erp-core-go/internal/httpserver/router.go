@@ -34,7 +34,7 @@ import (
 	"erp-core-go/internal/sync"
 )
 
-func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client) http.Handler {
+func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int) http.Handler {
 	r := chi.NewRouter()
 	r.Use(CORS)
 	r.Use(middleware.RequestID)
@@ -54,7 +54,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	productList := &catalog.ListHandler{DB: database}
 	prc := &pricing.Handler{DB: database, Search: searchClient}
 	loy := &loyalty.Handler{DB: database}
-	orders := &sales.Handler{DB: database, Loyalty: loy, Notify: notify}
+	orders := &sales.Handler{DB: database, Loyalty: loy, Notify: notify, HoldDurationMinutes: holdDurationMinutes}
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
 	syncH := &sync.Handler{DB: database}
@@ -144,7 +144,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Post("/search/reindex", srch.Reindex)
 
 			protected.Post("/sales/orders", orders.CreateOrder)
+			protected.Get("/sales/orders/held", orders.ListHeld)
 			protected.Get("/sales/orders/{id}", orders.GetOrder)
+			protected.Post("/sales/orders/{id}/hold", orders.Hold)
+			protected.Post("/sales/orders/{id}/recall", orders.Recall)
 			protected.Get("/sales/orders/{id}/receipt", orders.GetReceipt)
 			protected.Get("/sales/orders/{id}/receipt/print", orders.PrintReceipt)
 			protected.Post("/sales/orders/{id}/receipt/notify", orders.NotifyReceipt)
