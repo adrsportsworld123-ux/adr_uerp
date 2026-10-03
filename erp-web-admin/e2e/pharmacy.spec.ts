@@ -112,11 +112,22 @@ test("Pharmacy: Schedule H drug requires a prescription at checkout, recorded th
 
   await test.step("the schedule-drug sales report reflects the sale with its prescription reference", async () => {
     const headers = { Authorization: `Bearer ${adminToken}` };
-    const today = new Date().toISOString().slice(0, 10);
-    const report = await (await request.get(`${API_BASE}/reports/schedule-drug-sales?date=${today}`, { headers })).json();
-    const line = report.lines.find((l: { variant_id: string }) => l.variant_id === variantId);
+    // The report buckets by finalized_at::date in the DATABASE's timezone
+    // (Asia/Calcutta on a native Windows install, UTC in the postgres
+    // Docker image), which the test can't see. toISOString() alone is the
+    // UTC date, so between 00:00 and 05:30 IST it asked for yesterday on
+    // an IST database. The sale is on today's local or UTC date in either
+    // setup, so check both.
+    const now = new Date();
+    const candidateDates = [...new Set([now.toLocaleDateString("en-CA"), now.toISOString().slice(0, 10)])];
+    let line: { drug_schedule: string; prescription_id: string | null } | undefined;
+    for (const date of candidateDates) {
+      const report = await (await request.get(`${API_BASE}/reports/schedule-drug-sales?date=${date}`, { headers })).json();
+      line = report.lines.find((l: { variant_id: string }) => l.variant_id === variantId);
+      if (line) break;
+    }
     expect(line).toBeTruthy();
-    expect(line.drug_schedule).toBe("Schedule H");
-    expect(line.prescription_id).toBeTruthy();
+    expect(line?.drug_schedule).toBe("Schedule H");
+    expect(line?.prescription_id).toBeTruthy();
   });
 });
