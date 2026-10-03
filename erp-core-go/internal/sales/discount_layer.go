@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+
+	"erp-core-go/internal/taxcalc"
 )
 
 // DiscountLayer is one application of ApplyDiscountLayer — one "layer" in
@@ -52,7 +54,7 @@ func ApplyDiscountLayer(ctx context.Context, tx pgx.Tx, layer DiscountLayer) (or
 	}
 
 	query := `
-		SELECT sol.id, sol.unit_price, sol.quantity, sol.discount_amount,
+		SELECT sol.id, sol.unit_price, sol.quantity, sol.discount_amount, sol.price_includes_tax,
 		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
 		FROM sales_order_lines sol
 		JOIN product_variants pv ON pv.id = sol.variant_id
@@ -73,11 +75,12 @@ func ApplyDiscountLayer(ctx context.Context, tx pgx.Tx, layer DiscountLayer) (or
 		lineID                           string
 		unitPrice, qty, existingDiscount float64
 		taxRatePct                       float64
+		priceIncludesTax                 bool
 	}
 	var lines []line
 	for rows.Next() {
 		var l line
-		if err := rows.Scan(&l.lineID, &l.unitPrice, &l.qty, &l.existingDiscount, &l.taxRatePct); err != nil {
+		if err := rows.Scan(&l.lineID, &l.unitPrice, &l.qty, &l.existingDiscount, &l.priceIncludesTax, &l.taxRatePct); err != nil {
 			rows.Close()
 			return resp, err
 		}
@@ -100,12 +103,14 @@ func ApplyDiscountLayer(ctx context.Context, tx pgx.Tx, layer DiscountLayer) (or
 		lineRemaining := l.unitPrice*l.qty - l.existingDiscount
 		share := round2(layer.Amount * (lineRemaining / remainingBase))
 		newDiscount := l.existingDiscount + share
-		taxableValue := l.unitPrice*l.qty - newDiscount
-		taxAmount := round2(taxableValue * l.taxRatePct / 100)
-		lineTotal := taxableValue + taxAmount
+		// For a tax-inclusive line the discount reduces the inclusive
+		// price the customer pays, and tax is re-extracted from what's
+		// left; for an exclusive line tax is re-added on the discounted
+		// taxable value. taxcalc handles both.
+		calc := taxcalc.ComputeLine(l.unitPrice, l.qty, newDiscount, l.taxRatePct, l.priceIncludesTax)
 		if _, err := tx.Exec(ctx, `
 			UPDATE sales_order_lines SET discount_amount = $1, tax_amount = $2, line_total = $3 WHERE id = $4`,
-			newDiscount, taxAmount, lineTotal, l.lineID); err != nil {
+			newDiscount, calc.Tax, calc.Total, l.lineID); err != nil {
 			return resp, err
 		}
 	}

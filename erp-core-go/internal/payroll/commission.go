@@ -253,7 +253,7 @@ func (h *Handler) ComputeCommission(w http.ResponseWriter, r *http.Request) {
 		results = []commissionEarningResponse{}
 		for _, rule := range rules {
 			salesRows, err := tx.Query(ctx, `
-				SELECT so.cashier_id, SUM(sol.unit_price * sol.quantity - sol.discount_amount) AS net_sales
+				SELECT so.cashier_id, SUM(sol.taxable_value) AS net_sales
 				FROM sales_orders so
 				JOIN sales_order_lines sol ON sol.sales_order_id = so.id
 				JOIN product_variants pv ON pv.id = sol.variant_id

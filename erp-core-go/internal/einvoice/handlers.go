@@ -269,7 +269,7 @@ func loadEInvoice(ctx context.Context, tx pgx.Tx, orderID string) (eInvoiceRespo
 
 func loadIRNLineItems(ctx context.Context, tx pgx.Tx, orderID string) ([]IRNLineItem, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT COALESCE(p.hsn_code,''), p.name, sol.quantity, (sol.unit_price*sol.quantity - sol.discount_amount),
+		SELECT COALESCE(p.hsn_code,''), p.name, sol.quantity, sol.taxable_value,
 		       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0), COALESCE(ts.igst_rate,0)
 		FROM sales_order_lines sol
 		JOIN product_variants pv ON pv.id = sol.variant_id

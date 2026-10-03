@@ -2,7 +2,16 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { api, setToken, ApiError } from "./api-client";
+import {
+  api,
+  ApiError,
+  clearTokens,
+  ensureFreshSession,
+  hasSession,
+  markActivity,
+  SESSION_EXPIRED_EVENT,
+  storeTokens,
+} from "./api-client";
 
 interface LoginResponse {
   access_token: string;
@@ -26,11 +35,15 @@ const AuthContext = createContext<AuthState | null>(null);
 // same Bearer-token model the Flutter client uses, deliberately, so this
 // admin app and the POS app are consistent about how they authenticate
 // against the same backend rather than inventing a second auth pattern.
+// Expiry/refresh rules live in api-client.ts's "Session lifecycle" block.
 interface SessionState {
   userId: string | null;
   roles: string[];
   ready: boolean;
 }
+
+const SESSION_CHECK_INTERVAL_MS = 15_000;
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart", "mousemove"] as const;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionState>({ userId: null, roles: [], ready: false });
@@ -59,6 +72,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // While signed in: track real user activity, and run the proactive
+  // session check on a timer and whenever the tab regains focus (timers
+  // are throttled/paused in background tabs and while a laptop sleeps).
+  // Any path that ends the session — this check, a 401 inside
+  // api-client.ts, or another tab signing out — lands in the same place:
+  // session state cleared, and useRequireAuth sends the user to /login.
+  useEffect(() => {
+    if (!userId) return;
+    const endLocally = () => setSession({ userId: null, roles: [], ready: true });
+    const onActivity = () => markActivity();
+    const check = () => {
+      if (!hasSession()) return endLocally(); // signed out/expired in another tab
+      ensureFreshSession().catch(() => {}); // on expiry it dispatches SESSION_EXPIRED_EVENT itself
+    };
+    const onVisible = () => document.visibilityState === "visible" && check();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "access_token" && !e.newValue) endLocally();
+    };
+
+    ACTIVITY_EVENTS.forEach((ev) => window.addEventListener(ev, onActivity, { passive: true }));
+    window.addEventListener(SESSION_EXPIRED_EVENT, endLocally);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = window.setInterval(check, SESSION_CHECK_INTERVAL_MS);
+    return () => {
+      ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, onActivity));
+      window.removeEventListener(SESSION_EXPIRED_EVENT, endLocally);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(timer);
+    };
+  }, [userId]);
+
   async function login(merchantCode: string, email: string, password: string) {
     try {
       const result = await api.post<LoginResponse>("/api/v1/auth/login", {
@@ -66,10 +114,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email,
         password,
       });
-      setToken(result.access_token);
+      storeTokens(result, true);
       window.localStorage.setItem("user_id", result.user_id);
       window.localStorage.setItem("roles", JSON.stringify(result.roles));
-      window.localStorage.setItem("refresh_token", result.refresh_token);
       setSession({ userId: result.user_id, roles: result.roles, ready: true });
       return null;
     } catch (e) {
@@ -78,10 +125,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
-    setToken(null);
+    clearTokens();
     window.localStorage.removeItem("user_id");
     window.localStorage.removeItem("roles");
-    window.localStorage.removeItem("refresh_token");
     setSession({ userId: null, roles: [], ready: true });
   }
 
@@ -95,7 +141,8 @@ export function useAuth() {
 }
 
 // Client-side route guard for the (dashboard) layout — redirects to /login
-// if there's no session once the initial localStorage check has finished.
+// if there's no session once the initial localStorage check has finished,
+// including the moment a session expires mid-use (see AuthProvider).
 // A middleware-based guard would need the token in a cookie, not
 // localStorage; kept consistent with the Bearer-token model above instead.
 export function useRequireAuth() {

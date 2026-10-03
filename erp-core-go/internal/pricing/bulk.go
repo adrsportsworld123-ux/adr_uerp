@@ -10,6 +10,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/taxcalc"
 )
 
 var errInvalidMethod = errors.New("method must be one of percent, fixed, set")
@@ -78,9 +79,11 @@ func computeNewPrice(method string, value, roundTo, oldPrice float64) float64 {
 // item, inside the caller's transaction.
 func computeBulkChanges(ctx context.Context, tx pgx.Tx, req bulkUpdateRequest, apply bool, changedBy string) ([]bulkItemResult, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT pv.id, pv.sku, p.name, pv.selling_price, pv.cost_price
+		SELECT pv.id, pv.sku, p.name, pv.selling_price, pv.cost_price, p.price_includes_tax,
+		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
 		FROM product_variants pv
 		JOIN products p ON p.id = pv.product_id
+		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 		WHERE ($1 = '' OR p.category_id::text = $1)
 		  AND ($2 = '' OR p.brand_id::text = $2)
 		  AND ($3 = 0 OR pv.selling_price >= $3)
@@ -93,11 +96,13 @@ func computeBulkChanges(ctx context.Context, tx pgx.Tx, req bulkUpdateRequest, a
 	type row struct {
 		id, sku, name      string
 		sellingPrice, cost float64
+		inclusive          bool
+		taxRatePct         float64
 	}
 	var matched []row
 	for rows.Next() {
 		var rrow row
-		if err := rows.Scan(&rrow.id, &rrow.sku, &rrow.name, &rrow.sellingPrice, &rrow.cost); err != nil {
+		if err := rows.Scan(&rrow.id, &rrow.sku, &rrow.name, &rrow.sellingPrice, &rrow.cost, &rrow.inclusive, &rrow.taxRatePct); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -113,7 +118,8 @@ func computeBulkChanges(ctx context.Context, tx pgx.Tx, req bulkUpdateRequest, a
 		newPrice := computeNewPrice(req.Method, req.Value, req.RoundTo, m.sellingPrice)
 		item := bulkItemResult{VariantID: m.id, SKU: m.sku, ProductName: m.name, OldPrice: m.sellingPrice, NewPrice: newPrice}
 
-		if newPrice < m.cost && !req.Override {
+		// Net (pre-tax) price vs cost, same rule as UpdateVariantPricing.
+		if taxcalc.NetPrice(newPrice, m.taxRatePct, m.inclusive) < m.cost && !req.Override {
 			item.Status = "skipped_negative_margin"
 			results = append(results, item)
 			continue

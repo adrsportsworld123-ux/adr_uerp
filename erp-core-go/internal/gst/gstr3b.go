@@ -101,11 +101,11 @@ func (h *Handler) GSTR3B(w http.ResponseWriter, r *http.Request) {
 		var taxable, cgst, sgst, igst, cess float64
 		if err := tx.QueryRow(ctx, `
 			SELECT
-			  COALESCE(SUM(sol.unit_price*sol.quantity - sol.discount_amount), 0),
-			  COALESCE(SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cgst_rate,0) / 100), 0),
-			  COALESCE(SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.sgst_rate,0) / 100), 0),
-			  COALESCE(SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.igst_rate,0) / 100), 0),
-			  COALESCE(SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cess_rate,0) / 100), 0)
+			  COALESCE(SUM(sol.taxable_value), 0),
+			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100), 0),
+			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100), 0),
+			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100), 0),
+			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100), 0)
 			FROM sales_order_lines sol
 			JOIN sales_orders so ON so.id = sol.sales_order_id
 			JOIN product_variants pv ON pv.id = sol.variant_id

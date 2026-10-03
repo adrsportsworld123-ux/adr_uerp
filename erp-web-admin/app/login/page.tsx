@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { takePostLoginRedirect, takeSessionExpiredReason } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,10 +25,25 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [redirectTo, setRedirectTo] = useState("/dashboard");
+
+  // Set by api-client.ts's expireSession() just before the dashboard guard
+  // sent the user here: why their session ended, and where they were, so
+  // signing back in returns them to the same screen. sessionStorage is
+  // client-only, so this is read after mount (same hydration reasoning as
+  // lib/auth.tsx's session-restore effect) and consumed exactly once.
+  useEffect(() => {
+    const reason = takeSessionExpiredReason();
+    const back = takePostLoginRedirect();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (reason) setNotice(reason === "idle" ? "Your session expired due to inactivity. Please sign in again." : "Your session has ended. Please sign in again.");
+    if (back) setRedirectTo(back);
+  }, []);
 
   useEffect(() => {
-    if (ready && userId) router.replace("/dashboard");
-  }, [ready, userId, router]);
+    if (ready && userId) router.replace(redirectTo);
+  }, [ready, userId, router, redirectTo]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,7 +54,7 @@ export default function LoginPage() {
     if (err) {
       setError(err);
     } else {
-      router.replace("/dashboard");
+      router.replace(redirectTo);
     }
   }
 
@@ -51,6 +67,11 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            {notice && (
+              <p role="status" data-testid="session-expired-notice" className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {notice}
+              </p>
+            )}
             <div className="flex flex-col gap-2">
               <Label htmlFor="merchantCode">Merchant code</Label>
               <Input id="merchantCode" value={merchantCode} onChange={(e) => setMerchantCode(e.target.value)} required />

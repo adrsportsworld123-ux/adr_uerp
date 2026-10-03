@@ -449,6 +449,19 @@ Live-verified end to end via direct API/DB calls: hold extends reservation expir
 
 ---
 
+## Cross-cutting: Session Expiry Handling & GST-Inclusive Pricing
+
+**Size: M — closed 2026-10-02**
+
+Two items the user asked to be made sure of before further phase work:
+
+- **Session expiry → login page**, in both the web admin and the Flutter POS. Silent refresh while the user is active; back to the login page (with a reason) after a full role-tier inactivity window (POS 15 / Manager 30 / Admin 60 min) or when the refresh token is rejected. Offline POS sessions are never ended for lack of connectivity.
+- **GST-inclusive vs GST-exclusive pricing**: per-product flag with a merchant-wide default for new products; line-level tax extraction so an inclusive bill always equals the shelf price exactly; margins on the pre-tax price; GST/e-invoice reports read a generated `taxable_value`. Also fixed a real bug: changing a cart line's quantity silently re-priced a wholesale line at retail.
+
+Full design and verification in `phase0_1_design.md` §3.29.
+
+---
+
 ## Solo-Builder Notes
 
 A few honest calls worth making as you execute this, given it's 1-2 people:
@@ -473,3 +486,4 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 7     | Wholesale/B2B, Omnichannel                           | L       | Definition of Done met — B2B quotations, wholesale price lists, and a channel-agnostic backend all done; a real storefront app is a deliberately separate, unbuilt follow-up, see above |
 | 8     | Vertical expansion (grocery, pharmacy, apparel, ...) | Ongoing | All five verticals done and live-verified (Jewelry/Electronics/Sports via attribute-sets; Apparel via collections; Grocery/FMCG via batch/expiry tracking; Pharmacy via prescription linkage + shelf-life policy) — see above |
 | 9     | POS Hold & Recall, barcode visibility                | M       | Done — backend + Flutter POS UI for Hold/Recall, barcode manual-entry/generate visible on the web-admin product list, see above |
+| —     | Session expiry handling, GST-inclusive pricing       | M       | Done — both clients return to login on expiry (silent refresh while active); per-product inclusive/exclusive GST pricing with a merchant default, see above |

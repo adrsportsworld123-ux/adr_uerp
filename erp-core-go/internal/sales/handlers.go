@@ -24,6 +24,7 @@ import (
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/pricing"
+	"erp-core-go/internal/taxcalc"
 )
 
 // LoyaltyEarner lets Checkout award loyalty points on a finalized sale
@@ -72,6 +73,12 @@ type orderLine struct {
 	DiscountAmount string `json:"discount_amount"`
 	TaxAmount      string `json:"tax_amount"`
 	LineTotal      string `json:"line_total"`
+	// migrations/033: when PriceIncludesTax is true, UnitPrice is the
+	// tax-inclusive shelf price and LineTotal = UnitPrice*Quantity -
+	// DiscountAmount (tax is inside it, not added). TaxableValue is
+	// always the pre-tax amount, for either mode.
+	TaxableValue     string `json:"taxable_value"`
+	PriceIncludesTax bool   `json:"price_includes_tax"`
 }
 
 // ---------------------------------------------------------------------
@@ -248,18 +255,18 @@ func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 	}
 
 	var cgst, sgst, igst, cess float64
-	var trackBatch bool
+	var trackBatch, priceIncludesTax bool
 	var minShelfLifeDays int
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 		       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), pv.track_batch,
-		       COALESCE(c.min_shelf_life_days, 0)
+		       COALESCE(c.min_shelf_life_days, 0), p.price_includes_tax
 		FROM product_variants pv
 		JOIN products p ON p.id = pv.product_id
 		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 		LEFT JOIN categories c ON c.id = p.category_id
 		WHERE pv.id = $1`, variantID,
-	).Scan(&cgst, &sgst, &igst, &cess, &trackBatch, &minShelfLifeDays); err != nil {
+	).Scan(&cgst, &sgst, &igst, &cess, &trackBatch, &minShelfLifeDays, &priceIncludesTax); err != nil {
 		return resp, err
 	}
 
@@ -311,10 +318,13 @@ func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 	// high-value B2B invoicing, multi-currency conversion, or anywhere
 	// compounding roundoff across many lines would matter — switch to
 	// integer-paise (or a decimal library) arithmetic before then.
-	lineSubtotal := sellingPrice * quantity
-	taxRatePct := cgst + sgst + igst + cess
-	taxAmount := lineSubtotal * taxRatePct / 100
-	lineTotal := lineSubtotal + taxAmount
+	//
+	// The tax split itself (added on top for a tax-exclusive product,
+	// extracted from the price for a tax-inclusive one) lives in
+	// internal/taxcalc — the one place every line writer computes it.
+	// A wholesale price-list price is interpreted in the same basis as
+	// the product's own price_includes_tax flag.
+	calc := taxcalc.ComputeLine(sellingPrice, quantity, 0, cgst+sgst+igst+cess, priceIncludesTax)
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO stock_reservations (id, merchant_id, branch_id, variant_id, sales_order_id, quantity, status, expires_at)
@@ -325,10 +335,10 @@ func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 
 	var lineID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6)
+		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7)
 		RETURNING id`,
-		orderID, variantID, quantity, sellingPrice, taxAmount, lineTotal).Scan(&lineID); err != nil {
+		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax).Scan(&lineID); err != nil {
 		return resp, err
 	}
 	if trackBatch {
@@ -746,17 +756,25 @@ func loadOrder(ctx context.Context, tx pgx.Tx, orderID string, resp *orderRespon
 // sales_order_lines — the source of truth is always the lines, never a
 // running total maintained incrementally, so this is safe to call after any
 // line-mutating operation (add, discount, delete) without needing to track
-// deltas. grand_total is computed explicitly as subtotal - discount + tax
-// rather than SUM(line_total) alone, so it's correct even if a caller ever
-// leaves line_total stale — belt-and-suspenders given how easy it is for a
-// per-line total to drift from the columns it's derived from.
+// deltas. Totals are derived from the generated taxable_value column
+// (migrations/033) rather than unit_price*quantity, because for a
+// tax-inclusive line unit_price already contains tax:
+//
+//	subtotal    = SUM(taxable_value + discount_amount)  (pre-discount, pre-tax)
+//	grand_total = SUM(taxable_value + tax_amount)
+//
+// so subtotal - discount_total + tax_total = grand_total holds for both
+// modes, and subtotal - discount_total is always the true taxable value
+// postSaleJournal books as revenue. For a tax-exclusive line these are
+// exactly the original unit_price*quantity and unit_price*quantity -
+// discount_amount + tax_amount expressions — nothing changes for them.
 func recalcOrderTotals(ctx context.Context, tx pgx.Tx, orderID string, resp *orderResponse) error {
 	row := tx.QueryRow(ctx, `
 		UPDATE sales_orders SET
-		  subtotal = (SELECT COALESCE(SUM(unit_price*quantity),0) FROM sales_order_lines WHERE sales_order_id = $1),
+		  subtotal = (SELECT COALESCE(SUM(taxable_value + discount_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
 		  tax_total = (SELECT COALESCE(SUM(tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
 		  discount_total = (SELECT COALESCE(SUM(discount_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
-		  grand_total = (SELECT COALESCE(SUM(unit_price*quantity - discount_amount + tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1)
+		  grand_total = (SELECT COALESCE(SUM(taxable_value + tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1)
 		WHERE id = $1
 		RETURNING id, order_number, status, channel, subtotal::text, discount_total::text, tax_total::text, grand_total::text`, orderID)
 	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status, &resp.Channel,
@@ -777,7 +795,8 @@ func recalcOrderTotals(ctx context.Context, tx pgx.Tx, orderID string, resp *ord
 func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT sol.id, sol.variant_id, pv.sku, p.name, sol.quantity::text,
-		       sol.unit_price::text, sol.discount_amount::text, sol.tax_amount::text, sol.line_total::text
+		       sol.unit_price::text, sol.discount_amount::text, sol.tax_amount::text, sol.line_total::text,
+		       sol.taxable_value::text, sol.price_includes_tax
 		FROM sales_order_lines sol
 		JOIN product_variants pv ON pv.id = sol.variant_id
 		JOIN products p ON p.id = pv.product_id
@@ -792,7 +811,8 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 	for rows.Next() {
 		var l orderLine
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity,
-			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal); err != nil {
+			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal,
+			&l.TaxableValue, &l.PriceIncludesTax); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

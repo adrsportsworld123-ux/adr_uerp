@@ -33,6 +33,7 @@ import (
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/sales"
+	"erp-core-go/internal/taxcalc"
 )
 
 type Handler struct {
@@ -48,6 +49,8 @@ type quotationLine struct {
 	UnitPrice   string `json:"unit_price"`
 	TaxAmount   string `json:"tax_amount"`
 	LineTotal   string `json:"line_total"`
+	// true = UnitPrice already contains tax (migrations/033)
+	PriceIncludesTax bool `json:"price_includes_tax"`
 }
 
 type quotationResponse struct {
@@ -157,14 +160,15 @@ func (h *Handler) CreateQuotation(w http.ResponseWriter, r *http.Request) {
 		for _, l := range req.Lines {
 			var cgst, sgst, igst, cess float64
 			var sku, productName string
+			var priceIncludesTax bool
 			if err := tx.QueryRow(ctx, `
 				SELECT pv.sku, p.name, COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0)
+				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
 				FROM product_variants pv
 				JOIN products p ON p.id = pv.product_id
 				LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 				WHERE pv.id = $1`, l.VariantID,
-			).Scan(&sku, &productName, &cgst, &sgst, &igst, &cess); err != nil {
+			).Scan(&sku, &productName, &cgst, &sgst, &igst, &cess, &priceIncludesTax); err != nil {
 				return err
 			}
 
@@ -182,17 +186,21 @@ func (h *Handler) CreateQuotation(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			lineSubtotal := unitPrice * l.Quantity
-			taxAmount := lineSubtotal * (cgst + sgst + igst + cess) / 100
-			lineTotal := lineSubtotal + taxAmount
-			subtotal += lineSubtotal
-			taxTotal += taxAmount
-			grandTotal += lineTotal
+			// unit_price (resolved or caller-supplied) is interpreted in
+			// the product's own pricing basis — tax-inclusive or not —
+			// exactly as sales.AddLineToCart does, so a converted quote
+			// bills the same total it quoted. subtotal accumulates the
+			// pre-tax taxable value so subtotal + tax = grand total in
+			// both modes.
+			calc := taxcalc.ComputeLine(unitPrice, l.Quantity, 0, cgst+sgst+igst+cess, priceIncludesTax)
+			subtotal += calc.Taxable
+			taxTotal += calc.Tax
+			grandTotal += calc.Total
 
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO quotation_lines (id, quotation_id, variant_id, quantity, unit_price, tax_amount, line_total)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)`,
-				quotationID, l.VariantID, l.Quantity, unitPrice, taxAmount, lineTotal); err != nil {
+				INSERT INTO quotation_lines (id, quotation_id, variant_id, quantity, unit_price, tax_amount, line_total, price_includes_tax)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
+				quotationID, l.VariantID, l.Quantity, unitPrice, calc.Tax, calc.Total, priceIncludesTax); err != nil {
 				return err
 			}
 		}
@@ -306,7 +314,7 @@ func loadQuotation(ctx context.Context, tx pgx.Tx, quotationID string) (quotatio
 
 	rows, err := tx.Query(ctx, `
 		SELECT ql.id::text, ql.variant_id::text, pv.sku, p.name, ql.quantity::text, ql.unit_price::text,
-		       ql.tax_amount::text, ql.line_total::text
+		       ql.tax_amount::text, ql.line_total::text, ql.price_includes_tax
 		FROM quotation_lines ql
 		JOIN product_variants pv ON pv.id = ql.variant_id
 		JOIN products p ON p.id = pv.product_id
@@ -320,7 +328,7 @@ func loadQuotation(ctx context.Context, tx pgx.Tx, quotationID string) (quotatio
 	for rows.Next() {
 		var l quotationLine
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity, &l.UnitPrice,
-			&l.TaxAmount, &l.LineTotal); err != nil {
+			&l.TaxAmount, &l.LineTotal, &l.PriceIncludesTax); err != nil {
 			return resp, err
 		}
 		resp.Lines = append(resp.Lines, l)

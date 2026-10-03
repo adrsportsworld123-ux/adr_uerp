@@ -40,14 +40,19 @@ type createVariantInput struct {
 }
 
 type createProductRequest struct {
-	Name             string               `json:"name"`
-	ShortDescription string               `json:"short_description"`
-	HSNCode          string               `json:"hsn_code"`
-	CategoryID       string               `json:"category_id"`
-	BrandID          string               `json:"brand_id"`
-	TaxSlabID        string               `json:"tax_slab_id"`
-	CollectionID     string               `json:"collection_id"` // Phase 8 (Apparel) — optional, "" = no collection
-	ProductType      string               `json:"product_type"`  // "simple" | "variant" | "composite"; defaults to "simple"
+	Name             string `json:"name"`
+	ShortDescription string `json:"short_description"`
+	HSNCode          string `json:"hsn_code"`
+	CategoryID       string `json:"category_id"`
+	BrandID          string `json:"brand_id"`
+	TaxSlabID        string `json:"tax_slab_id"`
+	CollectionID     string `json:"collection_id"` // Phase 8 (Apparel) — optional, "" = no collection
+	ProductType      string `json:"product_type"`  // "simple" | "variant" | "composite"; defaults to "simple"
+	// PriceIncludesTax: whether the variants' selling_price/mrp already
+	// include tax (migrations/033). nil = use the merchant's
+	// pricing_settings.prices_include_tax_default (itself false when the
+	// merchant never set one).
+	PriceIncludesTax *bool                `json:"price_includes_tax"`
 	Variants         []createVariantInput `json:"variants"`
 }
 
@@ -72,6 +77,7 @@ type productResponse struct {
 	CollectionID     *string           `json:"collection_id"`
 	ProductType      string            `json:"product_type"`
 	Status           string            `json:"status"`
+	PriceIncludesTax bool              `json:"price_includes_tax"`
 	Variants         []variantResponse `json:"variants"`
 }
 
@@ -119,12 +125,21 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 
 	var resp productResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var priceIncludesTax bool
+		if req.PriceIncludesTax != nil {
+			priceIncludesTax = *req.PriceIncludesTax
+		} else if err := tx.QueryRow(ctx, `
+			SELECT COALESCE((SELECT prices_include_tax_default FROM pricing_settings), false)`,
+		).Scan(&priceIncludesTax); err != nil {
+			return err
+		}
+
 		var productID string
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, collection_id, name, short_description, hsn_code, product_type)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8)
+			INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, collection_id, name, short_description, hsn_code, product_type, price_includes_tax)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9)
 			RETURNING id`,
-			categoryID, brandID, taxSlabID, collectionID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType,
+			categoryID, brandID, taxSlabID, collectionID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType, priceIncludesTax,
 		).Scan(&productID); err != nil {
 			return err
 		}
@@ -207,7 +222,7 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 		resp = productResponse{
 			ProductID: productID, Name: req.Name, ShortDescription: req.ShortDescription, HSNCode: req.HSNCode,
 			CategoryID: categoryID, BrandID: brandID, TaxSlabID: taxSlabID, CollectionID: collectionID,
-			ProductType: req.ProductType, Status: "active", Variants: variants,
+			ProductType: req.ProductType, Status: "active", PriceIncludesTax: priceIncludesTax, Variants: variants,
 		}
 		return nil
 	})
@@ -239,6 +254,11 @@ type updateProductRequest struct {
 	TaxSlabID        *string `json:"tax_slab_id"`
 	CollectionID     *string `json:"collection_id"`
 	Status           *string `json:"status"` // "active" | "inactive" | "discontinued"
+	// Flipping this reinterprets every variant's existing selling_price
+	// (₹1180 exclusive → customer pays ₹1392.40; ₹1180 inclusive →
+	// customer pays ₹1180). Sales already made keep their own snapshot
+	// (sales_order_lines.price_includes_tax); open carts' lines too.
+	PriceIncludesTax *bool `json:"price_includes_tax"`
 }
 
 // UpdateProduct: PATCH /products/{id} — gated by catalog.manage. Product-
@@ -275,9 +295,10 @@ func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 				tax_slab_id = COALESCE($6::uuid, tax_slab_id),
 				status = COALESCE($7, status),
 				collection_id = COALESCE($9::uuid, collection_id),
+				price_includes_tax = COALESCE($10, price_includes_tax),
 				updated_at = now()
 			WHERE id = $8`,
-			req.Name, req.ShortDescription, req.HSNCode, req.CategoryID, req.BrandID, req.TaxSlabID, req.Status, productID, req.CollectionID,
+			req.Name, req.ShortDescription, req.HSNCode, req.CategoryID, req.BrandID, req.TaxSlabID, req.Status, productID, req.CollectionID, req.PriceIncludesTax,
 		)
 		if err != nil {
 			return err

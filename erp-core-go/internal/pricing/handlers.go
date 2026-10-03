@@ -24,6 +24,7 @@ import (
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/search"
+	"erp-core-go/internal/taxcalc"
 )
 
 type Handler struct {
@@ -63,12 +64,19 @@ type calculateRequest struct {
 	CostPrice float64  `json:"cost_price"`
 	MarkupPct *float64 `json:"markup_pct"`
 	MarginPct *float64 `json:"margin_pct"`
+	// Optional (migrations/033): when PriceIncludesTax is true, the
+	// returned selling_price is grossed up by TaxRatePct so it can be
+	// saved as a tax-inclusive price; margin/markup still apply to the
+	// net (pre-tax) price, which is also returned.
+	TaxRatePct       float64 `json:"tax_rate_pct"`
+	PriceIncludesTax bool    `json:"price_includes_tax"`
 }
 
 type calculateResponse struct {
-	SellingPrice float64  `json:"selling_price"`
-	MarginPct    *float64 `json:"margin_pct"`
-	MarkupPct    *float64 `json:"markup_pct"`
+	SellingPrice    float64  `json:"selling_price"`
+	NetSellingPrice float64  `json:"net_selling_price"`
+	MarginPct       *float64 `json:"margin_pct"`
+	MarkupPct       *float64 `json:"markup_pct"`
 }
 
 func (h *Handler) Calculate(w http.ResponseWriter, r *http.Request) {
@@ -98,10 +106,20 @@ func (h *Handler) Calculate(w http.ResponseWriter, r *http.Request) {
 		sellingPrice = req.CostPrice / (1 - *req.MarginPct/100)
 	}
 
+	if req.TaxRatePct < 0 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "tax_rate_pct cannot be negative")
+		return
+	}
+	net := round2(sellingPrice)
+	selling := net
+	if req.PriceIncludesTax {
+		selling = taxcalc.GrossPrice(net, req.TaxRatePct, false)
+	}
 	httpx.JSON(w, http.StatusOK, calculateResponse{
-		SellingPrice: round2(sellingPrice),
-		MarginPct:    marginPct(sellingPrice, req.CostPrice),
-		MarkupPct:    markupPct(sellingPrice, req.CostPrice),
+		SellingPrice:    selling,
+		NetSellingPrice: net,
+		MarginPct:       marginPct(sellingPrice, req.CostPrice),
+		MarkupPct:       markupPct(sellingPrice, req.CostPrice),
 	})
 }
 
@@ -121,12 +139,14 @@ type updatePricingRequest struct {
 }
 
 type pricingResponse struct {
-	VariantID    string   `json:"variant_id"`
-	CostPrice    float64  `json:"cost_price"`
-	MRP          float64  `json:"mrp"`
-	SellingPrice float64  `json:"selling_price"`
-	MarginPct    *float64 `json:"margin_pct"`
-	MarkupPct    *float64 `json:"markup_pct"`
+	VariantID        string   `json:"variant_id"`
+	CostPrice        float64  `json:"cost_price"`
+	MRP              float64  `json:"mrp"`
+	SellingPrice     float64  `json:"selling_price"`
+	NetSellingPrice  float64  `json:"net_selling_price"`
+	PriceIncludesTax bool     `json:"price_includes_tax"`
+	MarginPct        *float64 `json:"margin_pct"`
+	MarkupPct        *float64 `json:"markup_pct"`
 }
 
 func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +170,10 @@ func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
 			Scan(&costPrice, &mrp, &sellingPrice); err != nil {
 			return err
 		}
+		taxRatePct, inclusive, err := loadTaxBasis(ctx, tx, variantID)
+		if err != nil {
+			return err
+		}
 
 		newCost, newMRP, newSelling := costPrice, mrp, sellingPrice
 		if req.CostPrice != nil {
@@ -162,7 +186,11 @@ func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
 			newSelling = *req.SellingPrice
 		}
 
-		if newSelling < newCost && !req.Override {
+		// Compared on the NET price: ₹1000 tax-inclusive at 18% is only
+		// ₹847.46 of revenue, so a ₹900 cost is a loss even though
+		// 1000 > 900.
+		newNet := taxcalc.NetPrice(newSelling, taxRatePct, inclusive)
+		if newNet < newCost && !req.Override {
 			return errNegativeMargin
 		}
 
@@ -183,7 +211,8 @@ func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
 
 		resp = pricingResponse{
 			VariantID: variantID, CostPrice: newCost, MRP: newMRP, SellingPrice: newSelling,
-			MarginPct: marginPct(newSelling, newCost), MarkupPct: markupPct(newSelling, newCost),
+			NetSellingPrice: newNet, PriceIncludesTax: inclusive,
+			MarginPct: marginPct(newNet, newCost), MarkupPct: markupPct(newNet, newCost),
 		}
 		return nil
 	})

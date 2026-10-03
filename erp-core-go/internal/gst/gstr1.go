@@ -192,11 +192,11 @@ func loadB2B(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1B2BPa
 	rows, err := tx.Query(ctx, `
 		SELECT so.id, so.order_number, so.finalized_at::date::text, so.grand_total::text, c.gstin,
 		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) AS rate,
-		       SUM(sol.unit_price*sol.quantity - sol.discount_amount) AS txval,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.igst_rate,0) / 100) AS igst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cess_rate,0) / 100) AS cess
+		       SUM(sol.taxable_value) AS txval,
+		       SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
+		       SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
+		       SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100) AS igst,
+		       SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100) AS cess
 		FROM sales_orders so
 		JOIN customers c ON c.id = so.customer_id
 		JOIN sales_order_lines sol ON sol.sales_order_id = so.id
@@ -265,11 +265,11 @@ func loadB2CS(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1B2CS
 	rows, err := tx.Query(ctx, `
 		SELECT COALESCE(b.gstin,''),
 		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) AS rate,
-		       SUM(sol.unit_price*sol.quantity - sol.discount_amount) AS txval,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.igst_rate,0) / 100) AS igst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cess_rate,0) / 100) AS cess
+		       SUM(sol.taxable_value) AS txval,
+		       SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
+		       SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
+		       SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100) AS igst,
+		       SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100) AS cess
 		FROM sales_order_lines sol
 		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN branches b ON b.id = so.branch_id
@@ -312,11 +312,11 @@ func loadHSN(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1HSNEn
 		SELECT COALESCE(p.hsn_code,''), p.name,
 		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) AS rate,
 		       SUM(sol.quantity) AS qty,
-		       SUM(sol.unit_price*sol.quantity - sol.discount_amount) AS txval,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.igst_rate,0) / 100) AS igst,
-		       SUM((sol.unit_price*sol.quantity - sol.discount_amount) * COALESCE(ts.cess_rate,0) / 100) AS cess
+		       SUM(sol.taxable_value) AS txval,
+		       SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
+		       SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
+		       SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100) AS igst,
+		       SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100) AS cess
 		FROM sales_order_lines sol
 		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id

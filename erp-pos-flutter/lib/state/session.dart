@@ -36,7 +36,88 @@ class AppSession extends ChangeNotifier {
 
   final OfflineStore _offline = OfflineStore();
 
-  AppSession({required this.api, required this.branchId, required this.posTerminalId});
+  AppSession({required this.api, required this.branchId, required this.posTerminalId}) {
+    api.canRefresh = () => !_isIdle;
+    api.onSessionExpired = _endSession;
+  }
+
+  // ---------------------------------------------------------------------
+  // Session lifecycle — same rules as erp-web-admin's lib/api-client.ts.
+  // The access token's lifetime is the FRD's role-based inactivity
+  // timeout (POS User 15 min), and refresh tokens last 30 days, so:
+  //   - cashier active, token about to lapse     -> silent refresh
+  //   - no input for a full session window       -> back to LoginScreen
+  //   - refresh rejected (revoked/locked/expired) -> back to LoginScreen
+  // Offline-first exception: while the server is unreachable the session
+  // is never ended (re-login needs the server, so ending it would block
+  // offline selling outright); the idle check resumes once back online.
+  // ---------------------------------------------------------------------
+  DateTime _lastActivity = DateTime.now();
+  Timer? _sessionTimer;
+
+  /// Why the last session ended, for LoginScreen to show once.
+  String? sessionEndedNotice;
+
+  bool get _isIdle {
+    final window = api.sessionWindow;
+    return window != null && DateTime.now().difference(_lastActivity) >= window;
+  }
+
+  /// Real cashier input (taps, scanner/keyboard) — wired in main.dart.
+  void markActivity() => _lastActivity = DateTime.now();
+
+  void _startSessionTimer() {
+    _lastActivity = DateTime.now();
+    _sessionTimer?.cancel();
+    _sessionTimer = Timer.periodic(const Duration(seconds: 15), (_) => checkSession());
+  }
+
+  /// Proactive check, also called when the app returns to the foreground.
+  Future<void> checkSession() async {
+    if (!isLoggedIn || offlineMode) return;
+    if (_isIdle) {
+      api.expireSession(SessionEndReason.idle);
+      return;
+    }
+    if (api.accessTokenExpiringSoon && await api.refresh() == RefreshOutcome.rejected) {
+      api.expireSession(SessionEndReason.revoked);
+    }
+  }
+
+  void _endSession(SessionEndReason reason) {
+    _resetToLoggedOut();
+    sessionEndedNotice = sessionEndedMessage(reason);
+    notifyListeners();
+  }
+
+  /// Manual sign-out from the POS screen.
+  void logout() {
+    api.clearSession();
+    _resetToLoggedOut();
+    notifyListeners();
+  }
+
+  // A server-backed cart left open is reclaimed by the backend's 15-minute
+  // reservation-expiry sweeper; an offline-built order stays queued in
+  // OfflineStore and still syncs after the next login.
+  void _resetToLoggedOut() {
+    _sessionTimer?.cancel();
+    _sessionTimer = null;
+    userId = null;
+    roles = [];
+    currentOrder = null;
+    _currentOrderIsLocal = false;
+    attachedCustomerId = null;
+    attachedCustomerName = null;
+    loyaltyAvailablePoints = null;
+    _lastError = null;
+  }
+
+  @override
+  void dispose() {
+    _sessionTimer?.cancel();
+    super.dispose();
+  }
 
   String? userId;
   List<String> roles = [];
@@ -75,6 +156,8 @@ class AppSession extends ChangeNotifier {
       userId = result.userId;
       roles = result.roles;
       offlineMode = false;
+      sessionEndedNotice = null;
+      _startSessionTimer();
       notifyListeners();
       unawaited(_refreshCatalogCache());
       unawaited(refreshPendingSyncCount());
@@ -99,6 +182,8 @@ class AppSession extends ChangeNotifier {
       userId = result.userId;
       roles = result.roles;
       offlineMode = false;
+      sessionEndedNotice = null;
+      _startSessionTimer();
       notifyListeners();
       unawaited(_refreshCatalogCache());
       unawaited(refreshPendingSyncCount());
@@ -165,6 +250,7 @@ class AppSession extends ChangeNotifier {
                           'discount_amount': l['discount_amount'],
                           'tax_amount': l['tax_amount'],
                           'line_total': l['line_total'],
+                          'price_includes_tax': (l['price_includes_tax'] as int? ?? 0) == 1,
                         })
                     .toList(),
                 'payments': o.payments

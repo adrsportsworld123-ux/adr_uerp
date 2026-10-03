@@ -16,7 +16,7 @@ Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4 (CSS-b
 
 ## Auth model
 
-Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — deliberately consistent with how the Flutter POS app authenticates against the same backend, not a second pattern. `useRequireAuth()` is a client-side redirect guard, not middleware (middleware would need the token in a cookie). Session restore-from-localStorage happens in a `useEffect` post-mount, not a lazy `useState` initializer — this app is server-rendered first, so reading `localStorage` during render would either crash (no `window`) or cause a hydration mismatch.
+Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — deliberately consistent with how the Flutter POS app authenticates against the same backend, not a second pattern. `useRequireAuth()` is a client-side redirect guard, not middleware (middleware would need the token in a cookie). Session restore-from-localStorage happens in a `useEffect` post-mount, not a lazy `useState` initializer — this app is server-rendered first, so reading `localStorage` during render would either crash (no `window`) or cause a hydration mismatch. **Session expiry** (`lib/api-client.ts` "Session lifecycle" block, driven by `AuthProvider`): silent `POST /auth/refresh` while the user is active; back to `/login` with a reason after a full role-tier inactivity window or a rejected refresh, returning to the same page after re-login. Don't "simplify" this into refresh-on-every-401 — that would turn the FRD's 15-minute inactivity timeout into the refresh token's 30 days. See `../erp-core-go/docs/phase0_1_design.md` §3.29.
 
 ## Current state
 

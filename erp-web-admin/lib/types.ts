@@ -11,6 +11,11 @@ export interface ProductVariant {
   cost_price: string;
   mrp: string;
   selling_price: string;
+  // selling_price with tax removed (= selling_price when tax-exclusive) —
+  // what margin/markup are computed on, since cost_price is pre-tax.
+  net_selling_price: string;
+  // What the customer pays for one unit, tax included.
+  gross_selling_price: string;
   margin_pct: number | null;
   markup_pct: number | null;
   // This variant's two possible barcodes (internal/catalog/barcode_assign.go) —
@@ -25,7 +30,16 @@ export interface Product {
   product_id: string;
   name: string;
   hsn_code: string;
+  // erp-core-go migrations/033: whether every variant's selling_price
+  // already includes tax, and the product's total tax rate.
+  price_includes_tax: boolean;
+  tax_rate_pct: number;
   variants: ProductVariant[];
+}
+
+// GET/PUT /pricing/settings — merchant-wide default for new products.
+export interface PricingSettings {
+  prices_include_tax_default: boolean;
 }
 
 // From GET /products/search (internal/search) — a denormalized OpenSearch
@@ -739,6 +753,7 @@ export interface CreatedProduct {
   collection_id: string | null;
   product_type: string;
   status: string;
+  price_includes_tax: boolean;
   variants: {
     variant_id: string;
     sku: string;

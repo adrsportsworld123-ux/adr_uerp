@@ -306,6 +306,11 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Get("/audit-logs/verify", auditH.VerifyChain)
 
 			protected.Post("/pricing/calculate", prc.Calculate)
+			// Merchant-wide pricing defaults (migrations/033): currently
+			// the tax-inclusive default for new products.
+			protected.Get("/pricing/settings", prc.GetSettings)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Put("/pricing/settings", prc.UpdateSettings)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Patch("/pricing/variants/{id}", prc.UpdateVariantPricing)
 			protected.Post("/pricing/bulk-update/preview", prc.PreviewBulkUpdate)

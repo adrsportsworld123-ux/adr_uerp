@@ -35,6 +35,10 @@ type pushLine struct {
 	DiscountAmount float64 `json:"discount_amount"`
 	TaxAmount      float64 `json:"tax_amount"`
 	LineTotal      float64 `json:"line_total"`
+	// PriceIncludesTax mirrors the cached catalog entry's flag the device
+	// priced this line with (see Pull). Absent from older clients, which
+	// only ever priced tax-exclusive — false is the correct default.
+	PriceIncludesTax bool `json:"price_includes_tax"`
 }
 
 type pushPayment struct {
@@ -135,9 +139,9 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 		var subtotal, discountTotal, taxTotal, grandTotal float64
 		for _, l := range o.Lines {
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
-				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal); err != nil {
+				INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)`,
+				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal, l.PriceIncludesTax); err != nil {
 				return err
 			}
 
@@ -149,7 +153,14 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 				negativeStock = true
 			}
 
-			subtotal += l.UnitPrice * l.Quantity
+			// Same subtotal definition as sales.recalcOrderTotals:
+			// pre-discount taxable value, so subtotal - discount + tax =
+			// grand total for an inclusive line too.
+			if l.PriceIncludesTax {
+				subtotal += l.LineTotal - l.TaxAmount + l.DiscountAmount
+			} else {
+				subtotal += l.UnitPrice * l.Quantity
+			}
 			discountTotal += l.DiscountAmount
 			taxTotal += l.TaxAmount
 			grandTotal += l.LineTotal

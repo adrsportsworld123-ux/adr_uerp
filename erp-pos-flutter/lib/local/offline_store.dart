@@ -12,7 +12,9 @@ import 'local_db.dart';
 class CachedProduct {
   final ProductLookup lookup;
   final double cgstRate, sgstRate, igstRate, cessRate;
-  CachedProduct(this.lookup, this.cgstRate, this.sgstRate, this.igstRate, this.cessRate);
+  // true = lookup.sellingPrice already includes tax (erp-core-go migrations/033)
+  final bool priceIncludesTax;
+  CachedProduct(this.lookup, this.cgstRate, this.sgstRate, this.igstRate, this.cessRate, {this.priceIncludesTax = false});
 }
 
 /// Everything needed to POST one order to /sync/push, read back out of
@@ -50,6 +52,7 @@ class OfflineStore {
         'sgst_rate': (e['sgst_rate'] as num).toDouble(),
         'igst_rate': (e['igst_rate'] as num).toDouble(),
         'cess_rate': (e['cess_rate'] as num).toDouble(),
+        'price_includes_tax': (e['price_includes_tax'] as bool? ?? false) ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
@@ -99,6 +102,7 @@ class OfflineStore {
       r['sgst_rate'] as double,
       r['igst_rate'] as double,
       r['cess_rate'] as double,
+      priceIncludesTax: (r['price_includes_tax'] as int? ?? 0) == 1,
     );
   }
 
@@ -119,10 +123,22 @@ class OfflineStore {
   Future<OrderSummary> addLine(String pendingOrderId, CachedProduct product, double quantity) async {
     final db = await LocalDb.instance.db;
     final unitPrice = double.parse(product.lookup.sellingPrice);
-    final lineSubtotal = unitPrice * quantity;
     final taxRatePct = product.cgstRate + product.sgstRate + product.igstRate + product.cessRate;
-    final taxAmount = _round2(lineSubtotal * taxRatePct / 100);
-    final lineTotal = lineSubtotal + taxAmount;
+    // Mirrors erp-core-go's internal/taxcalc.ComputeLine exactly, so a sale
+    // rung up offline bills the same total the server would have:
+    // exclusive adds tax on top; inclusive extracts it from the line's
+    // whole total (3 x 1000 incl. 18% = exactly 3000.00, tax 457.63).
+    final gross = _round2(unitPrice * quantity);
+    final double taxAmount;
+    final double lineTotal;
+    if (product.priceIncludesTax) {
+      final taxable = _round2(gross * 100 / (100 + taxRatePct));
+      taxAmount = _round2(gross - taxable);
+      lineTotal = gross;
+    } else {
+      taxAmount = _round2(gross * taxRatePct / 100);
+      lineTotal = _round2(gross + taxAmount);
+    }
 
     await db.insert('pending_order_lines', {
       'id': _newId(),
@@ -135,6 +151,7 @@ class OfflineStore {
       'discount_amount': 0,
       'tax_amount': taxAmount,
       'line_total': lineTotal,
+      'price_includes_tax': product.priceIncludesTax ? 1 : 0,
     });
 
     return _recalcAndLoad(pendingOrderId);
@@ -218,7 +235,10 @@ class OfflineStore {
       final discountAmount = r['discount_amount'] as double;
       final taxAmount = r['tax_amount'] as double;
       final lineTotal = r['line_total'] as double;
-      subtotal += unitPrice * quantity;
+      // Same subtotal definition as the server's recalcOrderTotals:
+      // pre-discount taxable value, so subtotal - discount + tax = total
+      // for an inclusive line too (where unit_price already contains tax).
+      subtotal += (r['price_includes_tax'] as int? ?? 0) == 1 ? lineTotal - taxAmount + discountAmount : unitPrice * quantity;
       discountTotal += discountAmount;
       taxTotal += taxAmount;
       grandTotal += lineTotal;

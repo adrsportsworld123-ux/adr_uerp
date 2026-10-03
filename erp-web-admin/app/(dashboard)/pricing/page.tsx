@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Product, ProductVariant } from "@/lib/types";
+import { PricingSettings, Product, ProductVariant } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,6 +43,8 @@ export default function PricingPage() {
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
 
+      <TaxPricingSettings />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Products</CardTitle>
@@ -56,7 +58,8 @@ export default function PricingPage() {
                 <TableHead>Cost</TableHead>
                 <TableHead>MRP</TableHead>
                 <TableHead>Selling</TableHead>
-                <TableHead>Margin</TableHead>
+                <TableHead>GST basis</TableHead>
+                <TableHead title="Computed on the pre-GST (net) selling price">Margin</TableHead>
                 <TableHead>Markup</TableHead>
                 <TableHead>Barcode</TableHead>
                 <TableHead></TableHead>
@@ -65,7 +68,7 @@ export default function PricingPage() {
             <TableBody>
               {products.flatMap((p) =>
                 p.variants.map((v) => (
-                  <VariantRow key={v.variant_id} productName={p.name} variant={v} onSaved={load} />
+                  <VariantRow key={v.variant_id} product={p} variant={v} onSaved={load} />
                 ))
               )}
             </TableBody>
@@ -79,7 +82,7 @@ export default function PricingPage() {
   );
 }
 
-function VariantRow({ productName, variant, onSaved }: { productName: string; variant: ProductVariant; onSaved: () => void }) {
+function VariantRow({ product, variant, onSaved }: { product: Product; variant: ProductVariant; onSaved: () => void }) {
   const [editing, setEditing] = useState(false);
   const [sellingPrice, setSellingPrice] = useState(variant.selling_price);
   const [reason, setReason] = useState("");
@@ -112,7 +115,7 @@ function VariantRow({ productName, variant, onSaved }: { productName: string; va
 
   return (
     <TableRow>
-      <TableCell>{productName}</TableCell>
+      <TableCell>{product.name}</TableCell>
       <TableCell className="font-mono text-xs">{variant.sku}</TableCell>
       <TableCell>₹{variant.cost_price}</TableCell>
       <TableCell>₹{variant.mrp}</TableCell>
@@ -120,8 +123,17 @@ function VariantRow({ productName, variant, onSaved }: { productName: string; va
         {editing ? (
           <Input className="w-24" type="number" step="0.01" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} />
         ) : (
-          `₹${variant.selling_price}`
+          <div className="flex flex-col">
+            <span>₹{variant.selling_price}</span>
+            {/* Server-computed (internal/taxcalc) — never derived in JS, see lib/api-client.ts's money note */}
+            <span className="text-xs text-zinc-500">
+              {product.price_includes_tax ? `net ₹${variant.net_selling_price}` : `customer pays ₹${variant.gross_selling_price}`}
+            </span>
+          </div>
         )}
+      </TableCell>
+      <TableCell>
+        <TaxBasisCell product={product} onChanged={onSaved} />
       </TableCell>
       <TableCell className={marginClass(variant.margin_pct)}>{variant.margin_pct ?? "—"}%</TableCell>
       <TableCell className={marginClass(variant.markup_pct)}>{variant.markup_pct ?? "—"}%</TableCell>
@@ -154,6 +166,96 @@ function VariantRow({ productName, variant, onSaved }: { productName: string; va
         )}
       </TableCell>
     </TableRow>
+  );
+}
+
+// Merchant-wide default for NEW products only (GET/PUT /pricing/settings,
+// PUT gated by pricing.manage) — existing products keep their own flag.
+// Saves on toggle; a 403 surfaces as a toast like every other gated write.
+function TaxPricingSettings() {
+  const [settings, setSettings] = useState<PricingSettings | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<PricingSettings>("/api/v1/pricing/settings")
+      .then(setSettings)
+      .catch(() => {});
+  }, []);
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    try {
+      setSettings(await api.put<PricingSettings>("/api/v1/pricing/settings", { prices_include_tax_default: next }));
+      toast.success(next ? "New products will default to GST-inclusive prices" : "New products will default to GST-exclusive prices");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not save pricing settings");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">GST pricing default</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-1">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            id="pricesIncludeTaxDefault"
+            type="checkbox"
+            disabled={!settings || busy}
+            checked={settings?.prices_include_tax_default ?? false}
+            onChange={(e) => toggle(e.target.checked)}
+          />
+          New products&apos; selling prices include GST
+        </label>
+        <p className="text-xs text-zinc-500">
+          Inclusive (MRP-style): the customer pays exactly the selling price and GST is extracted from it. Exclusive: GST is added on
+          top at billing. Each product can override this below; changing it never affects existing products.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Per-product inclusive/exclusive switch (PATCH /products/{id}, gated by
+// catalog.manage). Switching reinterprets the stored selling price rather
+// than converting it (₹1180 stays ₹1180 — what the customer pays changes),
+// so it asks first. Sales already made keep their own snapshot.
+function TaxBasisCell({ product, onChanged }: { product: Product; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  async function flip() {
+    const next = !product.price_includes_tax;
+    const ok = window.confirm(
+      `Switch "${product.name}" to GST-${next ? "inclusive" : "exclusive"} pricing?\n\n` +
+        `The stored selling price stays the same, so the customer will pay ` +
+        `${next ? "exactly that price (GST extracted from it)" : "that price PLUS GST"}. Adjust the price afterwards if needed.`
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await api.patch(`/api/v1/products/${product.product_id}`, { price_includes_tax: next });
+      toast.success(`${product.name}: prices now GST-${next ? "inclusive" : "exclusive"}`);
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not change GST basis");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-1 text-xs">
+      <span className={`rounded px-1.5 py-0.5 ${product.price_includes_tax ? "bg-emerald-50 text-emerald-700" : "bg-zinc-100 text-zinc-700"}`}>
+        {product.price_includes_tax ? "Incl." : "Excl."} GST {product.tax_rate_pct}%
+      </span>
+      <Button size="sm" variant="ghost" className="h-6 px-1 text-xs" disabled={busy} onClick={flip}>
+        Switch to {product.price_includes_tax ? "excl." : "incl."}
+      </Button>
+    </div>
   );
 }
 
@@ -216,21 +318,35 @@ function BarcodeCell({ variant, onAssigned }: { variant: ProductVariant; onAssig
   );
 }
 
+interface CalculateResult {
+  selling_price: number;
+  net_selling_price: number;
+  margin_pct: number | null;
+  markup_pct: number | null;
+}
+
+// Margin/markup always apply to the pre-GST price (cost is pre-GST too);
+// with "Price includes GST" the result is grossed up so it can be saved
+// directly as an inclusive selling price.
 function Calculator() {
   const [costPrice, setCostPrice] = useState("");
   const [mode, setMode] = useState<"margin_pct" | "markup_pct">("margin_pct");
   const [pct, setPct] = useState("");
-  const [result, setResult] = useState<{ selling_price: number; margin_pct: number | null; markup_pct: number | null } | null>(null);
+  const [taxRate, setTaxRate] = useState("");
+  const [inclusive, setInclusive] = useState(false);
+  const [result, setResult] = useState<CalculateResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function calculate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     try {
-      const res = await api.post<{ selling_price: number; margin_pct: number | null; markup_pct: number | null }>(
-        "/api/v1/pricing/calculate",
-        { cost_price: Number(costPrice), [mode]: Number(pct) }
-      );
+      const res = await api.post<CalculateResult>("/api/v1/pricing/calculate", {
+        cost_price: Number(costPrice),
+        [mode]: Number(pct),
+        tax_rate_pct: Number(taxRate) || 0,
+        price_includes_tax: inclusive,
+      });
       setResult(res);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not reach the server");
@@ -268,12 +384,31 @@ function Calculator() {
             <Label htmlFor="pct">%</Label>
             <Input id="pct" type="number" step="0.01" required className="w-24" value={pct} onChange={(e) => setPct(e.target.value)} />
           </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="calcTaxRate">GST %</Label>
+            <Input
+              id="calcTaxRate"
+              type="number"
+              min="0"
+              step="0.01"
+              className="w-20"
+              placeholder="0"
+              value={taxRate}
+              onChange={(e) => setTaxRate(e.target.value)}
+            />
+          </div>
+          <label className="flex items-center gap-2 text-sm pb-2">
+            <input id="calcInclusive" type="checkbox" checked={inclusive} onChange={(e) => setInclusive(e.target.checked)} />
+            Price includes GST
+          </label>
           <Button type="submit">Calculate</Button>
         </form>
         {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
         {result && (
           <p className="text-sm mt-3">
-            Selling price: <span className="font-semibold">₹{result.selling_price}</span> — margin {result.margin_pct}%, markup {result.markup_pct}%
+            Selling price: <span className="font-semibold">₹{result.selling_price}</span>
+            {result.selling_price !== result.net_selling_price && <> (incl. GST; net ₹{result.net_selling_price})</>} — margin{" "}
+            {result.margin_pct}%, markup {result.markup_pct}% on the pre-GST price
           </p>
         )}
       </CardContent>

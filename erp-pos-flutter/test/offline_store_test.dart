@@ -85,4 +85,69 @@ void main() {
     expect(await store.listUnsynced(), isEmpty);
     expect(await store.countPendingSync(), 0);
   });
+
+  // erp-core-go migrations/033: a GST-inclusive product sold offline must
+  // bill exactly what the server would (internal/taxcalc.ComputeLine) —
+  // the customer pays the shelf price, tax is extracted from it, and the
+  // whole line is split at once so 3 x 1000 is 3000.00, not 3000.01.
+  test('offline cart: tax-inclusive product bills exactly the shelf price', () async {
+    final store = OfflineStore();
+    await store.cacheCatalog([
+      {
+        'barcode': '2222222222222',
+        'product_id': 'prod-incl',
+        'product_name': 'MRP Shuttlecock',
+        'hsn_code': '9506',
+        'variant_id': 'variant-incl',
+        'sku': 'SKU-INCL',
+        'selling_price': '1000.00',
+        'mrp': '1000.00',
+        'cgst_rate': 9.0,
+        'sgst_rate': 9.0,
+        'igst_rate': 0.0,
+        'cess_rate': 0.0,
+        'price_includes_tax': true,
+      },
+      {
+        'barcode': '3333333333333',
+        'product_id': 'prod-excl',
+        'product_name': 'Grip Tape',
+        'hsn_code': '9506',
+        'variant_id': 'variant-excl',
+        'sku': 'SKU-EXCL',
+        'selling_price': '100.00',
+        'mrp': '118.00',
+        'cgst_rate': 9.0,
+        'sgst_rate': 9.0,
+        'igst_rate': 0.0,
+        'cess_rate': 0.0,
+        // older server: no price_includes_tax key at all -> exclusive
+      },
+    ]);
+
+    final incl = await store.lookupBarcode('2222222222222');
+    final excl = await store.lookupBarcode('3333333333333');
+    expect(incl!.priceIncludesTax, isTrue);
+    expect(excl!.priceIncludesTax, isFalse);
+
+    final orderId = await store.createPendingOrder('branch-1', 'terminal-1');
+    var summary = await store.addLine(orderId, incl, 3);
+    expect(summary.lines.single.lineTotal, '3000.00');
+    expect(summary.lines.single.taxAmount, '457.63');
+    expect(summary.subtotal, '2542.37'); // pre-tax, same definition as the server's recalcOrderTotals
+    expect(summary.grandTotal, '3000.00');
+
+    // Mixed cart: the exclusive line still adds tax on top.
+    summary = await store.addLine(orderId, excl, 1);
+    expect(summary.subtotal, '2642.37');
+    expect(summary.taxTotal, '475.63');
+    expect(summary.grandTotal, '3118.00');
+
+    await store.checkout(orderId, [PaymentInput(method: 'cash', amount: 3118.0)]);
+    final pending = (await store.listUnsynced()).singleWhere((o) => o.id == orderId);
+    final pushedIncl = pending.lines.singleWhere((l) => l['variant_id'] == 'variant-incl');
+    expect(pushedIncl['price_includes_tax'], 1);
+    expect(pushedIncl['line_total'], 3000.0);
+    await store.markSynced(orderId, 'server-order-incl');
+  });
 }

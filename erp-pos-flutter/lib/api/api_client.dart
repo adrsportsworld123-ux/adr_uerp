@@ -17,6 +17,15 @@ class ApiException implements Exception {
   String toString() => 'ApiException($statusCode, $code): $message';
 }
 
+/// Why a session ended — drives the message LoginScreen shows.
+enum SessionEndReason { idle, revoked }
+
+enum RefreshOutcome { ok, rejected, unreachable }
+
+String sessionEndedMessage(SessionEndReason reason) => reason == SessionEndReason.idle
+    ? 'Your session expired due to inactivity. Please sign in again.'
+    : 'Your session has ended. Please sign in again.';
+
 class LoginResult {
   final String accessToken;
   final String? refreshToken; // absent from older server responses; nullable for that reason
@@ -449,12 +458,94 @@ class ReceiptData {
 /// integration test — there still isn't one.
 class ApiClient {
   final String baseUrl;
-  final http.Client _http;
-  String? _accessToken;
+  // Raw transport — only used directly for POST /auth/refresh, so a
+  // refresh can never recurse through the retrying client below.
+  final http.Client _inner;
+  // Every other call goes through this: it injects the current token and,
+  // on a rejected token, refreshes once and replays the request.
+  late final http.Client _http = _AuthRetryingClient(_inner, this);
 
-  ApiClient({required this.baseUrl, http.Client? httpClient}) : _http = httpClient ?? http.Client();
+  String? _accessToken;
+  String? _refreshToken;
+  DateTime? _accessExpiresAt;
+
+  /// The role tier's session window (POS User 15 min, Branch Manager 30,
+  /// Merchant Admin 60 — erp-core-go's internal/authn/session_tiers.go).
+  /// It's both the access token's lifetime and the inactivity timeout.
+  Duration? sessionWindow;
+
+  /// Set by AppSession: false once the user has been idle for a full
+  /// session window, so a rejected token ends the session instead of being
+  /// silently refreshed (refreshing an idle session would turn the FRD's
+  /// 15-minute inactivity timeout into the refresh token's 30 days).
+  bool Function() canRefresh = () => true;
+
+  /// Called once when the session can't continue — see AppSession.
+  void Function(SessionEndReason reason)? onSessionExpired;
+
+  Future<RefreshOutcome>? _refreshInFlight;
+
+  ApiClient({required this.baseUrl, http.Client? httpClient}) : _inner = httpClient ?? http.Client();
 
   void setAccessToken(String token) => _accessToken = token;
+
+  bool get hasSession => _accessToken != null;
+
+  bool get accessTokenExpiringSoon {
+    final exp = _accessExpiresAt;
+    return exp == null || exp.difference(DateTime.now()) < const Duration(seconds: 60);
+  }
+
+  void _storeTokens(LoginResult r) {
+    _accessToken = r.accessToken;
+    if (r.refreshToken != null) _refreshToken = r.refreshToken;
+    final window = Duration(seconds: r.expiresIn ?? 15 * 60);
+    sessionWindow = window;
+    _accessExpiresAt = DateTime.now().add(window);
+  }
+
+  void clearSession() {
+    _accessToken = null;
+    _refreshToken = null;
+    _accessExpiresAt = null;
+    sessionWindow = null;
+  }
+
+  /// Ends the session (idempotent) and tells AppSession why.
+  void expireSession(SessionEndReason reason) {
+    if (!hasSession) return;
+    clearSession();
+    onSessionExpired?.call(reason);
+  }
+
+  /// POST /auth/refresh — single-flight, since the backend rotates refresh
+  /// tokens (the old one is revoked on use) and two concurrent refreshes
+  /// with the same token would make the second look revoked.
+  /// A network failure is `unreachable`, never `rejected`: this is an
+  /// offline-first POS, and losing connectivity must not log a cashier out.
+  Future<RefreshOutcome> refresh() {
+    return _refreshInFlight ??= _doRefresh().whenComplete(() => _refreshInFlight = null);
+  }
+
+  Future<RefreshOutcome> _doRefresh() async {
+    final token = _refreshToken;
+    if (token == null) return RefreshOutcome.rejected;
+    try {
+      final resp = await _inner
+          .post(
+            Uri.parse('$baseUrl/api/v1/auth/refresh'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'refresh_token': token}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (resp.statusCode == 401 || resp.statusCode == 403) return RefreshOutcome.rejected;
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return RefreshOutcome.unreachable;
+      _storeTokens(LoginResult.fromJson(jsonDecode(resp.body) as Map<String, dynamic>));
+      return RefreshOutcome.ok;
+    } catch (_) {
+      return RefreshOutcome.unreachable;
+    }
+  }
 
   Map<String, String> get _authHeaders => {
         'Content-Type': 'application/json',
@@ -472,7 +563,7 @@ class ApiClient {
       body: jsonEncode({'merchant_code': merchantCode, 'email': email, 'password': password}),
     );
     final result = LoginResult.fromJson(_decode(resp));
-    _accessToken = result.accessToken;
+    _storeTokens(result);
     return result;
   }
 
@@ -493,7 +584,7 @@ class ApiClient {
       }),
     );
     final result = LoginResult.fromJson(_decode(resp));
-    _accessToken = result.accessToken;
+    _storeTokens(result);
     return result;
   }
 
@@ -826,4 +917,70 @@ class ApiClient {
       err['message'] as String? ?? 'request failed with status ${resp.statusCode}',
     );
   }
+}
+
+/// Wraps every authenticated ApiClient call. Injects the CURRENT access
+/// token at send time (so a request queued behind a refresh uses the new
+/// one), and when the auth middleware rejects the token (401 with
+/// INVALID_TOKEN/MISSING_TOKEN — never a business-level error):
+///   - user idle for a full session window -> end the session
+///   - otherwise -> refresh once and replay the request
+///   - refresh rejected -> end the session
+///   - refresh unreachable (offline) -> surface the original 401, keep the
+///     session; the offline-first paths in AppSession take over
+/// A session that ends here is reported as a synthetic 401
+/// SESSION_EXPIRED, so callers' existing ApiException handling just works.
+class _AuthRetryingClient extends http.BaseClient {
+  final http.Client _inner;
+  final ApiClient _api;
+
+  _AuthRetryingClient(this._inner, this._api);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (request.url.path.contains('/api/v1/auth/') || !_api.hasSession) return _inner.send(request);
+
+    // Buffered so the request can be replayed after a refresh.
+    final bodyBytes = await request.finalize().toBytes();
+    Future<http.StreamedResponse> attempt() {
+      final copy = http.Request(request.method, request.url)
+        ..headers.addAll(request.headers)
+        ..bodyBytes = bodyBytes;
+      if (_api._accessToken != null) copy.headers['Authorization'] = 'Bearer ${_api._accessToken}';
+      return _inner.send(copy);
+    }
+
+    final resp = await attempt();
+    if (resp.statusCode != 401) return resp;
+
+    final body = await resp.stream.toBytes();
+    String? code;
+    try {
+      code = ((jsonDecode(utf8.decode(body)) as Map<String, dynamic>)['error'] as Map<String, dynamic>?)?['code'] as String?;
+    } catch (_) {}
+    final original = http.StreamedResponse(http.ByteStream.fromBytes(body), 401, headers: resp.headers, request: resp.request);
+    if (code != 'INVALID_TOKEN' && code != 'MISSING_TOKEN') return original;
+
+    if (!_api.canRefresh()) return _expired(SessionEndReason.idle);
+    switch (await _api.refresh()) {
+      case RefreshOutcome.ok:
+        final retry = await attempt();
+        return retry.statusCode == 401 ? _expired(SessionEndReason.revoked) : retry;
+      case RefreshOutcome.rejected:
+        return _expired(SessionEndReason.revoked);
+      case RefreshOutcome.unreachable:
+        return original;
+    }
+  }
+
+  http.StreamedResponse _expired(SessionEndReason reason) {
+    _api.expireSession(reason);
+    final body = utf8.encode(jsonEncode({
+      'error': {'code': 'SESSION_EXPIRED', 'message': sessionEndedMessage(reason)}
+    }));
+    return http.StreamedResponse(http.ByteStream.fromBytes(body), 401, headers: {'content-type': 'application/json'});
+  }
+
+  @override
+  void close() => _inner.close();
 }

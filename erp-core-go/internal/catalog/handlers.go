@@ -29,6 +29,9 @@ type barcodeResponse struct {
 	SGSTRate     float64 `json:"sgst_rate"`
 	IGSTRate     float64 `json:"igst_rate"`
 	CessRate     float64 `json:"cess_rate"`
+	// PriceIncludesTax: SellingPrice already contains tax (migrations/033)
+	// — the POS shows it as-is either way; the cart computes the split.
+	PriceIncludesTax bool `json:"price_includes_tax"`
 	// Phase 8 (Grocery/FMCG): set only when `code` decoded as a
 	// weighing-scale barcode — SellingPrice above is this variant's
 	// PER-KILOGRAM catalog price; the POS client adds this exact weight
@@ -67,7 +70,7 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				SELECT p.id, p.name, COALESCE(p.hsn_code, ''),
 				       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 				       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0)
+				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
 				FROM product_variants pv
 				JOIN products p ON p.id = pv.product_id
 				LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
@@ -75,7 +78,7 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := row.Scan(
 				&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 				&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
-				&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate,
+				&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax,
 			); err != nil {
 				return err
 			}
@@ -88,7 +91,7 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			SELECT p.id, p.name, COALESCE(p.hsn_code, ''),
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0)
+			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
@@ -97,7 +100,7 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return row.Scan(
 			&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 			&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
-			&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate,
+			&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax,
 		)
 	})
 

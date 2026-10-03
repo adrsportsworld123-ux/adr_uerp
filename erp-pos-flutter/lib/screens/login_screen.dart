@@ -76,6 +76,21 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 8),
                 Text('ERP POS', style: Theme.of(context).textTheme.headlineSmall, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
+                // Set when AppSession ended a session (inactivity or a
+                // rejected refresh) rather than a manual sign-out.
+                if (context.watch<AppSession>().sessionEndedNotice case final notice?) ...[
+                  Container(
+                    key: const Key('session-ended-notice'),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      border: Border.all(color: Colors.amber.shade300),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(notice, style: TextStyle(color: Colors.amber.shade900)),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 SegmentedButton<_LoginMode>(
                   segments: const [
                     ButtonSegment(value: _LoginMode.password, label: Text('Password')),

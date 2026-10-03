@@ -24,6 +24,10 @@ type catalogEntry struct {
 	SGSTRate     float64 `json:"sgst_rate"`
 	IGSTRate     float64 `json:"igst_rate"`
 	CessRate     float64 `json:"cess_rate"`
+	// PriceIncludesTax: whether SellingPrice already contains tax
+	// (migrations/033). An offline device must price a line the same way
+	// the server would — see erp-pos-flutter's OfflineStore.addLine.
+	PriceIncludesTax bool `json:"price_includes_tax"`
 }
 
 type stockEntry struct {
@@ -65,7 +69,7 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			SELECT b.code, p.id, p.name, COALESCE(p.hsn_code, ''),
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0)
+			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
@@ -81,7 +85,7 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			var c catalogEntry
 			if err := catalogRows.Scan(&c.Barcode, &c.ProductID, &c.ProductName, &c.HSNCode,
 				&c.VariantID, &c.SKU, &c.SellingPrice, &c.MRP,
-				&c.CGSTRate, &c.SGSTRate, &c.IGSTRate, &c.CessRate); err != nil {
+				&c.CGSTRate, &c.SGSTRate, &c.IGSTRate, &c.CessRate, &c.PriceIncludesTax); err != nil {
 				return err
 			}
 			resp.Catalog = append(resp.Catalog, c)

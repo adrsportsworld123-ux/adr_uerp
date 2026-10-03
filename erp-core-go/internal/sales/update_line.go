@@ -11,6 +11,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/taxcalc"
 )
 
 type updateLineRequest struct {
@@ -95,25 +96,32 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		var sellingPrice, cgst, sgst, igst, cess float64
+		// Re-prices from the line's OWN snapshot (unit_price and
+		// price_includes_tax as captured at add time), not the variant's
+		// current catalog selling_price. Reading pv.selling_price here used
+		// to silently re-price a wholesale price-list line at retail on any
+		// quantity change, and would also ignore the line's
+		// inclusive/exclusive snapshot if the product's flag changed
+		// mid-cart.
+		var unitPrice, cgst, sgst, igst, cess float64
+		var priceIncludesTax bool
 		if err := tx.QueryRow(ctx, `
-			SELECT pv.selling_price, COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
+			SELECT sol.unit_price, sol.price_includes_tax, COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0)
-			FROM product_variants pv
+			FROM sales_order_lines sol
+			JOIN product_variants pv ON pv.id = sol.variant_id
 			JOIN products p ON p.id = pv.product_id
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-			WHERE pv.id = $1`, variantID,
-		).Scan(&sellingPrice, &cgst, &sgst, &igst, &cess); err != nil {
+			WHERE sol.id = $1`, lineID,
+		).Scan(&unitPrice, &priceIncludesTax, &cgst, &sgst, &igst, &cess); err != nil {
 			return err
 		}
-		lineSubtotal := sellingPrice * req.Quantity
-		taxAmount := lineSubtotal * (cgst + sgst + igst + cess) / 100
-		lineTotal := lineSubtotal + taxAmount
+		calc := taxcalc.ComputeLine(unitPrice, req.Quantity, 0, cgst+sgst+igst+cess, priceIncludesTax)
 
 		if _, err := tx.Exec(ctx, `
 			UPDATE sales_order_lines
 			SET quantity = $1, discount_amount = 0, tax_amount = $2, line_total = $3
-			WHERE id = $4`, req.Quantity, taxAmount, lineTotal, lineID); err != nil {
+			WHERE id = $4`, req.Quantity, calc.Tax, calc.Total, lineID); err != nil {
 			return err
 		}
 

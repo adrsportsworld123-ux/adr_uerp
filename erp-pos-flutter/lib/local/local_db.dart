@@ -22,7 +22,21 @@ class LocalDb {
     final path = p.join(await getDatabasesPath(), 'erp_pos_offline.db');
     return openDatabase(
       path,
-      version: 1,
+      // v2 (erp-core-go migrations/033): catalog.price_includes_tax and
+      // pending_order_lines.price_includes_tax, so an offline sale prices
+      // a GST-inclusive product exactly like the server would.
+      version: 2,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
+          await db.execute('ALTER TABLE pending_order_lines ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
+          // The catalog pull is incremental (since=last_pull_at), so rows
+          // cached before this column existed would never be re-sent and
+          // would keep defaulting to exclusive. Forget the watermark to
+          // force one full re-pull.
+          await db.delete('sync_meta', where: 'key = ?', whereArgs: ['last_pull_at']);
+        }
+      },
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE catalog (
@@ -37,7 +51,8 @@ class LocalDb {
             cgst_rate REAL NOT NULL,
             sgst_rate REAL NOT NULL,
             igst_rate REAL NOT NULL,
-            cess_rate REAL NOT NULL
+            cess_rate REAL NOT NULL,
+            price_includes_tax INTEGER NOT NULL DEFAULT 0
           )
         ''');
         await db.execute('''
@@ -82,6 +97,7 @@ class LocalDb {
             discount_amount REAL NOT NULL DEFAULT 0,
             tax_amount REAL NOT NULL,
             line_total REAL NOT NULL,
+            price_includes_tax INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (pending_order_id) REFERENCES pending_orders (id)
           )
         ''');

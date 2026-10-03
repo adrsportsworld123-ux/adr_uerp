@@ -90,7 +90,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 |---|---|---|---|
 | `INVALID_REQUEST` | 400 | any handler | Body didn't parse, or a required field was missing/invalid |
 | `MISSING_TOKEN` | 401 | any protected endpoint | No `Authorization: Bearer` header present |
-| `INVALID_TOKEN` | 401 | any protected endpoint | Token present but invalid, malformed, or expired |
+| `INVALID_TOKEN` | 401 | any protected endpoint, `POST /auth/refresh` | Token present but invalid, malformed, or expired. Both clients treat this (and `MISSING_TOKEN`) as the only session signals: silent refresh if the user is active, otherwise back to login (§3.29). `SESSION_EXPIRED` is a client-side code they synthesize — the server never sends it |
 | `INVALID_CREDENTIALS` | 401 | `/auth/login` | Merchant code, email, or password didn't match (never says which, deliberately) |
 | `ACCOUNT_INACTIVE` | 403 | `/auth/login` | User row exists but `status != 'active'` |
 | `ACCOUNT_LOCKED` | 403 | `/auth/login` | `locked_until` is in the future (lockout *checking* is live; lockout *triggering* on repeated failures is not yet wired — see §4/roadmap) |
@@ -103,7 +103,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `DEVICE_MISMATCH` | 403 | `POST /auth/pin-login` | Terminal is already device-bound and the presented `device_fingerprint` doesn't match |
 | `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'` |
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
-| `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}` | New price sells below cost and `override` wasn't set |
+| `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29) |
 | `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
 | `BARCODE_EXISTS` | 409 | `POST /products/variants/{id}/barcodes`, `POST /products` | The supplied `code` (or `variants[].original_barcode`) is already assigned to a different variant (`barcodes` table's `UNIQUE (merchant_id, code)`) |
 | `NO_BARCODE` | 409 | `GET /products/variants/{id}/label` | The variant has no barcode assigned yet — assign one first |
@@ -748,6 +748,44 @@ Live-verified: created a collection, tagged a product with it, confirmed the fil
 **Scope of this pass**: erp-core-go backend + the Flutter POS app (`erp-pos-flutter`) — real Hold/Recall buttons and a recall screen at the actual checkout counter, since that's where this feature is used, not the web-admin back office (which has no checkout UI at all). The user explicitly chose this scope over a backend-only pass.
 
 **Barcode manual-entry/generate, visible on the product list.** `POST /products/variants/{id}/barcodes` already supported both manual entry (`code` supplied) and auto-generate (omitted) since an earlier phase — the actual gap was that nothing surfaced it: `GET /products` didn't return a variant's barcode at all, and the only real product-listing screen in the admin (the Pricing page's product table — there's no separate Products list screen) had nowhere to show or assign one. Closed by extending `ListProducts`' variant query with a `LEFT JOIN barcodes b ON b.variant_id = pv.id AND b.is_primary = true`, adding `barcode_code`/`barcode_symbology` (both nullable) to the response. Live-verified: a seeded variant with a real assigned barcode returns it (`"barcode_code":"8901234567890"`); a variant with none returns `null` for both fields, not an error or an empty string.
+
+### 3.29 Session-expiry handling in both clients, and GST-inclusive vs GST-exclusive pricing (`internal/taxcalc`, `migrations/033_tax_inclusive_pricing.sql`, closed 2026-10-02)
+
+Two cross-cutting items the user asked to be made sure of before further phase work.
+
+**1. Session expiry → login page (erp-web-admin + erp-pos-flutter).** Neither client handled an expired token before this: the web admin surfaced a 401 as an ordinary error and left the user on a broken screen; the POS had no path back to its login screen at all (`isLoggedIn` could never become false again). `POST /auth/refresh` (rotating refresh tokens, 30-day TTL) existed but no client called it.
+
+Design (user-chosen: *silent refresh, then login*), identical in both clients:
+
+- The access token's lifetime **is** the FRD's role-based inactivity timeout (`internal/authn/session_tiers.go`: POS User 15 min, Branch Manager 30, Merchant Admin 60). So each client tracks real user input (web: pointer/key/wheel/touch/mousemove, throttled; POS: pointer-down plus hardware key events, since a barcode scanner is a keyboard) and:
+  - **active, token about to lapse** → silent `POST /auth/refresh`, no interruption;
+  - **no input for a full session window** → session ends, login page with *"Your session expired due to inactivity"*;
+  - **refresh rejected** (revoked, expired, account locked/inactive → 401/403) → session ends, login page with *"Your session has ended"*.
+- Refreshing blindly on every 401 was deliberately **not** done: with 30-day refresh tokens it would silently turn the FRD's 15-minute inactivity timeout into a 30-day session.
+- Only the auth middleware's own codes (`INVALID_TOKEN`/`MISSING_TOKEN`) trigger any of this — never a business-level 401 (none exist today; verified by grep), so e.g. a wrong manager PIN can never log a cashier out.
+- **Offline-first exception (POS only):** a refresh that fails because the server is unreachable (or 5xx) is never treated as expiry, and the idle check is suspended while `offlineMode` is on — re-login needs the server, so ending a session offline would block offline selling outright. The check resumes once connectivity returns.
+- Refresh is single-flight (both clients) and, in the browser, serialized across tabs with the Web Locks API — the backend rotates refresh tokens, so two tabs refreshing with the same token would otherwise make the loser look "revoked." Signing out in one tab signs out the others (`storage` event).
+- Web admin returns the user to the page they were on after re-login (same-origin paths only — never an open redirect). The POS pops any pushed route/dialog so the login screen is never left hidden underneath. The POS also gained a manual **Sign out** button (it had none).
+- `SESSION_EXPIRED` is a **client-side** code (both clients synthesize it as an `ApiException`/`ApiError` so existing error handling just works); the server never sends it.
+
+Verified: web — new `e2e/session-expiry.spec.ts` (idle → /login with notice → re-login returns to `/pricing`; tampered access token + recent activity → silent refresh, data loads, refresh token rotated; tampered access + refresh tokens → /login "session has ended"; logout in one tab → other tab to /login), 4/4. POS — new `test/session_refresh_test.dart` against a scripted backend (refresh-and-replay with the new token; rejected refresh → `SESSION_EXPIRED` + `revoked`; idle → no refresh, `idle`; unreachable refresh keeps the session; business-level 401 ignored; three concurrent 401s share one refresh), 6/6.
+
+**Known, pre-existing, not changed here:** `RefreshHandler` issues the new refresh token with `pos_terminal_id`/`device_fingerprint` = NULL, so a PIN-login session loses its device binding on first refresh. There is also no server-side `POST /auth/logout` to revoke a refresh token on manual sign-out (clients just drop it).
+
+**2. GST-inclusive vs GST-exclusive pricing.** Every `selling_price` was implicitly tax-exclusive (AddLine added GST on top). Indian retail commonly prices inclusive (MRP-style shelf prices), where a ₹1000 shelf price must bill ₹1000.00.
+
+User-chosen design: **per product, with a merchant-wide default** for new products; **line-level rounding** so the bill always matches the shelf price.
+
+- `products.price_includes_tax` (default `false` — nothing already priced changes meaning) + `pricing_settings.prices_include_tax_default` (RLS-scoped, `GET/PUT /pricing/settings`, PUT gated by `pricing.manage`). `POST /products` takes an optional `price_includes_tax` (omitted → the merchant default); `PATCH /products/{id}` can flip it (which *reinterprets* the stored price rather than converting it — the admin UI confirms before doing so).
+- **One place does the math:** `internal/taxcalc.ComputeLine` — exclusive: `taxable = price·qty − discount; tax = taxable·r; total = taxable + tax`; inclusive: `total = price·qty − discount; taxable = round2(total·100/(100+r)); tax = total − taxable`. The split is done on the **whole line**, so 3 × ₹1000 (18% incl.) is exactly ₹3000.00 (taxable 2542.37 + tax 457.63), never the ₹3000.01 per-unit back-calculation produces. Called from `AddLineToCart`, `UpdateLine`, `ApplyDiscountLayer` (every discount layer), and quotation creation; the Flutter offline store mirrors it line-for-line. Unit-tested, including an exhaustive "inclusive total always equals price × qty" sweep across rates/prices/quantities.
+- `sales_order_lines.price_includes_tax` snapshots the mode at time of sale (like `unit_price`), and a **generated** `sales_order_lines.taxable_value` column (`line_total − tax_amount` for inclusive, `unit_price·quantity − discount_amount` for exclusive) means no writer — online cart, offline sync push, discount layers — can forget or miscompute it. GSTR-1, GSTR-3B, e-invoice IRN line items and payroll commission now read `taxable_value` instead of re-deriving `unit_price·quantity − discount_amount` (which is tax-inclusive for an inclusive line). `recalcOrderTotals` now uses `subtotal = Σ(taxable_value + discount_amount)` and `grand_total = Σ(taxable_value + tax_amount)` — byte-identical to the old expressions for exclusive lines, and keeps `subtotal − discount + tax = grand_total` (and the journal's revenue = taxable value) for inclusive ones.
+- **Margin/markup and the negative-margin block use the net (pre-tax) price**, because `cost_price` is always tax-exclusive (input GST is credit, not cost): ₹1000 incl. 18% is only ₹847.46 of revenue, so a ₹900 cost is now correctly refused with `NEGATIVE_MARGIN` (it was previously allowed). Applies to `PATCH /pricing/variants/{id}`, bulk update, and `GET /products` (which now also returns `price_includes_tax`, `tax_rate_pct`, and per-variant `net_selling_price`/`gross_selling_price`, so the admin UI never does money arithmetic in JS). `POST /pricing/calculate` takes optional `tax_rate_pct`/`price_includes_tax` and grosses the result up for an inclusive price.
+- POS: `GET /products/barcode/{code}` and `GET /sync/pull` carry `price_includes_tax`; `POST /sync/push` accepts it per line (absent from older clients → `false`, which is what they always priced). The POS's local SQLite schema went to v2 and **forces one full catalog re-pull on upgrade** — the pull is incremental, so rows cached before the column existed would otherwise keep pricing an inclusive product as exclusive while offline.
+- Wholesale price-list prices are interpreted in the product's own basis.
+
+**A real bug found and fixed along the way:** `UpdateLine` (quantity change) re-priced a line from the variant's *current catalog* `selling_price` instead of the line's own snapshot — so changing the quantity of a wholesale price-list line silently re-priced it at retail. It now re-prices from `sales_order_lines.unit_price`/`price_includes_tax`.
+
+Verified live against the real stack (migration applied, API rebuilt): a 23-check script covering settings, default inheritance, the net-price negative-margin block, list/calculator/barcode/sync-pull fields, an inclusive 3 × ₹1000 line (3000.00 / 2542.37 / 457.63), a mixed cart (4180.00, balanced), quantity change keeping the snapshot, a 5% manual discount on the inclusive line (balanced), checkout with a balanced journal, an inclusive quotation, and the stored `taxable_value`; plus a live `sync/push` of an offline inclusive line (subtotal 2542.37 / tax 457.63 / total 3000.00). Web: new `e2e/tax-inclusive-pricing.spec.ts` (default → New Product pre-fill → Pricing badge, `net ₹1000.00`, 50% margin on net → switch to exclusive shows `customer pays ₹1392.40`). POS: an added real-SQLite offline-store test (inclusive 3 × 1000 → 3000.00, mixed cart, pushed line carries the flag).
 
 ---
 

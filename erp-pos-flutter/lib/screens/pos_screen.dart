@@ -321,6 +321,11 @@ class _PosScreenState extends State<PosScreen> {
             tooltip: 'Printer settings',
             onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrinterSettingsScreen())),
           ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign out',
+            onPressed: _busy ? null : session.logout,
+          ),
           if (session.offlineMode || session.pendingSyncCount > 0)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),

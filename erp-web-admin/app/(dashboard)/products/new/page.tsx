@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Category, CatalogBrand, TaxSlab, CreatedProduct, CategoryAttribute, CollectionSummary } from "@/lib/types";
+import { Category, CatalogBrand, TaxSlab, CreatedProduct, CategoryAttribute, CollectionSummary, PricingSettings } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,6 +35,9 @@ export default function NewProductPage() {
   const [costPrice, setCostPrice] = useState("");
   const [mrp, setMrp] = useState("");
   const [sellingPrice, setSellingPrice] = useState("");
+  // Pre-filled from the merchant's default (GET /pricing/settings) once it
+  // loads; the user can still flip it per product before saving.
+  const [priceIncludesTax, setPriceIncludesTax] = useState(false);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<CatalogBrand[]>([]);
@@ -77,6 +80,12 @@ export default function NewProductPage() {
     api.get<{ collections: CollectionSummary[] }>("/api/v1/collections").then((d) => setCollections(d.collections)).catch(() => {});
   }
   useEffect(loadLookups, []);
+  useEffect(() => {
+    api
+      .get<PricingSettings>("/api/v1/pricing/settings")
+      .then((d) => setPriceIncludesTax(d.prices_include_tax_default))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     // No setState directly in the effect body (even for the "no category"
@@ -145,6 +154,7 @@ export default function NewProductPage() {
         category_id: categoryId || undefined,
         brand_id: brandId || undefined,
         tax_slab_id: taxSlabId || undefined,
+        price_includes_tax: priceIncludesTax,
         collection_id: collectionId || undefined,
         variants: [
           {
@@ -310,6 +320,23 @@ export default function NewProductPage() {
               </Select>
             </div>
 
+            <div className="flex flex-col gap-1">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  id="priceIncludesTax"
+                  type="checkbox"
+                  checked={priceIncludesTax}
+                  onChange={(e) => setPriceIncludesTax(e.target.checked)}
+                />
+                Selling price includes GST
+              </label>
+              <p className="text-xs text-zinc-500">
+                {priceIncludesTax
+                  ? "The customer pays exactly the selling price; GST is extracted from it on the bill."
+                  : "GST is added on top of the selling price on the bill."}
+              </p>
+            </div>
+
             <div className="flex items-end gap-2">
               <div className="flex flex-col gap-2 flex-1">
                 <Label>Collection (optional — Apparel)</Label>
@@ -362,7 +389,7 @@ export default function NewProductPage() {
                 <Input id="mrp" type="number" min="0.01" step="0.01" required value={mrp} onChange={(e) => setMrp(e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="sellingPrice">Selling price (₹)</Label>
+                <Label htmlFor="sellingPrice">Selling price (₹, {priceIncludesTax ? "incl." : "excl."} GST)</Label>
                 <Input
                   id="sellingPrice"
                   type="number"
