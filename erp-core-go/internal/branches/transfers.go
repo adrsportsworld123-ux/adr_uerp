@@ -14,6 +14,7 @@ import (
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/inventory"
 )
 
 var (
@@ -345,6 +346,21 @@ func (h *Handler) DispatchTransfer(w http.ResponseWriter, r *http.Request) {
 			if _, err := tx.Exec(ctx, `UPDATE branch_transfer_lines SET sent_quantity = $1 WHERE id = $2`, l.quantity, l.id); err != nil {
 				return err
 			}
+			// Phase 8: a batch-tracked variant's batches leave with it,
+			// sellable-first. The 'transfer_out' stock_batch_movements rows
+			// this writes (keyed by the transfer line) are exactly what
+			// CompleteTransfer reads back to rebuild the same batches at
+			// the destination.
+			tracksBatch, err := inventory.VariantTracksBatch(ctx, tx, l.variantID)
+			if err != nil {
+				return err
+			}
+			if tracksBatch {
+				if _, err := inventory.DrainBatches(ctx, tx, fromBranch, l.variantID, l.quantity, "",
+					inventory.DrainSellableFirst, "transfer_out", l.id, claims.UserID); err != nil {
+					return err
+				}
+			}
 		}
 
 		if _, err := tx.Exec(ctx, `
@@ -456,6 +472,9 @@ func (h *Handler) CompleteTransfer(w http.ResponseWriter, r *http.Request) {
 			if _, err := tx.Exec(ctx, `UPDATE branch_transfer_lines SET received_quantity = $1 WHERE id = $2`, received, l.id); err != nil {
 				return err
 			}
+			if err := receiveTransferBatches(ctx, tx, toBranch, l.variantID, l.id, received, claims.UserID); err != nil {
+				return err
+			}
 
 			if shortfall := l.sentQuantity - received; shortfall != 0 {
 				var costPrice float64
@@ -540,4 +559,61 @@ func loadTransfer(ctx context.Context, tx pgx.Tx, transferID string, resp *trans
 		resp.Lines = append(resp.Lines, l)
 	}
 	return rows.Err()
+}
+
+// receiveTransferBatches rebuilds, at the destination branch, the batches
+// DispatchTransfer drew for this transfer line (same batch_no, expiry_date
+// and cost) — a no-op for a variant that isn't batch-tracked, since
+// dispatch wrote no 'transfer_out' rows for it. received is spread over
+// those batches soonest-expiry-first, so a transit shortfall comes off
+// the latest-expiry batch. Anything received ABOVE what was sent has no
+// known batch and stays untracked at the destination — sale-time
+// allocation refuses untracked stock, so it can't be sold until a stock
+// adjustment attributes it to a batch: fail closed, not guessed.
+func receiveTransferBatches(ctx context.Context, tx pgx.Tx, toBranch, variantID, lineID string, received float64, performedBy string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT sb.batch_no, sb.expiry_date::text, sb.cost_price, -m.quantity_delta
+		FROM stock_batch_movements m
+		JOIN stock_batches sb ON sb.id = m.batch_id
+		WHERE m.reference_type = 'transfer_out' AND m.reference_id = $1
+		ORDER BY sb.expiry_date ASC NULLS LAST, sb.received_at ASC`, lineID)
+	if err != nil {
+		return err
+	}
+	type sent struct {
+		batchNo    string
+		expiryDate *string
+		costPrice  float64
+		quantity   float64
+	}
+	var batches []sent
+	for rows.Next() {
+		var b sent
+		if err := rows.Scan(&b.batchNo, &b.expiryDate, &b.costPrice, &b.quantity); err != nil {
+			rows.Close()
+			return err
+		}
+		batches = append(batches, b)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	remaining := received
+	for _, b := range batches {
+		if remaining <= 1e-9 {
+			break
+		}
+		take := b.quantity
+		if take > remaining {
+			take = remaining
+		}
+		if err := inventory.ReceiveBatchWithMovement(ctx, tx, toBranch, variantID, b.batchNo, b.expiryDate, b.costPrice, take,
+			"transfer_in", lineID, performedBy); err != nil {
+			return err
+		}
+		remaining -= take
+	}
+	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/inventory"
 )
 
 var errReturnExceedsStock = errors.New("return quantity exceeds on-hand stock")
@@ -21,6 +22,10 @@ type purchaseReturnLineRequest struct {
 	VariantID string  `json:"variant_id"`
 	Quantity  float64 `json:"quantity"`
 	UnitCost  float64 `json:"unit_cost"`
+	// Phase 8 (batch-tracked variants only, ignored otherwise): the batch
+	// going back to the supplier — usually the expired or damaged one.
+	// Omitted, it's drawn expired-first.
+	BatchNo string `json:"batch_no"`
 }
 
 type createReturnRequest struct {
@@ -141,12 +146,28 @@ func (h *Handler) CreatePurchaseReturn(w http.ResponseWriter, r *http.Request) {
 				return errReturnExceedsStock
 			}
 
+			tracksBatch, err := inventory.VariantTracksBatch(ctx, tx, l.VariantID)
+			if err != nil {
+				return err
+			}
+			batchNo := ""
+			if tracksBatch {
+				batchNo = l.BatchNo
+			}
+
 			lineTotal := l.Quantity * l.UnitCost
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO purchase_return_lines (id, purchase_return_id, variant_id, quantity, unit_cost, line_total)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
-				returnID, l.VariantID, l.Quantity, l.UnitCost, lineTotal); err != nil {
+				INSERT INTO purchase_return_lines (id, purchase_return_id, variant_id, quantity, unit_cost, line_total, batch_no)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULLIF($6,''))`,
+				returnID, l.VariantID, l.Quantity, l.UnitCost, lineTotal, batchNo); err != nil {
 				return err
+			}
+
+			if tracksBatch {
+				if _, err := inventory.DrainBatches(ctx, tx, req.BranchID, l.VariantID, l.Quantity, batchNo,
+					inventory.DrainExpiredFirst, "purchase_return", returnID, claims.UserID); err != nil {
+					return err
+				}
 			}
 
 			if _, err := tx.Exec(ctx, `
@@ -189,6 +210,8 @@ func (h *Handler) CreatePurchaseReturn(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errReturnExceedsStock):
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "return quantity exceeds on-hand stock for one or more lines")
+	case errors.Is(err, inventory.ErrBatchInsufficient):
+		httpx.Error(w, http.StatusConflict, "BATCH_INSUFFICIENT", inventory.ErrBatchInsufficient.Error())
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create purchase return")
 	default:

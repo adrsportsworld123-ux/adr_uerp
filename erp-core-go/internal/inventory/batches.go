@@ -24,10 +24,10 @@ import (
 // ErrExpiredOrUntrackedStock means stock_levels showed enough total
 // quantity to reserve, but not enough of it is in a real, non-expired
 // batch — either every remaining unit is past its expiry_date, or some
-// of stock_levels.on_hand was never batch-attributed at all (a manual
-// adjustment/reconciliation touched this variant, which migrations/
-// 029_grocery.sql's header discloses as not batch-aware yet). The caller
-// must release whatever stock_levels reservation it already made.
+// of stock_levels.on_hand was never batch-attributed at all (stock that
+// predates batch tracking, or drift from before migrations/034 made the
+// non-sale stock paths batch-aware). The caller must release whatever
+// stock_levels reservation it already made.
 var ErrExpiredOrUntrackedStock = errors.New("no unexpired, batch-tracked stock is available to fulfill this quantity")
 
 type BatchAllocation struct {
@@ -155,21 +155,277 @@ func ReleaseLineBatchAllocations(ctx context.Context, tx pgx.Tx, lineID string) 
 }
 
 // ReceiveBatch is GRN's CompleteGRN calling into this to create or
-// top up a batch — the real point of origin for batch/expiry data (a
-// supplier delivery note has it; a manual stock adjustment or
-// reconciliation doesn't, which is exactly why those paths stay
-// unaware of stock_batches for now). Same batch_no delivered again for
-// the same branch/variant adds to the existing batch rather than
-// creating a duplicate row, keeping its original expiry_date.
+// top up a batch — the main point of origin for batch/expiry data (a
+// supplier delivery note has it). Adjustments, reconciliation and
+// transfer receipts use ReceiveBatchWithMovement below. Same batch_no
+// delivered again for the same branch/variant adds to the existing batch
+// rather than creating a duplicate row, keeping its original expiry_date.
 func ReceiveBatch(ctx context.Context, tx pgx.Tx, branchID, variantID, batchNo string, expiryDate *string, costPrice, quantity float64) error {
-	_, err := tx.Exec(ctx, `
+	_, err := ReceiveBatchReturningID(ctx, tx, branchID, variantID, batchNo, expiryDate, costPrice, quantity)
+	return err
+}
+
+// ReceiveBatchReturningID is ReceiveBatch for callers that also need to
+// write a stock_batch_movements row against the batch it landed in.
+func ReceiveBatchReturningID(ctx context.Context, tx pgx.Tx, branchID, variantID, batchNo string, expiryDate *string, costPrice, quantity float64) (string, error) {
+	var batchID string
+	err := tx.QueryRow(ctx, `
 		INSERT INTO stock_batches (id, merchant_id, branch_id, variant_id, batch_no, expiry_date, cost_price, quantity_received, quantity_remaining)
 		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4::date, $5, $6, $6)
 		ON CONFLICT (branch_id, variant_id, batch_no) DO UPDATE SET
 			quantity_received = stock_batches.quantity_received + EXCLUDED.quantity_received,
-			quantity_remaining = stock_batches.quantity_remaining + EXCLUDED.quantity_remaining`,
-		branchID, variantID, batchNo, expiryDate, costPrice, quantity)
+			quantity_remaining = stock_batches.quantity_remaining + EXCLUDED.quantity_remaining
+		RETURNING id`,
+		branchID, variantID, batchNo, expiryDate, costPrice, quantity).Scan(&batchID)
+	return batchID, err
+}
+
+// ---------------------------------------------------------------------
+// Batch-aware non-sale stock paths (migrations/034's header). Every path
+// that moves stock_levels.on_hand for a batch-tracked variant now moves
+// stock_batches in the same transaction, so the two can't drift apart:
+// manual adjustments, reconciliation, purchase returns, branch transfers,
+// voids and offline-synced sales. stock_levels stays the authority for
+// "how much"; these only keep the batch split truthful underneath it.
+// ---------------------------------------------------------------------
+
+// ErrBatchRequired: stock is being ADDED to a batch-tracked variant
+// without saying which batch it is — same rule GRN already enforces
+// (internal/purchase/grn.go), now for adjustments and reconciliation too.
+var ErrBatchRequired = errors.New("batch_no is required when adding stock to a batch-tracked variant")
+
+// ErrBatchInsufficient: a caller named a specific batch to take stock
+// from, and that batch doesn't exist at this branch or has less left
+// than requested.
+var ErrBatchInsufficient = errors.New("the named batch does not have enough remaining quantity at this branch")
+
+// VariantTracksBatch reports product_variants.track_batch.
+func VariantTracksBatch(ctx context.Context, tx pgx.Tx, variantID string) (bool, error) {
+	var tracks bool
+	err := tx.QueryRow(ctx, `SELECT track_batch FROM product_variants WHERE id = $1`, variantID).Scan(&tracks)
+	return tracks, err
+}
+
+// DrainOrder picks which batches an unnamed removal draws from first.
+type DrainOrder int
+
+const (
+	// DrainExpiredFirst — write-offs, count shortfalls, supplier returns:
+	// stock that has expired (or is closest to it) is what physically
+	// gets binned or sent back, so it leaves the books first.
+	DrainExpiredFirst DrainOrder = iota
+	// DrainSellableFirst — transfers and offline sales: goods that
+	// actually moved were sellable ones, oldest-expiry-first (the same
+	// FEFO order AllocateBatchesFIFO uses), touching expired batches
+	// only once nothing sellable is left.
+	DrainSellableFirst
+)
+
+// BatchDraw is one batch's share of a DrainBatches removal, carrying
+// enough of the batch's identity for a transfer to recreate it at the
+// destination branch.
+type BatchDraw struct {
+	BatchID    string
+	BatchNo    string
+	ExpiryDate *string
+	CostPrice  float64
+	Quantity   float64
+}
+
+// DrainBatches removes quantity from variantID's batches at branchID.
+//
+// With batchNo set, it comes from that one batch only, or the call
+// fails with ErrBatchInsufficient — the caller asked for something
+// specific, so a silent substitution would be wrong.
+//
+// With batchNo empty it is best-effort: drawn in the given order and
+// clamped at whatever the batches hold. on_hand is the authority and has
+// already been moved by the caller; if batches hold less than on_hand
+// (stock that predates batch tracking, or legacy drift from before these
+// paths were batch-aware), the shortfall simply comes out of the
+// untracked remainder — which AllocateBatchesFIFO already refuses to
+// sell, so this can only ever fail closed. Callers that need to know how
+// much actually moved sum the returned draws.
+//
+// Every draw writes a stock_batch_movements row (refType/refID).
+func DrainBatches(ctx context.Context, tx pgx.Tx, branchID, variantID string, quantity float64, batchNo string, order DrainOrder, refType, refID, performedBy string) ([]BatchDraw, error) {
+	orderBy := `expiry_date ASC NULLS LAST, received_at ASC`
+	if order == DrainSellableFirst {
+		orderBy = `(expiry_date IS NOT NULL AND expiry_date < current_date) ASC, expiry_date ASC NULLS LAST, received_at ASC`
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, batch_no, expiry_date::text, cost_price, quantity_remaining FROM stock_batches
+		WHERE branch_id = $1 AND variant_id = $2 AND quantity_remaining > 0
+		  AND ($3 = '' OR batch_no = $3)
+		ORDER BY `+orderBy+`
+		FOR UPDATE`, branchID, variantID, batchNo)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []BatchDraw
+	for rows.Next() {
+		var b BatchDraw
+		if err := rows.Scan(&b.BatchID, &b.BatchNo, &b.ExpiryDate, &b.CostPrice, &b.Quantity); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		candidates = append(candidates, b)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if batchNo != "" {
+		if len(candidates) == 0 || candidates[0].Quantity < quantity-1e-9 {
+			return nil, ErrBatchInsufficient
+		}
+	}
+
+	remaining := quantity
+	var draws []BatchDraw
+	for _, b := range candidates {
+		if remaining <= 1e-9 {
+			break
+		}
+		take := b.Quantity
+		if take > remaining {
+			take = remaining
+		}
+		b.Quantity = take
+		draws = append(draws, b)
+		remaining -= take
+	}
+
+	for _, d := range draws {
+		if _, err := tx.Exec(ctx, `UPDATE stock_batches SET quantity_remaining = quantity_remaining - $1 WHERE id = $2`,
+			d.Quantity, d.BatchID); err != nil {
+			return nil, err
+		}
+		if err := RecordBatchMovement(ctx, tx, d.BatchID, -d.Quantity, refType, refID, performedBy); err != nil {
+			return nil, err
+		}
+	}
+	return draws, nil
+}
+
+// RecordBatchMovement appends one stock_batch_movements row. refID and
+// performedBy may be empty.
+func RecordBatchMovement(ctx context.Context, tx pgx.Tx, batchID string, delta float64, refType, refID, performedBy string) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO stock_batch_movements (merchant_id, batch_id, quantity_delta, reference_type, reference_id, performed_by)
+		VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, NULLIF($4,'')::uuid, NULLIF($5,'')::uuid)`,
+		batchID, delta, refType, refID, performedBy)
 	return err
+}
+
+// ReceiveBatchWithMovement is ReceiveBatchReturningID plus the matching
+// stock_batch_movements row — the inbound counterpart of DrainBatches for
+// adjustments, reconciliation and transfer receipts.
+func ReceiveBatchWithMovement(ctx context.Context, tx pgx.Tx, branchID, variantID, batchNo string, expiryDate *string, costPrice, quantity float64, refType, refID, performedBy string) error {
+	batchID, err := ReceiveBatchReturningID(ctx, tx, branchID, variantID, batchNo, expiryDate, costPrice, quantity)
+	if err != nil {
+		return err
+	}
+	return RecordBatchMovement(ctx, tx, batchID, quantity, refType, refID, performedBy)
+}
+
+// ReleaseLineBatchQuantity gives back quantity of a cart line's batch
+// allocation — the partial form of ReleaseLineBatchAllocations, for a
+// quantity DECREASE via PATCH .../lines/{line_id}. Releases from the
+// latest-expiry allocation first, so the line keeps the oldest stock it
+// was allocated (FIFO stays honored for what's still being sold).
+func ReleaseLineBatchQuantity(ctx context.Context, tx pgx.Tx, lineID string, quantity float64) error {
+	rows, err := tx.Query(ctx, `
+		SELECT slb.id, slb.batch_id, slb.quantity
+		FROM sales_order_line_batches slb
+		JOIN stock_batches sb ON sb.id = slb.batch_id
+		WHERE slb.sales_order_line_id = $1
+		ORDER BY sb.expiry_date DESC NULLS FIRST, sb.received_at DESC`, lineID)
+	if err != nil {
+		return err
+	}
+	type alloc struct {
+		id, batchID string
+		quantity    float64
+	}
+	var allocs []alloc
+	for rows.Next() {
+		var a alloc
+		if err := rows.Scan(&a.id, &a.batchID, &a.quantity); err != nil {
+			rows.Close()
+			return err
+		}
+		allocs = append(allocs, a)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	remaining := quantity
+	for _, a := range allocs {
+		if remaining <= 1e-9 {
+			break
+		}
+		give := a.quantity
+		if give > remaining {
+			give = remaining
+		}
+		if _, err := tx.Exec(ctx, `UPDATE stock_batches SET quantity_remaining = quantity_remaining + $1 WHERE id = $2`,
+			give, a.batchID); err != nil {
+			return err
+		}
+		if give >= a.quantity-1e-9 {
+			_, err = tx.Exec(ctx, `DELETE FROM sales_order_line_batches WHERE id = $1`, a.id)
+		} else {
+			_, err = tx.Exec(ctx, `UPDATE sales_order_line_batches SET quantity = quantity - $1 WHERE id = $2`, give, a.id)
+		}
+		if err != nil {
+			return err
+		}
+		remaining -= give
+	}
+	return nil
+}
+
+// RestoreLineBatchesForVoid returns a finalized sale line's batch
+// allocations to their batches. Unlike ReleaseLineBatchAllocations (a
+// cart line that never sold), the sales_order_line_batches rows are KEPT
+// — the sale did happen and was then reversed, and recall traceability
+// should show both; the reversal is the 'void' stock_batch_movements row.
+func RestoreLineBatchesForVoid(ctx context.Context, tx pgx.Tx, lineID, orderID, performedBy string) error {
+	rows, err := tx.Query(ctx, `SELECT batch_id, quantity FROM sales_order_line_batches WHERE sales_order_line_id = $1`, lineID)
+	if err != nil {
+		return err
+	}
+	type alloc struct {
+		batchID  string
+		quantity float64
+	}
+	var allocs []alloc
+	for rows.Next() {
+		var a alloc
+		if err := rows.Scan(&a.batchID, &a.quantity); err != nil {
+			rows.Close()
+			return err
+		}
+		allocs = append(allocs, a)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, a := range allocs {
+		if _, err := tx.Exec(ctx, `UPDATE stock_batches SET quantity_remaining = quantity_remaining + $1 WHERE id = $2`,
+			a.quantity, a.batchID); err != nil {
+			return err
+		}
+		if err := RecordBatchMovement(ctx, tx, a.batchID, a.quantity, "void", orderID, performedBy); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------

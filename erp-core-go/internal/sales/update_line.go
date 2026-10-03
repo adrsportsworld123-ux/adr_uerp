@@ -11,6 +11,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/taxcalc"
 )
 
@@ -63,21 +64,47 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 
 		var variantID string
 		var oldQuantity float64
+		var trackBatch bool
+		var minShelfLifeDays int
 		if err := tx.QueryRow(ctx, `
-			SELECT variant_id, quantity FROM sales_order_lines
-			WHERE id = $1 AND sales_order_id = $2`, lineID, orderID,
-		).Scan(&variantID, &oldQuantity); err != nil {
+			SELECT sol.variant_id, sol.quantity, pv.track_batch, COALESCE(c.min_shelf_life_days, 0)
+			FROM sales_order_lines sol
+			JOIN product_variants pv ON pv.id = sol.variant_id
+			JOIN products p ON p.id = pv.product_id
+			LEFT JOIN categories c ON c.id = p.category_id
+			WHERE sol.id = $1 AND sol.sales_order_id = $2`, lineID, orderID,
+		).Scan(&variantID, &oldQuantity, &trackBatch, &minShelfLifeDays); err != nil {
 			return err
 		}
 
+		// Phase 8: a batch-tracked line's extra quantity goes through the
+		// same FEFO + expiry/min-shelf-life allocation AddLineToCart uses.
+		// Before this, an increase only reserved stock_levels, so adding 1
+		// unit and then raising the quantity sold the rest from expired or
+		// untracked stock unchecked.
 		delta := req.Quantity - oldQuantity
 		switch {
 		case delta > 0:
 			if err := reserveStock(ctx, tx, branchID, variantID, delta); err != nil {
 				return err
 			}
+			if trackBatch {
+				allocations, err := inventory.AllocateBatchesFIFO(ctx, tx, branchID, variantID, delta, minShelfLifeDays)
+				if err != nil {
+					if releaseErr := releaseReservation(ctx, tx, branchID, variantID, delta); releaseErr != nil {
+						return releaseErr
+					}
+					return err
+				}
+				if err := inventory.RecordLineBatchAllocations(ctx, tx, lineID, allocations); err != nil {
+					return err
+				}
+			}
 		case delta < 0:
 			if err := releaseReservation(ctx, tx, branchID, variantID, -delta); err != nil {
+				return err
+			}
+			if err := inventory.ReleaseLineBatchQuantity(ctx, tx, lineID, -delta); err != nil {
 				return err
 			}
 		}
@@ -131,6 +158,8 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrInsufficientStock):
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "requested quantity exceeds available stock")
+	case errors.Is(err, inventory.ErrExpiredOrUntrackedStock):
+		httpx.Error(w, http.StatusConflict, "STOCK_EXPIRED", "no unexpired, batch-tracked stock is available to fulfill this quantity")
 	case errors.Is(err, errOrderNotEditable):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order is no longer a cart")
 	case errors.Is(err, pgx.ErrNoRows):

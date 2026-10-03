@@ -8,8 +8,10 @@ package inventory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -122,6 +124,13 @@ type adjustmentRequest struct {
 	BranchID      string  `json:"branch_id"`
 	QuantityDelta float64 `json:"quantity_delta"`
 	Reason        string  `json:"reason"`
+	// Phase 8 (batch-tracked variants only, ignored otherwise): which
+	// batch the correction applies to. Required for a positive delta —
+	// stock can't appear without saying which batch/expiry it is — and
+	// optional for a negative one, which otherwise writes off
+	// expired-first (see DrainBatches).
+	BatchNo    string  `json:"batch_no"`
+	ExpiryDate *string `json:"expiry_date"` // YYYY-MM-DD; only used when a positive delta creates a new batch
 }
 
 // AdjustStock: POST /inventory/adjustments — manual correction, writes a
@@ -146,6 +155,12 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 	if req.VariantID == "" || req.BranchID == "" || req.QuantityDelta == 0 || req.Reason == "" {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "variant_id, branch_id, a non-zero quantity_delta and reason are required")
 		return
+	}
+	if req.ExpiryDate != nil {
+		if _, err := time.Parse("2006-01-02", *req.ExpiryDate); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "expiry_date must be YYYY-MM-DD")
+			return
+		}
 	}
 
 	var resp stockResponse
@@ -174,11 +189,29 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 		resp.Reserved = formatQty(reserved)
 		resp.Available = formatQty(onHand - reserved)
 
-		if _, err := tx.Exec(ctx, `
+		var movementID string
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reason, performed_by)
-			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'adjustment', $3, 'adjustment', $4, $5)`,
-			req.BranchID, req.VariantID, req.QuantityDelta, req.Reason, claims.UserID); err != nil {
+			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'adjustment', $3, 'adjustment', $4, $5)
+			RETURNING id`,
+			req.BranchID, req.VariantID, req.QuantityDelta, req.Reason, claims.UserID).Scan(&movementID); err != nil {
 			return err
+		}
+
+		// Phase 8: keep stock_batches in step for a batch-tracked variant.
+		after := map[string]any{"on_hand": onHand}
+		tracksBatch, err := VariantTracksBatch(ctx, tx, req.VariantID)
+		if err != nil {
+			return err
+		}
+		if tracksBatch {
+			if err := adjustBatches(ctx, tx, req.BranchID, req.VariantID, req.QuantityDelta, req.BatchNo, req.ExpiryDate,
+				"adjustment", movementID, claims.UserID); err != nil {
+				return err
+			}
+			if req.BatchNo != "" {
+				after["batch_no"] = req.BatchNo
+			}
 		}
 
 		if err := audit.Log(ctx, tx, audit.Entry{
@@ -187,7 +220,7 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 			Action:      "update",
 			PerformedBy: claims.UserID,
 			Before:      map[string]float64{"on_hand": before},
-			After:       map[string]float64{"on_hand": onHand},
+			After:       after,
 			Reason:      req.Reason,
 		}); err != nil {
 			return err
@@ -216,11 +249,38 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 
 		return nil
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrBatchRequired):
+		httpx.Error(w, http.StatusBadRequest, "BATCH_REQUIRED", ErrBatchRequired.Error())
+		return
+	case errors.Is(err, ErrBatchInsufficient):
+		httpx.Error(w, http.StatusConflict, "BATCH_INSUFFICIENT", ErrBatchInsufficient.Error())
+		return
+	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not apply stock adjustment")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, resp)
+}
+
+// adjustBatches applies a signed on_hand correction to a batch-tracked
+// variant's batches — shared by AdjustStock and CreateReconciliation. A
+// positive delta needs a batch_no (ErrBatchRequired) and lands in that
+// batch, created at the variant's current cost if new; a negative one
+// comes out of the named batch, or expired-first when none is named.
+func adjustBatches(ctx context.Context, tx pgx.Tx, branchID, variantID string, delta float64, batchNo string, expiryDate *string, refType, refID, performedBy string) error {
+	if delta > 0 {
+		if batchNo == "" {
+			return ErrBatchRequired
+		}
+		var costPrice float64
+		if err := tx.QueryRow(ctx, `SELECT cost_price FROM product_variants WHERE id = $1`, variantID).Scan(&costPrice); err != nil {
+			return err
+		}
+		return ReceiveBatchWithMovement(ctx, tx, branchID, variantID, batchNo, expiryDate, costPrice, delta, refType, refID, performedBy)
+	}
+	_, err := DrainBatches(ctx, tx, branchID, variantID, -delta, batchNo, DrainExpiredFirst, refType, refID, performedBy)
+	return err
 }
 
 // posOrZero returns v if positive, else 0 — used to build a two-sided

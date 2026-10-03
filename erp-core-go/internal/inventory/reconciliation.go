@@ -42,6 +42,11 @@ import (
 type countLineInput struct {
 	VariantID  string  `json:"variant_id"`
 	CountedQty float64 `json:"counted_qty"`
+	// Phase 8 (batch-tracked variants only, ignored otherwise) — same
+	// meaning as on POST /inventory/adjustments: required when the count
+	// comes in ABOVE the system quantity, optional below it.
+	BatchNo    string  `json:"batch_no"`
+	ExpiryDate *string `json:"expiry_date"`
 }
 
 type reconciliationLineResponse struct {
@@ -111,6 +116,12 @@ func (h *Handler) CreateReconciliation(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "each line needs a variant_id and a non-negative counted_qty")
 			return
 		}
+		if c.ExpiryDate != nil {
+			if _, err := time.Parse("2006-01-02", *c.ExpiryDate); err != nil {
+				httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "expiry_date must be YYYY-MM-DD")
+				return
+			}
+		}
 	}
 
 	var resp reconciliationResponse
@@ -122,6 +133,8 @@ func (h *Handler) CreateReconciliation(w http.ResponseWriter, r *http.Request) {
 			variance      float64
 			costPrice     float64
 			varianceValue float64
+			batchNo       string
+			expiryDate    *string
 		}
 		lines := make([]computedLine, 0, len(req.Counts))
 		var totalVarianceValue float64
@@ -144,6 +157,7 @@ func (h *Handler) CreateReconciliation(w http.ResponseWriter, r *http.Request) {
 			lines = append(lines, computedLine{
 				variantID: c.VariantID, systemQty: systemQty, countedQty: c.CountedQty,
 				variance: variance, costPrice: costPrice, varianceValue: varianceValue,
+				batchNo: c.BatchNo, expiryDate: c.ExpiryDate,
 			})
 		}
 
@@ -201,6 +215,17 @@ func (h *Handler) CreateReconciliation(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 
+			tracksBatch, err := VariantTracksBatch(ctx, tx, l.variantID)
+			if err != nil {
+				return err
+			}
+			if tracksBatch {
+				if err := adjustBatches(ctx, tx, req.BranchID, l.variantID, l.variance, l.batchNo, l.expiryDate,
+					"inventory_reconciliation", reconID, claims.UserID); err != nil {
+					return err
+				}
+			}
+
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, reason, performed_by)
 				VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'adjustment', $3, 'inventory_reconciliation', $4, $5, $6)`,
@@ -244,6 +269,10 @@ func (h *Handler) CreateReconciliation(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "a non-zero variance requires a reason")
 	case errors.Is(err, errInventoryVarianceNotAuthorized):
 		httpx.Error(w, http.StatusForbidden, "VARIANCE_NOT_AUTHORIZED", "a Branch Manager or Merchant Admin PIN is required to close a reconciliation with a variance")
+	case errors.Is(err, ErrBatchRequired):
+		httpx.Error(w, http.StatusBadRequest, "BATCH_REQUIRED", "a count above system stock for a batch-tracked variant needs that line's batch_no")
+	case errors.Is(err, ErrBatchInsufficient):
+		httpx.Error(w, http.StatusConflict, "BATCH_INSUFFICIENT", ErrBatchInsufficient.Error())
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create inventory reconciliation")
 	default:

@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 interface VariantOption {
   variantId: string;
   label: string;
+  trackBatch: boolean;
 }
 
 export default function InventoryPage() {
@@ -35,6 +36,13 @@ export default function InventoryPage() {
 
   const [delta, setDelta] = useState("");
   const [reason, setReason] = useState("");
+  // Phase 8: only for a batch-tracked variant. Required when adding stock
+  // (the server answers BATCH_REQUIRED otherwise); optional when removing
+  // it, where blank writes off the expired/soonest-expiring batch first.
+  const [batchNo, setBatchNo] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const trackBatch = variantOptions.find((o) => o.variantId === variantId)?.trackBatch ?? false;
+  const batchMissing = trackBatch && Number(delta) > 0 && !batchNo.trim();
 
   useEffect(() => {
     api
@@ -51,7 +59,7 @@ export default function InventoryPage() {
         const options: VariantOption[] = [];
         for (const p of d.products) {
           for (const v of p.variants) {
-            options.push({ variantId: v.variant_id, label: `${p.name} (${v.sku})` });
+            options.push({ variantId: v.variant_id, label: `${p.name} (${v.sku})`, trackBatch: v.track_batch });
           }
         }
         setVariantOptions(options);
@@ -76,7 +84,7 @@ export default function InventoryPage() {
 
   async function adjust() {
     const quantityDelta = Number(delta);
-    if (!variantId || !quantityDelta || !reason.trim()) return;
+    if (!variantId || !quantityDelta || !reason.trim() || batchMissing) return;
     setBusy(true);
     try {
       await api.post("/api/v1/inventory/adjustments", {
@@ -84,10 +92,13 @@ export default function InventoryPage() {
         branch_id: branchId,
         quantity_delta: quantityDelta,
         reason: reason.trim(),
+        ...(trackBatch && batchNo.trim() ? { batch_no: batchNo.trim(), ...(expiryDate ? { expiry_date: expiryDate } : {}) } : {}),
       });
       toast.success("Stock adjusted");
       setDelta("");
       setReason("");
+      setBatchNo("");
+      setExpiryDate("");
       await lookup();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not adjust stock");
@@ -195,7 +206,26 @@ export default function InventoryPage() {
               <Label htmlFor="reason">Reason</Label>
               <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
             </div>
-            <Button onClick={adjust} disabled={busy || !variantId || !delta || !reason.trim()}>
+            {trackBatch && (
+              <>
+                <div className="flex flex-col gap-2 w-36">
+                  <Label htmlFor="batchNo">Batch no{Number(delta) > 0 ? " *" : ""}</Label>
+                  <Input
+                    id="batchNo"
+                    value={batchNo}
+                    onChange={(e) => setBatchNo(e.target.value)}
+                    placeholder={Number(delta) > 0 ? "Required" : "Blank = oldest expiry"}
+                  />
+                </div>
+                {Number(delta) > 0 && (
+                  <div className="flex flex-col gap-2 w-40">
+                    <Label htmlFor="expiryDate">Expiry (new batch)</Label>
+                    <Input id="expiryDate" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+                  </div>
+                )}
+              </>
+            )}
+            <Button onClick={adjust} disabled={busy || !variantId || !delta || !reason.trim() || batchMissing}>
               Apply
             </Button>
           </div>

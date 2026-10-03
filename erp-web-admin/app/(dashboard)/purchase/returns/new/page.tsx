@@ -17,6 +17,7 @@ interface DraftLine {
   sku: string;
   quantity: number;
   unit_cost: number;
+  batch_no: string;
 }
 
 export default function NewPurchaseReturnPage() {
@@ -29,6 +30,7 @@ export default function NewPurchaseReturnPage() {
   const [barcode, setBarcode] = useState("");
   const [quantity, setQuantity] = useState("");
   const [unitCost, setUnitCost] = useState("");
+  const [batchNo, setBatchNo] = useState("");
   const [lineError, setLineError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -46,11 +48,12 @@ export default function NewPurchaseReturnPage() {
       );
       setLines((prev) => [
         ...prev,
-        { variant_id: product.variant_id, product_name: product.product_name, sku: product.sku, quantity: Number(quantity), unit_cost: Number(unitCost) },
+        { variant_id: product.variant_id, product_name: product.product_name, sku: product.sku, quantity: Number(quantity), unit_cost: Number(unitCost), batch_no: batchNo.trim() },
       ]);
       setBarcode("");
       setQuantity("");
       setUnitCost("");
+      setBatchNo("");
     } catch (e) {
       setLineError(e instanceof ApiError ? e.message : "Could not reach the server");
     }
@@ -65,7 +68,7 @@ export default function NewPurchaseReturnPage() {
         supplier_id: supplierId,
         branch_id: SEED_BRANCH_ID,
         reason,
-        lines: lines.map((l) => ({ variant_id: l.variant_id, quantity: l.quantity, unit_cost: l.unit_cost })),
+        lines: lines.map((l) => ({ variant_id: l.variant_id, quantity: l.quantity, unit_cost: l.unit_cost, ...(l.batch_no ? { batch_no: l.batch_no } : {}) })),
       });
       router.push("/purchase/returns");
       void ret;
@@ -121,6 +124,7 @@ export default function NewPurchaseReturnPage() {
                   <TableHead>Product</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Unit cost</TableHead>
+                  <TableHead>Batch</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -131,6 +135,7 @@ export default function NewPurchaseReturnPage() {
                     </TableCell>
                     <TableCell>{l.quantity}</TableCell>
                     <TableCell>₹{l.unit_cost}</TableCell>
+                    <TableCell>{l.batch_no || <span className="text-zinc-400">—</span>}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -150,6 +155,10 @@ export default function NewPurchaseReturnPage() {
                 <Label htmlFor="unitCost">Unit cost (₹) *</Label>
                 <Input id="unitCost" type="number" min="0" step="0.01" required value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
               </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="batchNo">Batch no (batch-tracked items only)</Label>
+              <Input id="batchNo" value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="Blank = expired/oldest batch first" />
             </div>
             {lineError && <p className="text-sm text-red-600">{lineError}</p>}
             <Button type="submit" variant="outline">

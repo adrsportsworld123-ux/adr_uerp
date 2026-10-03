@@ -24,6 +24,9 @@ export interface ProductVariant {
   // coexist rather than one replacing the other.
   original_barcode: string | null;
   generated_barcode: string | null;
+  // Phase 8 batch/expiry tracking — stock screens show batch fields only
+  // for these (a stock increase on one needs a batch_no).
+  track_batch: boolean;
 }
 
 export interface Product {

@@ -37,6 +37,7 @@ function daysAgo(n: number) {
 interface VariantOption {
   variantId: string;
   label: string;
+  trackBatch: boolean;
 }
 
 export default function InventoryReconciliationPage() {
@@ -58,6 +59,11 @@ function NewCountSection() {
   const [selectedVariant, setSelectedVariant] = useState("");
   const [counts, setCounts] = useState<Record<string, string>>({}); // variant_id -> counted_qty
   const [systemQty, setSystemQty] = useState<Record<string, string>>({}); // variant_id -> live system on_hand, fetched when a line is added
+  // Phase 8: batch-tracked lines only. A count ABOVE system stock needs
+  // the batch the extra units belong to (server: BATCH_REQUIRED); below
+  // it, blank writes off the expired/soonest-expiring batch first.
+  const [batchNos, setBatchNos] = useState<Record<string, string>>({});
+  const [expiries, setExpiries] = useState<Record<string, string>>({});
   const [reason, setReason] = useState("");
   const [authorizedBy, setAuthorizedBy] = useState("");
   const [authorizedPin, setAuthorizedPin] = useState("");
@@ -80,7 +86,7 @@ function NewCountSection() {
         const options: VariantOption[] = [];
         for (const p of d.products) {
           for (const v of p.variants) {
-            options.push({ variantId: v.variant_id, label: `${p.name} (${v.sku})` });
+            options.push({ variantId: v.variant_id, label: `${p.name} (${v.sku})`, trackBatch: v.track_batch });
           }
         }
         setVariantOptions(options);
@@ -112,6 +118,10 @@ function NewCountSection() {
     const counted = Number(counts[vid]) || 0;
     return sum + (counted - sys);
   }, 0);
+  const isTracked = (vid: string) => variantOptions.find((o) => o.variantId === vid)?.trackBatch ?? false;
+  const batchMissing = lineVariantIds.some(
+    (vid) => isTracked(vid) && (Number(counts[vid]) || 0) - (Number(systemQty[vid]) || 0) > 0.0005 && !batchNos[vid]?.trim()
+  );
   const needsApproval = lineVariantIds.some((vid) => {
     const sys = Number(systemQty[vid]) || 0;
     const counted = Number(counts[vid]) || 0;
@@ -123,7 +133,13 @@ function NewCountSection() {
     setBusy(true);
     setError(null);
     try {
-      const payloadCounts = lineVariantIds.map((vid) => ({ variant_id: vid, counted_qty: Number(counts[vid]) || 0 }));
+      const payloadCounts = lineVariantIds.map((vid) => ({
+        variant_id: vid,
+        counted_qty: Number(counts[vid]) || 0,
+        ...(isTracked(vid) && batchNos[vid]?.trim()
+          ? { batch_no: batchNos[vid].trim(), ...(expiries[vid] ? { expiry_date: expiries[vid] } : {}) }
+          : {}),
+      }));
       const res = await api.post<InventoryReconciliation>("/api/v1/inventory/reconciliation", {
         branch_id: branchId,
         recon_type: reconType,
@@ -135,6 +151,8 @@ function NewCountSection() {
       setResult(res);
       setCounts({});
       setSystemQty({});
+      setBatchNos({});
+      setExpiries({});
       setReason("");
       setAuthorizedBy("");
       setAuthorizedPin("");
@@ -228,6 +246,7 @@ function NewCountSection() {
                 <TableHead>System qty</TableHead>
                 <TableHead>Counted qty</TableHead>
                 <TableHead>Variance</TableHead>
+                <TableHead>Batch (batch-tracked only)</TableHead>
                 <TableHead></TableHead>
               </TableRow>
             </TableHeader>
@@ -253,6 +272,30 @@ function NewCountSection() {
                     </TableCell>
                     <TableCell className={variance === 0 ? "text-green-700" : "text-red-600 font-semibold"}>{variance}</TableCell>
                     <TableCell>
+                      {isTracked(vid) ? (
+                        <div className="flex gap-1">
+                          <Input
+                            aria-label="Batch no"
+                            className="h-8 w-24"
+                            value={batchNos[vid] ?? ""}
+                            onChange={(e) => setBatchNos({ ...batchNos, [vid]: e.target.value })}
+                            placeholder={variance > 0 ? "Required" : "Optional"}
+                          />
+                          {variance > 0 && (
+                            <Input
+                              aria-label="Expiry"
+                              type="date"
+                              className="h-8 w-36"
+                              value={expiries[vid] ?? ""}
+                              onChange={(e) => setExpiries({ ...expiries, [vid]: e.target.value })}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-zinc-400">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
                       <Button type="button" size="sm" variant="ghost" onClick={() => removeLine(vid)}>
                         Remove
                       </Button>
@@ -262,7 +305,7 @@ function NewCountSection() {
               })}
               {lineVariantIds.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
                     No lines added yet
                   </TableCell>
                 </TableRow>
@@ -300,7 +343,10 @@ function NewCountSection() {
           )}
 
           {error && <p className="text-sm text-red-600">{error}</p>}
-          <Button type="submit" disabled={busy || lineVariantIds.length === 0} className="w-fit">
+          {batchMissing && (
+            <p className="text-sm text-amber-700">A batch-tracked line counted above system stock needs the batch number the extra units belong to.</p>
+          )}
+          <Button type="submit" disabled={busy || lineVariantIds.length === 0 || batchMissing} className="w-fit">
             {busy ? "Submitting..." : "Submit reconciliation"}
           </Button>
 

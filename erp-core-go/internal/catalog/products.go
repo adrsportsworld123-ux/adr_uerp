@@ -41,6 +41,10 @@ type variantSummary struct {
 	// page) show and assign both without a second per-variant round trip.
 	OriginalBarcode  *string `json:"original_barcode"`
 	GeneratedBarcode *string `json:"generated_barcode"`
+	// TrackBatch (Phase 8) lets stock screens show batch/expiry fields
+	// only for the variants whose adjustments, counts and returns need
+	// them (internal/inventory/batches.go's ErrBatchRequired).
+	TrackBatch bool `json:"track_batch"`
 }
 
 type productSummary struct {
@@ -125,7 +129,8 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			variantRows, err := tx.Query(ctx, `
 				SELECT pv.id, pv.sku, pv.cost_price::text, pv.mrp::text, pv.selling_price::text, pv.cost_price, pv.selling_price,
 				       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'original' ORDER BY created_at LIMIT 1),
-				       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'generated' ORDER BY created_at LIMIT 1)
+				       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'generated' ORDER BY created_at LIMIT 1),
+				       pv.track_batch
 				FROM product_variants pv
 				WHERE pv.product_id = $1
 				  AND ($2 = '' OR pv.selling_price >= $2::numeric)
@@ -138,7 +143,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			for variantRows.Next() {
 				var v variantSummary
 				var costPrice, sellingPrice float64
-				if err := variantRows.Scan(&v.VariantID, &v.SKU, &v.CostPrice, &v.MRP, &v.SellingPrice, &costPrice, &sellingPrice, &v.OriginalBarcode, &v.GeneratedBarcode); err != nil {
+				if err := variantRows.Scan(&v.VariantID, &v.SKU, &v.CostPrice, &v.MRP, &v.SellingPrice, &costPrice, &sellingPrice, &v.OriginalBarcode, &v.GeneratedBarcode, &v.TrackBatch); err != nil {
 					variantRows.Close()
 					return err
 				}

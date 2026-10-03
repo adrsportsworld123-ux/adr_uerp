@@ -18,6 +18,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/inventory"
 )
 
 type Handler struct {
@@ -138,15 +139,20 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 
 		var subtotal, discountTotal, taxTotal, grandTotal float64
 		for _, l := range o.Lines {
-			if _, err := tx.Exec(ctx, `
+			var lineID string
+			if err := tx.QueryRow(ctx, `
 				INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)`,
-				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal, l.PriceIncludesTax); err != nil {
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
+				RETURNING id`,
+				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal, l.PriceIncludesTax).Scan(&lineID); err != nil {
 				return err
 			}
 
 			went, err := applySyncSale(ctx, tx, o.BranchID, l.VariantID, l.Quantity, orderID, claims.UserID)
 			if err != nil {
+				return err
+			}
+			if err := applySyncSaleBatches(ctx, tx, o.BranchID, l.VariantID, lineID, l.Quantity, claims.UserID); err != nil {
 				return err
 			}
 			if went {
@@ -254,4 +260,27 @@ func applySyncSale(ctx context.Context, tx pgx.Tx, branchID, variantID string, q
 	}
 
 	return onHand < 0, nil
+}
+
+// applySyncSaleBatches is applySyncSale's Phase 8 counterpart for a
+// batch-tracked variant: the sale already happened, so it never refuses
+// (same §3.5 rule as applySyncSale) — it draws sellable-first, best-effort,
+// and records the split in sales_order_line_batches exactly like an online
+// sale, so a later void restores the right batches. Any quantity the
+// batches can't cover is the same oversell applySyncSale already flags.
+func applySyncSaleBatches(ctx context.Context, tx pgx.Tx, branchID, variantID, lineID string, quantity float64, performedBy string) error {
+	tracksBatch, err := inventory.VariantTracksBatch(ctx, tx, variantID)
+	if err != nil || !tracksBatch {
+		return err
+	}
+	draws, err := inventory.DrainBatches(ctx, tx, branchID, variantID, quantity, "",
+		inventory.DrainSellableFirst, "offline_sale", lineID, performedBy)
+	if err != nil {
+		return err
+	}
+	allocations := make([]inventory.BatchAllocation, 0, len(draws))
+	for _, d := range draws {
+		allocations = append(allocations, inventory.BatchAllocation{BatchID: d.BatchID, Quantity: d.Quantity})
+	}
+	return inventory.RecordLineBatchAllocations(ctx, tx, lineID, allocations)
 }

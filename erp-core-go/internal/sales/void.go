@@ -12,6 +12,7 @@ import (
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/inventory"
 )
 
 type voidRequest struct {
@@ -62,18 +63,18 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 			return errOrderNotVoidable
 		}
 
-		rows, err := tx.Query(ctx, `SELECT variant_id, quantity FROM sales_order_lines WHERE sales_order_id = $1`, orderID)
+		rows, err := tx.Query(ctx, `SELECT id, variant_id, quantity FROM sales_order_lines WHERE sales_order_id = $1`, orderID)
 		if err != nil {
 			return err
 		}
 		type line struct {
-			variantID string
-			quantity  float64
+			id, variantID string
+			quantity      float64
 		}
 		var lines []line
 		for rows.Next() {
 			var l line
-			if err := rows.Scan(&l.variantID, &l.quantity); err != nil {
+			if err := rows.Scan(&l.id, &l.variantID, &l.quantity); err != nil {
 				rows.Close()
 				return err
 			}
@@ -94,6 +95,11 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 				INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, reason, performed_by)
 				VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'adjustment', $3, 'void', $4, $5, $6)`,
 				branchID, l.variantID, l.quantity, orderID, req.Reason, claims.UserID); err != nil {
+				return err
+			}
+			// Phase 8: the units go back into the batches they were sold
+			// from (a no-op for a line with no batch allocation).
+			if err := inventory.RestoreLineBatchesForVoid(ctx, tx, l.id, orderID, claims.UserID); err != nil {
 				return err
 			}
 		}
