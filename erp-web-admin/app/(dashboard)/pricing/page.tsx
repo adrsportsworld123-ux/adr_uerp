@@ -422,7 +422,7 @@ interface BulkItem {
   product_name: string;
   old_price: number;
   new_price: number;
-  status: "would_update" | "updated" | "skipped_negative_margin";
+  status: "would_update" | "updated" | "scheduled" | "skipped_negative_margin";
 }
 
 function BulkUpdate({ onApplied }: { onApplied: () => void }) {
@@ -431,6 +431,9 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
   const [roundTo, setRoundTo] = useState("");
   const [reason, setReason] = useState("");
   const [override, setOverride] = useState(false);
+  // Phase 10: optional — set it and Apply schedules the computed prices
+  // (Scheduled Price Changes page) instead of changing them now.
+  const [effectiveAt, setEffectiveAt] = useState("");
   const [items, setItems] = useState<BulkItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -443,6 +446,7 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
       round_to: Number(roundTo) || 0,
       reason,
       override,
+      ...(effectiveAt ? { effective_at: new Date(effectiveAt).toISOString() } : {}),
     };
   }
 
@@ -462,7 +466,7 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
     try {
       const res = await api.post<{ items: BulkItem[] }>("/api/v1/pricing/bulk-update/apply", buildBody());
       setItems(res.items);
-      toast.success("Bulk price update applied");
+      toast.success(effectiveAt ? "Bulk price update scheduled" : "Bulk price update applied");
       onApplied();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not apply bulk update");
@@ -508,6 +512,10 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
             <Label htmlFor="reason">Reason</Label>
             <Input id="reason" className="w-40" value={reason} onChange={(e) => setReason(e.target.value)} />
           </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="bulkEffectiveAt">Effective (optional)</Label>
+            <Input id="bulkEffectiveAt" type="datetime-local" className="w-52" value={effectiveAt} onChange={(e) => setEffectiveAt(e.target.value)} />
+          </div>
           <Button type="submit" variant="outline">
             Preview
           </Button>
@@ -546,7 +554,7 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
               </label>
             )}
             <Button disabled={busy || items.every((it) => it.status !== "would_update" && !override)} onClick={apply}>
-              {busy ? "Applying..." : "Apply"}
+              {busy ? "Applying..." : effectiveAt ? "Schedule" : "Apply"}
             </Button>
           </>
         )}

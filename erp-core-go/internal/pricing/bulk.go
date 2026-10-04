@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -37,6 +38,12 @@ type bulkUpdateRequest struct {
 	RoundTo  float64    `json:"round_to"` // 0 = no rounding; else nearest ₹1/5/10/50/100 etc.
 	Reason   string     `json:"reason"`
 	Override bool       `json:"override"` // allow variants whose new price would be below cost
+	// EffectiveAt (Phase 10, optional, RFC3339): instead of changing
+	// prices now, Apply queues each computed price as a scheduled change
+	// (schedule.go) effective then — "revise every bat price from 1
+	// April". The prices are computed NOW, from today's prices, so what
+	// Preview shows is exactly what gets scheduled.
+	EffectiveAt string `json:"effective_at"`
 }
 
 type bulkItemResult struct {
@@ -45,7 +52,7 @@ type bulkItemResult struct {
 	ProductName string  `json:"product_name"`
 	OldPrice    float64 `json:"old_price"`
 	NewPrice    float64 `json:"new_price"`
-	Status      string  `json:"status"` // "would_update" | "updated" | "skipped_negative_margin"
+	Status      string  `json:"status"` // "would_update" | "updated" | "scheduled" | "skipped_negative_margin"
 }
 
 func validateBulkRequest(req bulkUpdateRequest) error {
@@ -53,6 +60,15 @@ func validateBulkRequest(req bulkUpdateRequest) error {
 	case "percent", "fixed", "set":
 	default:
 		return errInvalidMethod
+	}
+	if req.EffectiveAt != "" {
+		at, err := time.Parse(time.RFC3339, req.EffectiveAt)
+		if err != nil {
+			return errors.New("effective_at must be an RFC3339 timestamp")
+		}
+		if !at.After(time.Now()) {
+			return errEffectiveAtNotFuture
+		}
 	}
 	return nil
 }
@@ -125,7 +141,15 @@ func computeBulkChanges(ctx context.Context, tx pgx.Tx, req bulkUpdateRequest, a
 			continue
 		}
 
-		if apply {
+		if apply && req.EffectiveAt != "" {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO scheduled_price_changes (merchant_id, variant_id, selling_price, effective_at, reason, override, created_by)
+				VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3::timestamptz, NULLIF($4,''), $5, $6)`,
+				m.id, newPrice, req.EffectiveAt, req.Reason, req.Override, changedBy); err != nil {
+				return nil, err
+			}
+			item.Status = "scheduled"
+		} else if apply {
 			if _, err := tx.Exec(ctx, `UPDATE product_variants SET selling_price = $1, updated_at = now() WHERE id = $2`, newPrice, m.id); err != nil {
 				return nil, err
 			}

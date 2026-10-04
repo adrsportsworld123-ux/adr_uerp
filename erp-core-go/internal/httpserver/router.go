@@ -332,6 +332,24 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Delete("/pricing/price-lists/{id}/items/{variant_id}", prc.DeletePriceListItem)
 
+			// Phase 10: scheduled price changes and dynamic price rules.
+			// Reads open (a cashier asking "why is this cheaper right now?"
+			// is informational); writes gated behind pricing.manage, the
+			// same tier as changing a price immediately.
+			protected.Get("/pricing/scheduled-changes", prc.ListScheduledChanges)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/pricing/scheduled-changes", prc.CreateScheduledChange)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/pricing/scheduled-changes/{id}/cancel", prc.CancelScheduledChange)
+			protected.Get("/pricing/rules", prc.ListPriceRules)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/pricing/rules", prc.CreatePriceRule)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Patch("/pricing/rules/{id}", prc.SetPriceRuleActive)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Delete("/pricing/rules/{id}", prc.DeletePriceRule)
+			protected.Get("/pricing/variants/{id}/effective-price", prc.GetEffectivePrice)
+
 			protected.With(authn.RequirePermission(database, "hr.manage")).
 				Get("/hr/roles", hrH.ListRoles)
 			protected.With(authn.RequirePermission(database, "hr.manage")).
@@ -419,6 +437,11 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/quotations/{id}/reject", quoH.RejectQuotation)
 			protected.Post("/quotations/{id}/convert", quoH.ConvertQuotation)
 			protected.Delete("/quotations/{id}", quoH.DeleteQuotation)
+			// Phase 10: editing a draft (draft-only; 409 QUOTATION_NOT_DRAFT otherwise).
+			protected.Patch("/quotations/{id}", quoH.UpdateQuotation)
+			protected.Post("/quotations/{id}/lines", quoH.AddQuotationLine)
+			protected.Patch("/quotations/{id}/lines/{line_id}", quoH.UpdateQuotationLine)
+			protected.Delete("/quotations/{id}/lines/{line_id}", quoH.DeleteQuotationLine)
 		})
 	})
 

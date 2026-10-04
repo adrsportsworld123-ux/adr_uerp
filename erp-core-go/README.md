@@ -241,6 +241,29 @@ run with a *wrong* tenant context on purpose — that RLS silently scopes the
 `UPDATE` to zero rows even for a real user's email, so this endpoint cannot
 cross a tenant boundary even in a bug scenario.
 
+## Running against a locally installed Postgres (no Docker)
+
+1. `copy .env.local.example .env.local` and set `PGADMIN_PASSWORD` (the
+   `postgres` superuser) and a random `JWT_SECRET`. `.env.local` is
+   gitignored - never commit it.
+2. Create the empty database once: `CREATE DATABASE erp;`
+3. Apply migrations (re-runnable; only pending files are applied, each in
+   its own transaction, tracked in `ops.schema_migrations`):
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts/local-db.ps1          # apply pending
+   powershell -ExecutionPolicy Bypass -File scripts/local-db.ps1 -Status  # show state
+   ```
+
+4. Run the API: `powershell -ExecutionPolicy Bypass -File scripts/run-local.ps1`
+   (listens on `HTTP_ADDR`, `:8081` by default so it doesn't collide with the
+   docker-compose `api` on `:8080`).
+
+Migrations run as the admin/owner role; the API connects as `erp_app` (created
+by `004`), which is non-superuser and `NOBYPASSRLS` - keep it that way, or RLS
+is silently bypassed. New schema changes go in a new `migrations/NNN_*.sql`
+file; never edit one that has already been applied.
+
 ## Running it
 
 ```bash

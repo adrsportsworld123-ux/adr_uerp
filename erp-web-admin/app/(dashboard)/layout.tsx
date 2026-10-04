@@ -25,6 +25,8 @@ const NAV = [
   { href: "/prescriptions", label: "Prescriptions" },
   { href: "/pricing", label: "Pricing" },
   { href: "/pricing/price-lists", label: "Wholesale Price Lists" },
+  { href: "/pricing/scheduled-changes", label: "Scheduled Price Changes" },
+  { href: "/pricing/rules", label: "Price Rules" },
   { href: "/quotations", label: "B2B Quotations" },
   { href: "/search", label: "Product Search" },
   { href: "/accounting/chart-of-accounts", label: "Chart of Accounts" },

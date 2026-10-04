@@ -284,8 +284,19 @@ export default function QuotationsPage() {
             <Badge variant={STATUS_VARIANT[selected.status] ?? "outline"}>{selected.status}</Badge>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            {selected.notes && <p className="text-sm text-zinc-600">{selected.notes}</p>}
-            <Table>
+            {selected.status === "draft" ? (
+              <DraftEditor
+                quotation={selected}
+                variantOptions={variantOptions}
+                onChanged={(q) => {
+                  setSelected(q);
+                  refreshList();
+                }}
+              />
+            ) : (
+              <>
+                {selected.notes && <p className="text-sm text-zinc-600">{selected.notes}</p>}
+                <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Product</TableHead>
@@ -304,8 +315,10 @@ export default function QuotationsPage() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
-            <div className="text-sm text-right font-medium">Grand total: ₹{selected.grand_total}</div>
+                </Table>
+                <div className="text-sm text-right font-medium">Grand total: ₹{selected.grand_total}</div>
+              </>
+            )}
 
             {selected.converted_sales_order_id && (
               <p className="text-sm text-emerald-700">Converted to sales order {selected.converted_sales_order_id}</p>
@@ -331,6 +344,187 @@ export default function QuotationsPage() {
           </CardContent>
         </Card>
       )}
+    </div>
+  );
+}
+
+// Phase 10: editing a draft quotation (erp-core-go internal/quotations/
+// lines.go). Only drafts are editable — once sent, the customer may have
+// the numbers, so the honest path is reject + a new quote. A negotiated
+// unit price set here is exactly what the converted order bills.
+function DraftEditor({
+  quotation,
+  variantOptions,
+  onChanged,
+}: {
+  quotation: Quotation;
+  variantOptions: { id: string; label: string }[];
+  onChanged: (q: Quotation) => void;
+}) {
+  const [edits, setEdits] = useState<Record<string, { quantity: string; unitPrice: string }>>({});
+  const [newVariant, setNewVariant] = useState("");
+  const [newQty, setNewQty] = useState("1");
+  const [newPrice, setNewPrice] = useState("");
+  const [validUntil, setValidUntil] = useState(quotation.valid_until);
+  const [notes, setNotes] = useState(quotation.notes);
+  const [busy, setBusy] = useState(false);
+  const base = `/api/v1/quotations/${quotation.quotation_id}`;
+
+  async function run(fn: () => Promise<Quotation>, ok: string) {
+    setBusy(true);
+    try {
+      const q = await fn();
+      toast.success(ok);
+      setEdits({});
+      onChanged(q);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not update quotation");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function edit(lineId: string, patch: Partial<{ quantity: string; unitPrice: string }>) {
+    const line = quotation.lines.find((l) => l.line_id === lineId);
+    if (!line) return;
+    const cur = edits[lineId] ?? { quantity: line.quantity, unitPrice: line.unit_price };
+    setEdits({ ...edits, [lineId]: { ...cur, ...patch } });
+  }
+
+  function saveLine(lineId: string) {
+    const line = quotation.lines.find((l) => l.line_id === lineId);
+    const e = edits[lineId];
+    if (!line || !e) return;
+    const body: { quantity?: number; unit_price?: number } = {};
+    if (Number(e.quantity) !== Number(line.quantity)) body.quantity = Number(e.quantity);
+    if (Number(e.unitPrice) !== Number(line.unit_price)) body.unit_price = Number(e.unitPrice);
+    if (!Object.keys(body).length) return;
+    run(() => api.patch<Quotation>(`${base}/lines/${lineId}`, body), "Line updated");
+  }
+
+  async function addLine() {
+    const q = await api.post<Quotation>(`${base}/lines`, {
+      variant_id: newVariant,
+      quantity: Number(newQty),
+      ...(newPrice ? { unit_price: Number(newPrice) } : {}),
+    });
+    setNewVariant("");
+    setNewQty("1");
+    setNewPrice("");
+    return q;
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Product</TableHead>
+            <TableHead>Qty</TableHead>
+            <TableHead>Unit price (₹)</TableHead>
+            <TableHead>Line total</TableHead>
+            <TableHead></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {quotation.lines.map((l) => {
+            const e = edits[l.line_id];
+            return (
+              <TableRow key={l.line_id}>
+                <TableCell>
+                  {l.product_name} <span className="text-xs text-zinc-500">({l.sku})</span>
+                </TableCell>
+                <TableCell>
+                  <Input
+                    aria-label="Quantity"
+                    className="h-8 w-20"
+                    type="number"
+                    min="0.001"
+                    step="0.001"
+                    value={e?.quantity ?? l.quantity}
+                    onChange={(ev) => edit(l.line_id, { quantity: ev.target.value })}
+                  />
+                </TableCell>
+                <TableCell>
+                  <Input
+                    aria-label="Unit price"
+                    className="h-8 w-28"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={e?.unitPrice ?? l.unit_price}
+                    onChange={(ev) => edit(l.line_id, { unitPrice: ev.target.value })}
+                  />
+                </TableCell>
+                <TableCell>₹{l.line_total}</TableCell>
+                <TableCell className="flex gap-1">
+                  <Button size="sm" variant="outline" disabled={busy || !e} onClick={() => saveLine(l.line_id)}>
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => run(() => api.patch<Quotation>(`${base}/lines/${l.line_id}`, { reprice: true }), "Line repriced")}
+                  >
+                    Reprice
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy || quotation.lines.length === 1}
+                    onClick={() => run(() => api.delete<Quotation>(`${base}/lines/${l.line_id}`), "Line removed")}
+                  >
+                    Remove
+                  </Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+      <div className="text-sm text-right font-medium">Grand total: ₹{quotation.grand_total}</div>
+
+      <div className="flex items-end gap-2 flex-wrap border rounded-md p-3 bg-zinc-50">
+        <div className="flex-1 min-w-56">
+          <Label className="mb-2 block">Add a line</Label>
+          <Select value={newVariant} onValueChange={(v) => setNewVariant(v ?? "")} items={Object.fromEntries(variantOptions.map((o) => [o.id, o.label]))}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select a product" />
+            </SelectTrigger>
+            <SelectContent>
+              {variantOptions.map((o) => (
+                <SelectItem key={o.id} value={o.id}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Input aria-label="New line quantity" className="w-20" type="number" min="0.001" step="0.001" value={newQty} onChange={(e) => setNewQty(e.target.value)} />
+        <Input aria-label="New line price" className="w-32" type="number" min="0" step="0.01" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} placeholder="Auto price" />
+        <Button variant="outline" disabled={busy || !newVariant || !(Number(newQty) > 0)} onClick={() => run(addLine, "Line added")}>
+          Add line
+        </Button>
+      </div>
+
+      <div className="flex items-end gap-2 flex-wrap">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="editValidUntil">Valid until</Label>
+          <Input id="editValidUntil" type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-2 flex-1 min-w-56">
+          <Label htmlFor="editNotes">Notes</Label>
+          <Input id="editNotes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </div>
+        <Button
+          variant="outline"
+          disabled={busy || (validUntil === quotation.valid_until && notes === quotation.notes)}
+          onClick={() => run(() => api.patch<Quotation>(base, { valid_until: validUntil, notes }), "Quotation updated")}
+        >
+          Save details
+        </Button>
+      </div>
     </div>
   );
 }

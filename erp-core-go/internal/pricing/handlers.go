@@ -165,56 +165,9 @@ func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
 
 	var resp pricingResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var costPrice, mrp, sellingPrice float64
-		if err := tx.QueryRow(ctx, `SELECT cost_price, mrp, selling_price FROM product_variants WHERE id = $1`, variantID).
-			Scan(&costPrice, &mrp, &sellingPrice); err != nil {
-			return err
-		}
-		taxRatePct, inclusive, err := loadTaxBasis(ctx, tx, variantID)
-		if err != nil {
-			return err
-		}
-
-		newCost, newMRP, newSelling := costPrice, mrp, sellingPrice
-		if req.CostPrice != nil {
-			newCost = *req.CostPrice
-		}
-		if req.MRP != nil {
-			newMRP = *req.MRP
-		}
-		if req.SellingPrice != nil {
-			newSelling = *req.SellingPrice
-		}
-
-		// Compared on the NET price: ₹1000 tax-inclusive at 18% is only
-		// ₹847.46 of revenue, so a ₹900 cost is a loss even though
-		// 1000 > 900.
-		newNet := taxcalc.NetPrice(newSelling, taxRatePct, inclusive)
-		if newNet < newCost && !req.Override {
-			return errNegativeMargin
-		}
-
-		if _, err := tx.Exec(ctx, `UPDATE product_variants SET cost_price = $1, mrp = $2, selling_price = $3, updated_at = now() WHERE id = $4`,
-			newCost, newMRP, newSelling, variantID); err != nil {
-			return err
-		}
-
-		if err := recordPriceChange(ctx, tx, variantID, "cost_price", costPrice, newCost, req.Reason, claims.UserID); err != nil {
-			return err
-		}
-		if err := recordPriceChange(ctx, tx, variantID, "mrp", mrp, newMRP, req.Reason, claims.UserID); err != nil {
-			return err
-		}
-		if err := recordPriceChange(ctx, tx, variantID, "selling_price", sellingPrice, newSelling, req.Reason, claims.UserID); err != nil {
-			return err
-		}
-
-		resp = pricingResponse{
-			VariantID: variantID, CostPrice: newCost, MRP: newMRP, SellingPrice: newSelling,
-			NetSellingPrice: newNet, PriceIncludesTax: inclusive,
-			MarginPct: marginPct(newNet, newCost), MarkupPct: markupPct(newNet, newCost),
-		}
-		return nil
+		var err error
+		resp, err = applyVariantPricing(ctx, tx, variantID, req.CostPrice, req.MRP, req.SellingPrice, req.Reason, req.Override, claims.UserID)
+		return err
 	})
 
 	switch {
@@ -228,6 +181,64 @@ func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
 		h.reindex(r.Context(), claims.TenantID, variantID)
 		httpx.JSON(w, http.StatusOK, resp)
 	}
+}
+
+// applyVariantPricing is PATCH /pricing/variants/{id}'s core, shared
+// with the scheduled-price sweeper (schedule.go) so a change applied
+// later goes through exactly the same rules as one applied now: nil
+// leaves a field unchanged, a below-cost NET price is refused
+// (errNegativeMargin) unless override, and every changed field gets a
+// price_history row.
+func applyVariantPricing(ctx context.Context, tx pgx.Tx, variantID string, costPtr, mrpPtr, sellingPtr *float64, reason string, override bool, changedBy string) (pricingResponse, error) {
+	var costPrice, mrp, sellingPrice float64
+	if err := tx.QueryRow(ctx, `SELECT cost_price, mrp, selling_price FROM product_variants WHERE id = $1`, variantID).
+		Scan(&costPrice, &mrp, &sellingPrice); err != nil {
+		return pricingResponse{}, err
+	}
+	taxRatePct, inclusive, err := loadTaxBasis(ctx, tx, variantID)
+	if err != nil {
+		return pricingResponse{}, err
+	}
+
+	newCost, newMRP, newSelling := costPrice, mrp, sellingPrice
+	if costPtr != nil {
+		newCost = *costPtr
+	}
+	if mrpPtr != nil {
+		newMRP = *mrpPtr
+	}
+	if sellingPtr != nil {
+		newSelling = *sellingPtr
+	}
+
+	// Compared on the NET price: ₹1000 tax-inclusive at 18% is only
+	// ₹847.46 of revenue, so a ₹900 cost is a loss even though
+	// 1000 > 900.
+	newNet := taxcalc.NetPrice(newSelling, taxRatePct, inclusive)
+	if newNet < newCost && !override {
+		return pricingResponse{}, errNegativeMargin
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE product_variants SET cost_price = $1, mrp = $2, selling_price = $3, updated_at = now() WHERE id = $4`,
+		newCost, newMRP, newSelling, variantID); err != nil {
+		return pricingResponse{}, err
+	}
+
+	if err := recordPriceChange(ctx, tx, variantID, "cost_price", costPrice, newCost, reason, changedBy); err != nil {
+		return pricingResponse{}, err
+	}
+	if err := recordPriceChange(ctx, tx, variantID, "mrp", mrp, newMRP, reason, changedBy); err != nil {
+		return pricingResponse{}, err
+	}
+	if err := recordPriceChange(ctx, tx, variantID, "selling_price", sellingPrice, newSelling, reason, changedBy); err != nil {
+		return pricingResponse{}, err
+	}
+
+	return pricingResponse{
+		VariantID: variantID, CostPrice: newCost, MRP: newMRP, SellingPrice: newSelling,
+		NetSellingPrice: newNet, PriceIncludesTax: inclusive,
+		MarginPct: marginPct(newNet, newCost), MarkupPct: markupPct(newNet, newCost),
+	}, nil
 }
 
 // reindex is best-effort and never affects the request's outcome — a

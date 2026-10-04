@@ -11,20 +11,20 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d   # on a genuinely fresh volume only, Postgres's entrypoint runs
-                                                    # EVERY .sql file here in filename order — all of them, not just
-                                                    # 001_schema.sql/002_seed.sql as this comment used to (wrongly)
-                                                    # claim. Confirmed live (2026-09-24): the pgdata volume was reset
-                                                    # at some point outside this session's control, and the next
-                                                    # `docker compose up` silently replayed migrations 001 through
-                                                    # the latest, restoring schema + every migration's own seed/
-                                                    # backfill INSERTs correctly — but not any runtime data created
-                                                    # via the API afterward (real orders, payroll runs, e-invoices,
-                                                    # extra employees), which a fresh volume has no way to recreate.
-                                                    # If dev data vanishes unexpectedly, check `docker inspect
-                                                    # erp-core-go-postgres-1 --format '{{.State.StartedAt}}'` against
-                                                    # when you'd expect the volume to have persisted — a suspiciously
-                                                    # recent start time is the tell.
+      - ./migrations:/docker-entrypoint-initdb.d # on a genuinely fresh volume only, Postgres's entrypoint runs
+        # EVERY .sql file here in filename order — all of them, not just
+        # 001_schema.sql/002_seed.sql as this comment used to (wrongly)
+        # claim. Confirmed live (2026-09-24): the pgdata volume was reset
+        # at some point outside this session's control, and the next
+        # `docker compose up` silently replayed migrations 001 through
+        # the latest, restoring schema + every migration's own seed/
+        # backfill INSERTs correctly — but not any runtime data created
+        # via the API afterward (real orders, payroll runs, e-invoices,
+        # extra employees), which a fresh volume has no way to recreate.
+        # If dev data vanishes unexpectedly, check `docker inspect
+        # erp-core-go-postgres-1 --format '{{.State.StartedAt}}'` against
+        # when you'd expect the volume to have persisted — a suspiciously
+        # recent start time is the tell.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app_user -d erp"]
       interval: 5s
@@ -65,7 +65,11 @@ services:
       # the index warm across ordinary restarts is still the right default.
       - opensearch-data:/usr/share/opensearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      test:
+        [
+          "CMD-SHELL",
+          'curl -s http://localhost:9200/_cluster/health | grep -qE ''"status":"(green|yellow)"''',
+        ]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -104,7 +108,7 @@ services:
       # creates, or every RLS policy in this schema is dead weight — see
       # that migration's header comment for how this was actually found
       # and confirmed live, not just reasoned about.
-      DATABASE_DSN: "postgres://erp_app:erp_app_password@postgres:5432/erp?sslmode=disable"
+      DATABASE_DSN: "postgres://erp_app:erp_app_password@host.docker.internal:5432/erp?sslmode=disable"
       OPENSEARCH_URL: "http://opensearch:9200"
       JWT_SECRET: "dev-only-secret-change-me"
       # Enables POST /dev/hash-password and POST /dev/set-password — see

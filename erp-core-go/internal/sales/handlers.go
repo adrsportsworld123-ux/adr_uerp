@@ -240,10 +240,31 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 }
 
 // AddLineToCart is AddLine's core, exported for the same reason
-// CreateCart is — internal/quotations' ConvertQuotation calls this
-// directly so a converted quote's lines go through the exact same
-// stock-reservation/pricing path a POS add-line does.
+// CreateCart is. The line is priced by pricing.ResolveLinePriceAt at this
+// moment (price list, then any live Phase 10 price rule, then base price).
 func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, quantity float64) (orderResponse, error) {
+	return addLineToCart(ctx, tx, orderID, variantID, quantity, nil)
+}
+
+// LinePriceOverride is a price agreed before the cart existed — a
+// quotation line's snapshotted unit price and tax basis.
+type LinePriceOverride struct {
+	UnitPrice        float64
+	PriceIncludesTax bool
+}
+
+// AddLineToCartAtPrice is AddLineToCart with the price fixed by the
+// caller instead of resolved now. internal/quotations' ConvertQuotation
+// uses it so an accepted quote bills exactly what was quoted, even if
+// retail or wholesale prices (or a scheduled change) moved in between —
+// it used to re-resolve the price at conversion, silently dropping any
+// manual quote price. Stock reservation and batch allocation are the
+// same path as any POS line.
+func AddLineToCartAtPrice(ctx context.Context, tx pgx.Tx, orderID, variantID string, quantity float64, price LinePriceOverride) (orderResponse, error) {
+	return addLineToCart(ctx, tx, orderID, variantID, quantity, &price)
+}
+
+func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, quantity float64, override *LinePriceOverride) (orderResponse, error) {
 	var resp orderResponse
 	var branchID, status, customerID string
 	if err := tx.QueryRow(ctx, `SELECT branch_id, status, COALESCE(customer_id::text,'') FROM sales_orders WHERE id = $1`, orderID).
@@ -273,18 +294,25 @@ func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 	// Resolved AFTER the tax-rate query above has already confirmed
 	// variantID is real (a bad variant_id fails there with
 	// pgx.ErrNoRows -> 404, before this ever runs). Wholesale pricing
-	// (Phase 7, internal/pricing.ResolvePrice) applies automatically
-	// whenever this cart has a customer with a price_list_id assigned —
-	// the same cart/add-line path a walk-in retail sale already uses,
-	// satisfying "no double-entry between retail and B2B" by construction
-	// rather than a separate B2B order type.
-	sellingPriceStr, err := pricing.ResolvePrice(ctx, tx, customerID, variantID)
-	if err != nil {
-		return resp, err
-	}
-	sellingPrice, err := strconv.ParseFloat(sellingPriceStr, 64)
-	if err != nil {
-		return resp, err
+	// (Phase 7) applies automatically whenever this cart has a customer
+	// with a price_list_id assigned — the same cart/add-line path a
+	// walk-in retail sale already uses, satisfying "no double-entry
+	// between retail and B2B" by construction rather than a separate B2B
+	// order type. Otherwise a live Phase 10 price rule (happy hour,
+	// weekend special, seasonal) may set the price, recorded on the line
+	// as price_rule_id. pricing.ResolveLinePriceAt owns that precedence.
+	var sellingPrice float64
+	var priceRuleID *string
+	if override != nil {
+		sellingPrice = override.UnitPrice
+		priceIncludesTax = override.PriceIncludesTax
+	} else {
+		lp, err := pricing.ResolveLinePriceAt(ctx, tx, customerID, variantID, branchID, time.Now())
+		if err != nil {
+			return resp, err
+		}
+		sellingPrice = lp.UnitPrice
+		priceRuleID = lp.PriceRuleID
 	}
 
 	if err := reserveStock(ctx, tx, branchID, variantID, quantity); err != nil {
@@ -335,10 +363,10 @@ func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 
 	var lineID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7)
+		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, price_rule_id)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8)
 		RETURNING id`,
-		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax).Scan(&lineID); err != nil {
+		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax, priceRuleID).Scan(&lineID); err != nil {
 		return resp, err
 	}
 	if trackBatch {
@@ -347,7 +375,7 @@ func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 		}
 	}
 
-	err = recalcOrderTotals(ctx, tx, orderID, &resp)
+	err := recalcOrderTotals(ctx, tx, orderID, &resp)
 	return resp, err
 }
 

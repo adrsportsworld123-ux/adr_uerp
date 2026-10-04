@@ -20,6 +20,7 @@ import (
 	"erp-core-go/internal/httpserver"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/notifications"
+	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/purchase"
 	"erp-core-go/internal/quotations"
 	"erp-core-go/internal/sales"
@@ -104,6 +105,9 @@ func main() {
 	go inventory.RunLowStockSweeper(ctx, database, notify, 15*time.Minute)
 	go purchase.RunPaymentReminderSweeper(ctx, database, notify, time.Hour)
 	go customers.RunReceivableReminderSweeper(ctx, database, notify, time.Hour)
+	// Phase 10: applies due scheduled price changes. Every minute, so a
+	// change set for 09:00 is live by 09:01 at the latest.
+	go (&pricing.Handler{DB: database, Search: searchClient}).RunScheduledPriceSweeper(ctx, time.Minute)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

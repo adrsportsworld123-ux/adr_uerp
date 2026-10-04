@@ -103,7 +103,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `DEVICE_MISMATCH` | 403 | `POST /auth/pin-login` | Terminal is already device-bound and the presented `device_fingerprint` doesn't match |
 | `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'` |
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
-| `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29) |
+| `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}`, `POST /pricing/scheduled-changes`, `POST /pricing/rules` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29). For a rule, `details.below_cost_skus` lists every covered variant it would put below cost (§3.30) |
 | `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
 | `BARCODE_EXISTS` | 409 | `POST /products/variants/{id}/barcodes`, `POST /products` | The supplied `code` (or `variants[].original_barcode`) is already assigned to a different variant (`barcodes` table's `UNIQUE (merchant_id, code)`) |
 | `NO_BARCODE` | 409 | `GET /products/variants/{id}/label` | The variant has no barcode assigned yet — assign one first |
@@ -151,7 +151,10 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `AI_BRANCH_REQUIRED` | 422 | `POST /ai/ask` | The matched intent needs a specific branch (`daily_sales`, `stock_summary`, `eod_cash`) but none was named in the question or resolved against this tenant's real branch list |
 | `PRICE_LIST_NAME_EXISTS` | 409 | `POST /pricing/price-lists` | A price list with this name already exists for this merchant |
 | `PRICE_LIST_IN_USE` | 409 | `DELETE /pricing/price-lists/{id}` | One or more customers are currently assigned to this price list — reassign them first |
-| `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}` | Only a `draft` quotation can be sent or deleted — once sent, `reject` is the correct next step |
+| `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
+| `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
+| `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
+| `SCHEDULED_CHANGE_NOT_PENDING` | 409 | `POST /pricing/scheduled-changes/{id}/cancel` | Only a `pending` change can be cancelled — an applied one is history, undone by a new change |
 | `QUOTATION_NOT_SENT` | 409 | `POST /quotations/{id}/accept`, `.../reject` | Only a `sent` quotation can be accepted or rejected |
 | `QUOTATION_NOT_ACCEPTED` | 409 | `POST /quotations/{id}/convert` | Only an `accepted` quotation can be converted into a real sales order |
 | `INTERNAL_ERROR` | 500 | any handler | Unexpected failure (DB error, etc.) — message is intentionally generic; check server logs for detail |
@@ -818,6 +821,44 @@ User-chosen design: **per product, with a merchant-wide default** for new produc
 **A real bug found and fixed along the way:** `UpdateLine` (quantity change) re-priced a line from the variant's *current catalog* `selling_price` instead of the line's own snapshot — so changing the quantity of a wholesale price-list line silently re-priced it at retail. It now re-prices from `sales_order_lines.unit_price`/`price_includes_tax`.
 
 Verified live against the real stack (migration applied, API rebuilt): a 23-check script covering settings, default inheritance, the net-price negative-margin block, list/calculator/barcode/sync-pull fields, an inclusive 3 × ₹1000 line (3000.00 / 2542.37 / 457.63), a mixed cart (4180.00, balanced), quantity change keeping the snapshot, a 5% manual discount on the inclusive line (balanced), checkout with a balanced journal, an inclusive quotation, and the stored `taxable_value`; plus a live `sync/push` of an offline inclusive line (subtotal 2542.37 / tax 457.63 / total 3000.00). Web: new `e2e/tax-inclusive-pricing.spec.ts` (default → New Product pre-fill → Pricing badge, `net ₹1000.00`, 50% margin on net → switch to exclusive shows `customer pays ₹1392.40`). POS: an added real-SQLite offline-store test (inclusive 3 × 1000 → 3000.00, mixed cart, pushed line carries the flag).
+
+---
+
+### 3.30 Phase 10: scheduled price changes, dynamic pricing, and draft-quotation editing (`internal/pricing/schedule.go`, `rules.go`, `internal/quotations/lines.go`, `migrations/035_scheduled_and_dynamic_pricing.sql`, closed 2026-10-04)
+
+The three items `migrations/009_pricing.sql` and Phase 7 named as deferred, against `pos_frd_complete.md` §11 ("Dynamic Pricing: time-based (happy hours), day-specific (weekend specials), seasonal with auto-activation"; "Scheduled price changes (future effective date)").
+
+**Scheduled price changes.** A pending change to any of cost/MRP/selling price with an `effective_at`, applied by `pricing.RunScheduledPriceSweeper` (every minute, started in `cmd/api/main.go`) through `applyVariantPricing` — extracted from `PATCH /pricing/variants/{id}` so a deferred change obeys the identical below-cost guard, writes the identical `price_history` (reason prefixed `scheduled:`), and reindexes search. The guard runs twice: at scheduling (catch the obvious mistake) and at apply (cost can move in between — a GRN's weighted-average update, say); a change refused at apply time ends `failed` with `failure_reason`, never skipped silently. One transaction per change with `FOR UPDATE SKIP LOCKED` + a status re-check, so two API instances can't apply one change twice. `POST /pricing/bulk-update/apply` accepts an optional `effective_at`: prices are computed now (so Preview is exactly what's queued) and stored as scheduled changes instead of applied.
+
+| Method & Path | Purpose |
+|---|---|
+| `POST /pricing/scheduled-changes` | `{variant_id, cost_price?, mrp?, selling_price?, effective_at (RFC3339, future), reason?, override?}` — `pricing.manage` |
+| `GET /pricing/scheduled-changes?status=&variant_id=` | Soonest first; open read |
+| `POST /pricing/scheduled-changes/{id}/cancel` | Pending only (`409 SCHEDULED_CHANGE_NOT_PENDING`) |
+
+**Dynamic pricing — price rules, not promotions.** Promotions (Phase 3) already had day/time windows, but they are *discounts*: a separate discount line, never an increase, never "₹X on weekends". A price rule sets the line's unit price itself — a fixed price (one variant) or a signed percentage of the base price (variant or category) — optionally per branch, with any mix of a season (`starts_at`/`ends_at`), days of week, and an hour window (which may cross midnight). Promotions still apply on top, as they do to a base-priced line. `pricing.ResolveLinePriceAt` is now the single place a POS line's price is decided:
+
+1. The customer's price-list price — a negotiated contract price is never overridden by a happy hour.
+2. Otherwise the best live rule: variant rule over category rule, then `priority`, then newest; the result never below 0 and **never above MRP** (selling above MRP is illegal in India, so a surge tops out there).
+3. Otherwise the base `selling_price`.
+
+Hours and days are evaluated in **the branch's own timezone** (`branches.timezone`), not the database server's. (Promotions evaluate theirs with the database's `now()`, which is UTC on the stock Postgres Docker image — a latent bug flagged, not fixed, in this phase.) `sales_order_lines.price_rule_id` records which rule priced a line, and a rule that has priced a sale can't be hard-deleted (`409 PRICE_RULE_IN_USE`; deactivate instead). Rule terms aren't editable for the same reason — a past sale was priced under them. **Quotations never use rules** (`ResolvePrice`, not `ResolveLinePriceAt`): a quote valid for weeks must not lock in a three-hour price. **Offline POS sales don't see rules** — the Flutter app prices from its pulled `selling_price`, the same pre-existing limitation price lists have; scheduled changes do reach it on the next sync.
+
+| Method & Path | Purpose |
+|---|---|
+| `POST /pricing/rules` | `{name, variant_id \| category_id, branch_id?, rule_type: fixed_price\|percent, value, priority?, starts_at?, ends_at?, days_of_week?, time_start?, time_end?, override?}` — refuses `409 NEGATIVE_MARGIN` with `below_cost_skus` if it would put any covered variant below cost. `pricing.manage` |
+| `GET /pricing/rules?active=&variant_id=&category_id=` | Open read |
+| `PATCH /pricing/rules/{id}` | `{active}` only |
+| `DELETE /pricing/rules/{id}` | Unused rules only |
+| `GET /pricing/variants/{id}/effective-price?branch_id=&customer_id=&at=` | What the till would charge and why (`source`: `price_list`/`price_rule`/`base`); `at` previews any instant — "what does this cost Saturday at 3 PM?" |
+
+**Draft-quotation editing**, draft-only (`409 QUOTATION_NOT_DRAFT` once sent) with the quotation row locked for the edit: `POST /quotations/{id}/lines`, `PATCH /quotations/{id}/lines/{line_id}` (`quantity` and/or a negotiated `unit_price`, or `reprice: true` to re-resolve; a quantity change keeps the line's price), `DELETE .../lines/{line_id}` (not the last line — `409 QUOTATION_EMPTY`), and `PATCH /quotations/{id}` for `valid_until`/`notes`. Totals are recomputed from the lines in the same transaction; create and edit share `insertQuotationLine`/`recalcQuotationTotals`.
+
+**A real, pre-existing bug fixed along the way:** `ConvertQuotation` added each line through `sales.AddLineToCart`, which *re-resolved the price at conversion*. So a manual `unit_price` set on a quote (supported since Phase 7) was silently dropped when the order was created, and any price change between the customer accepting and the quote converting was billed instead of the accepted number. Conversion now uses the new `sales.AddLineToCartAtPrice` with each quote line's snapshotted price and tax basis — stock reservation and batch allocation still go through the same cart path.
+
+**Verified:** unit tests for the rule arithmetic (percent/fixed, rounding, MRP cap, floor) and request validation; **50 live checks** against the real API and database — window start inclusive / end exclusive, wrong day, wrong branch, the same instant given in UTC still matching in branch time, overnight windows on both sides of midnight, not-yet-started and already-ended seasons plus auto-activation inside one, variant-over-category, priority, MRP cap, deactivation, price list beating rules, a real POS cart line priced and tagged by a live rule, `PRICE_RULE_IN_USE`; scheduling, past-date and below-cost refusals, cancel and double-cancel, bulk scheduling leaving today's prices untouched, the real sweeper applying a due change with its `price_history` reason, and a change that became below-cost after scheduling ending `failed` with the price untouched; quote line add/negotiate/quantity/remove/last-line/header edits, edits refused once sent, and a converted order billing the negotiated ₹950 while retail had moved to ₹1100. Browser: `e2e/phase10-pricing.spec.ts` drives the Price Rules, Scheduled Price Changes and Quotations screens end to end; it and the existing `quotations`, `price-lists` and `tax-inclusive-pricing` specs pass 4/4.
+
+New error codes: `PRICE_RULE_IN_USE`, `SCHEDULED_CHANGE_NOT_PENDING`, `QUOTATION_EMPTY` (all 409); `NEGATIVE_MARGIN` and `QUOTATION_NOT_DRAFT` extended to more endpoints.
 
 ---
 

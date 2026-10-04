@@ -1061,3 +1061,55 @@ export interface QuotationSummary {
   grand_total: string;
   created_at: string;
 }
+
+// Phase 10 (erp-core-go internal/pricing/schedule.go, rules.go)
+export type ScheduledChangeStatus = "pending" | "applied" | "cancelled" | "failed";
+
+export interface ScheduledPriceChange {
+  scheduled_change_id: string;
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  // null = this field isn't changed by the schedule
+  cost_price: string | null;
+  mrp: string | null;
+  selling_price: string | null;
+  effective_at: string;
+  reason: string | null;
+  override: boolean;
+  status: ScheduledChangeStatus;
+  failure_reason: string | null;
+  created_at: string;
+  applied_at: string | null;
+}
+
+export interface PriceRule {
+  price_rule_id: string;
+  name: string;
+  variant_id: string | null;
+  sku: string | null;
+  product_name: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  branch_id: string | null;
+  rule_type: "fixed_price" | "percent";
+  value: string;
+  priority: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  days_of_week: number[] | null; // 0 = Sunday .. 6 = Saturday
+  time_start: string | null; // "HH:MM", branch-local
+  time_end: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export interface EffectivePrice {
+  variant_id: string;
+  at: string;
+  unit_price: string;
+  base_selling_price: string;
+  source: "price_list" | "price_rule" | "base";
+  price_rule_id: string | null;
+  price_rule_name?: string;
+}

@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,9 +30,7 @@ import (
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
-	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/sales"
-	"erp-core-go/internal/taxcalc"
 )
 
 type Handler struct {
@@ -156,58 +153,12 @@ func (h *Handler) CreateQuotation(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		var subtotal, taxTotal, grandTotal float64
 		for _, l := range req.Lines {
-			var cgst, sgst, igst, cess float64
-			var sku, productName string
-			var priceIncludesTax bool
-			if err := tx.QueryRow(ctx, `
-				SELECT pv.sku, p.name, COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
-				FROM product_variants pv
-				JOIN products p ON p.id = pv.product_id
-				LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-				WHERE pv.id = $1`, l.VariantID,
-			).Scan(&sku, &productName, &cgst, &sgst, &igst, &cess, &priceIncludesTax); err != nil {
-				return err
-			}
-
-			var unitPrice float64
-			if l.UnitPrice != nil {
-				unitPrice = *l.UnitPrice
-			} else {
-				priceStr, err := pricing.ResolvePrice(ctx, tx, req.CustomerID, l.VariantID)
-				if err != nil {
-					return err
-				}
-				unitPrice, err = strconv.ParseFloat(priceStr, 64)
-				if err != nil {
-					return err
-				}
-			}
-
-			// unit_price (resolved or caller-supplied) is interpreted in
-			// the product's own pricing basis — tax-inclusive or not —
-			// exactly as sales.AddLineToCart does, so a converted quote
-			// bills the same total it quoted. subtotal accumulates the
-			// pre-tax taxable value so subtotal + tax = grand total in
-			// both modes.
-			calc := taxcalc.ComputeLine(unitPrice, l.Quantity, 0, cgst+sgst+igst+cess, priceIncludesTax)
-			subtotal += calc.Taxable
-			taxTotal += calc.Tax
-			grandTotal += calc.Total
-
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO quotation_lines (id, quotation_id, variant_id, quantity, unit_price, tax_amount, line_total, price_includes_tax)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
-				quotationID, l.VariantID, l.Quantity, unitPrice, calc.Tax, calc.Total, priceIncludesTax); err != nil {
+			if err := insertQuotationLine(ctx, tx, quotationID, req.CustomerID, l.VariantID, l.Quantity, l.UnitPrice); err != nil {
 				return err
 			}
 		}
-
-		if _, err := tx.Exec(ctx, `
-			UPDATE quotations SET subtotal = $1, tax_total = $2, grand_total = $3 WHERE id = $4`,
-			subtotal, taxTotal, grandTotal, quotationID); err != nil {
+		if err := recalcQuotationTotals(ctx, tx, quotationID); err != nil {
 			return err
 		}
 
@@ -480,18 +431,21 @@ func (h *Handler) ConvertQuotation(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		rows, err := tx.Query(ctx, `SELECT variant_id, quantity FROM quotation_lines WHERE quotation_id = $1`, quotationID)
+		rows, err := tx.Query(ctx, `
+			SELECT variant_id, quantity, unit_price, price_includes_tax FROM quotation_lines
+			WHERE quotation_id = $1 ORDER BY created_at`, quotationID)
 		if err != nil {
 			return err
 		}
 		type lineToAdd struct {
 			variantID string
 			quantity  float64
+			price     sales.LinePriceOverride
 		}
 		var lines []lineToAdd
 		for rows.Next() {
 			var l lineToAdd
-			if err := rows.Scan(&l.variantID, &l.quantity); err != nil {
+			if err := rows.Scan(&l.variantID, &l.quantity, &l.price.UnitPrice, &l.price.PriceIncludesTax); err != nil {
 				rows.Close()
 				return err
 			}
@@ -513,8 +467,12 @@ func (h *Handler) ConvertQuotation(w http.ResponseWriter, r *http.Request) {
 		}
 		orderID = cart.OrderID
 
+		// At the QUOTED price and tax basis, not re-resolved now: the
+		// customer accepted these numbers. (Re-resolving here used to drop
+		// any manual quote price, and bill a price change that landed
+		// between acceptance and conversion.)
 		for _, l := range lines {
-			if _, err := sales.AddLineToCart(ctx, tx, orderID, l.variantID, l.quantity); err != nil {
+			if _, err := sales.AddLineToCartAtPrice(ctx, tx, orderID, l.variantID, l.quantity, l.price); err != nil {
 				return err
 			}
 		}

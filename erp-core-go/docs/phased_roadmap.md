@@ -464,6 +464,23 @@ Full design and verification in `phase0_1_design.md` §3.29.
 
 ---
 
+## Phase 10 — Pricing & Quotation Gaps
+
+**Size: M — closed 2026-10-04**
+
+Chosen by the user as the next phase once 0–9 were closed: the three items earlier phases named as deferred (Phase 2's `migrations/009_pricing.sql`, Phase 7's own "Deliberately deferred" line), all `pos_frd_complete.md` §11.
+
+- **Scheduled price changes** — a cost/MRP/selling-price change with a future effective time, applied within a minute by a background sweeper through exactly the same rules as an immediate edit (below-cost guard, price history, search reindex). A change that would sell below cost *on the day* ends `failed` with the reason, never skipped silently. Bulk price updates can be scheduled too.
+- **Dynamic pricing** — price rules for happy hours, weekend specials and seasons: a fixed price or ± percentage, per product or category, optionally per branch, evaluated in the branch's own timezone, capped at MRP. A customer's wholesale price list always wins; quotations and offline POS sales don't use rules (both disclosed). Promotions stay as they were — discounts on top.
+- **Editing a draft quotation** — add/change/remove lines (including a negotiated price), validity and notes, while still a draft.
+- **A real pre-existing bug closed**: converting a quotation re-priced every line at conversion time, silently dropping any negotiated quote price and billing price changes that landed after the customer accepted. Conversion now bills exactly what was quoted.
+
+**Definition of Done:** a manager can schedule a price change and see it apply; set up a happy hour that the POS actually charges; and fix a draft quote without re-entering it — with the converted order billing the agreed numbers. Met: 50 live API/DB checks, unit tests for the pricing arithmetic, and a Playwright spec driving all three screens (4/4 with the related existing specs). Full account in `phase0_1_design.md` §3.30.
+
+**Flagged, not built:** promotions evaluate their own time windows on the database clock (UTC on the stock Docker Postgres image), unlike price rules; and the offline POS can't apply rules or price lists until the Flutter app pulls and evaluates them.
+
+---
+
 ## Solo-Builder Notes
 
 A few honest calls worth making as you execute this, given it's 1-2 people:
@@ -489,3 +506,4 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 8     | Vertical expansion (grocery, pharmacy, apparel, ...) | Ongoing | Complete (audited 2026-10-04) — all five verticals done and live-verified (Jewelry/Electronics/Sports via attribute-sets; Apparel via collections; Grocery/FMCG via batch/expiry tracking, now batch-aware on every stock path; Pharmacy via prescription linkage + shelf-life policy) — see above |
 | 9     | POS Hold & Recall, barcode visibility                | M       | Done — backend + Flutter POS UI for Hold/Recall, barcode manual-entry/generate visible on the web-admin product list, see above |
 | —     | Session expiry handling, GST-inclusive pricing       | M       | Done — both clients return to login on expiry (silent refresh while active); per-product inclusive/exclusive GST pricing with a merchant default, see above |
+| 10    | Pricing & quotation gaps                             | M       | Done — scheduled price changes (incl. bulk), dynamic price rules (happy hours/weekend/seasonal, branch timezone, MRP cap), draft-quotation editing, and quote conversion now bills the quoted price, see above |
