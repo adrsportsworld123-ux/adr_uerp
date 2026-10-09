@@ -19,6 +19,7 @@ const NAV = [
   { href: "/purchase/grn", label: "Goods Receipt (GRN)" },
   { href: "/purchase/bills", label: "Purchase Bills" },
   { href: "/purchase/returns", label: "Purchase Returns" },
+  { href: "/products", label: "Products" },
   { href: "/products/new", label: "New Product" },
   { href: "/attributes", label: "Product Attributes" },
   { href: "/inventory/expiring-batches", label: "Expiring Batches" },

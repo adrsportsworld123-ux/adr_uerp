@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
@@ -125,6 +124,19 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 
 	var resp productResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// FK checks bypass RLS, so a link must be checked against this
+		// tenant's own rows (products_edit.go's refExists).
+		for _, l := range []struct {
+			id    *string
+			table string
+		}{{categoryID, "categories"}, {brandID, "brands"}, {taxSlabID, "tax_slabs"}, {collectionID, "collections"}} {
+			if l.id != nil {
+				if err := refExists(ctx, tx, l.table, *l.id); err != nil {
+					return err
+				}
+			}
+		}
+
 		var priceIncludesTax bool
 		if req.PriceIncludesTax != nil {
 			priceIncludesTax = *req.PriceIncludesTax
@@ -146,76 +158,10 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 
 		variants := make([]variantResponse, 0, len(req.Variants))
 		for _, v := range req.Variants {
-			combo := v.AttributeCombo
-			if combo == nil {
-				combo = map[string]any{}
-			}
-			// Phase 8: validates attribute_combo against whatever attribute
-			// set this product's category declares (attributes.go) — a
-			// no-op for a category with no declared set, or no category at
-			// all, so this is purely additive over Phase 1's behavior.
-			if err := validateAttributeCombo(ctx, tx, categoryID, combo); err != nil {
-				return err
-			}
-			comboJSON, err := json.Marshal(combo)
+			vr, err := insertVariant(ctx, tx, productID, categoryID, v)
 			if err != nil {
 				return err
 			}
-			var variantID string
-			if err := tx.QueryRow(ctx, `
-				INSERT INTO product_variants (id, merchant_id, product_id, sku, attribute_combo, cost_price, mrp, selling_price, track_serial, track_batch, plu_code)
-				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9,''))
-				RETURNING id`,
-				productID, v.SKU, comboJSON, v.CostPrice, v.MRP, v.SellingPrice, v.TrackSerial, v.TrackBatch, v.PLUCode,
-			).Scan(&variantID); err != nil {
-				return err
-			}
-			// Every existing branch gets a zero-stock stock_levels row for
-			// this variant immediately, not lazily on first GRN/adjustment —
-			// found live: without this, reserveStock's read
-			// (internal/sales/reservation.go) hits a plain pgx.ErrNoRows for
-			// a variant that has never been stocked anywhere, which
-			// AddLine's error mapping surfaces as a confusing
-			// "order or product not found" instead of the correct
-			// "no stock available" — reproduced by actually creating a
-			// product and adding it to a cart, not just reasoning about it.
-			// Seeding at 0 makes a brand-new variant behave exactly like any
-			// other unstocked one: visible in stock reports at zero, and a
-			// real STOCK_UNAVAILABLE (not a NOT_FOUND) if sold before being
-			// received.
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO stock_levels (id, merchant_id, branch_id, variant_id, on_hand, reserved, version)
-				SELECT gen_random_uuid(), current_setting('app.tenant_id')::uuid, b.id, $1, 0, 0, 0
-				FROM branches b WHERE b.merchant_id = current_setting('app.tenant_id')::uuid
-				ON CONFLICT (branch_id, variant_id) DO NOTHING`, variantID); err != nil {
-				return err
-			}
-
-			vr := variantResponse{
-				VariantID: variantID, SKU: v.SKU,
-				CostPrice: formatMoney(v.CostPrice), MRP: formatMoney(v.MRP), SellingPrice: formatMoney(v.SellingPrice),
-			}
-			// Original first, so it naturally becomes this variant's primary
-			// barcode (assignBarcodeInTx's is_primary logic is "whichever
-			// gets inserted first") whenever both are given — the real
-			// barcode already on the item is what a scanner at the
-			// register should match, not an internal one nothing
-			// physically carries yet.
-			if v.OriginalBarcode != "" {
-				code, err := assignBarcodeInTx(ctx, tx, variantID, v.OriginalBarcode)
-				if err != nil {
-					return err
-				}
-				vr.OriginalBarcode = &code
-			}
-			if v.GenerateBarcode {
-				code, err := assignBarcodeInTx(ctx, tx, variantID, "")
-				if err != nil {
-					return err
-				}
-				vr.GeneratedBarcode = &code
-			}
-
 			variants = append(variants, vr)
 		}
 
@@ -238,6 +184,10 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_INVALID_VALUE", err.Error())
 	case errors.Is(err, errInvalidBarcode):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	case errors.Is(err, errInvalidReference):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REFERENCE", err.Error())
+	case uniqueViolationConstraint(err) == "idx_product_variants_plu_code":
+		httpx.Error(w, http.StatusConflict, "PLU_CODE_EXISTS", "this PLU code is already used by another variant")
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create product")
 	default:
@@ -261,64 +211,6 @@ type updateProductRequest struct {
 	PriceIncludesTax *bool `json:"price_includes_tax"`
 }
 
-// UpdateProduct: PATCH /products/{id} — gated by catalog.manage. Product-
-// level metadata only (name/description/HSN/category/brand/tax
-// slab/status) — variant pricing is already owned by
-// PATCH /pricing/variants/{id} (Phase 2's Pricing sub-area), so this
-// deliberately doesn't duplicate that write path.
-func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
-	claims, ok := authn.FromContext(r.Context())
-	if !ok {
-		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
-		return
-	}
-	productID := chi.URLParam(r, "id")
-
-	var req updateProductRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
-		return
-	}
-	if req.Status != nil && *req.Status != "active" && *req.Status != "inactive" && *req.Status != "discontinued" {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be active, inactive, or discontinued")
-		return
-	}
-
-	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `
-			UPDATE products SET
-				name = COALESCE($1, name),
-				short_description = COALESCE($2, short_description),
-				hsn_code = COALESCE($3, hsn_code),
-				category_id = COALESCE($4::uuid, category_id),
-				brand_id = COALESCE($5::uuid, brand_id),
-				tax_slab_id = COALESCE($6::uuid, tax_slab_id),
-				status = COALESCE($7, status),
-				collection_id = COALESCE($9::uuid, collection_id),
-				price_includes_tax = COALESCE($10, price_includes_tax),
-				updated_at = now()
-			WHERE id = $8`,
-			req.Name, req.ShortDescription, req.HSNCode, req.CategoryID, req.BrandID, req.TaxSlabID, req.Status, productID, req.CollectionID, req.PriceIncludesTax,
-		)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return pgx.ErrNoRows
-		}
-		return nil
-	})
-
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "product not found")
-	case err != nil:
-		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update product")
-	default:
-		httpx.JSON(w, http.StatusOK, map[string]any{"product_id": productID, "status": "updated"})
-	}
-}
-
 func nullableUUID(s string) *string {
 	if s == "" {
 		return nil
@@ -328,4 +220,84 @@ func nullableUUID(s string) *string {
 
 func formatMoney(v float64) string {
 	return strconv.FormatFloat(v, 'f', 2, 64)
+}
+
+// insertVariant creates one variant of productID — attribute validation
+// against the product's category, the variant row, a zero stock_levels row
+// at every branch, and any requested barcodes. Shared by CreateProduct and
+// POST /products/{id}/variants (products_edit.go), so a variant added
+// later goes through exactly the same checks as one created with the
+// product.
+func insertVariant(ctx context.Context, tx pgx.Tx, productID string, categoryID *string, v createVariantInput) (variantResponse, error) {
+	combo := v.AttributeCombo
+	if combo == nil {
+		combo = map[string]any{}
+	}
+	// Phase 8: validates attribute_combo against whatever attribute
+	// set this product's category declares (attributes.go) — a
+	// no-op for a category with no declared set, or no category at
+	// all, so this is purely additive over Phase 1's behavior.
+	if err := validateAttributeCombo(ctx, tx, categoryID, combo); err != nil {
+		return variantResponse{}, err
+	}
+	comboJSON, err := json.Marshal(combo)
+	if err != nil {
+		return variantResponse{}, err
+	}
+	var variantID string
+	if err := tx.QueryRow(ctx, `
+			INSERT INTO product_variants (id, merchant_id, product_id, sku, attribute_combo, cost_price, mrp, selling_price, track_serial, track_batch, plu_code)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9,''))
+			RETURNING id`,
+		productID, v.SKU, comboJSON, v.CostPrice, v.MRP, v.SellingPrice, v.TrackSerial, v.TrackBatch, v.PLUCode,
+	).Scan(&variantID); err != nil {
+		return variantResponse{}, err
+	}
+	// Every existing branch gets a zero-stock stock_levels row for
+	// this variant immediately, not lazily on first GRN/adjustment —
+	// found live: without this, reserveStock's read
+	// (internal/sales/reservation.go) hits a plain pgx.ErrNoRows for
+	// a variant that has never been stocked anywhere, which
+	// AddLine's error mapping surfaces as a confusing
+	// "order or product not found" instead of the correct
+	// "no stock available" — reproduced by actually creating a
+	// product and adding it to a cart, not just reasoning about it.
+	// Seeding at 0 makes a brand-new variant behave exactly like any
+	// other unstocked one: visible in stock reports at zero, and a
+	// real STOCK_UNAVAILABLE (not a NOT_FOUND) if sold before being
+	// received.
+	if _, err := tx.Exec(ctx, `
+			INSERT INTO stock_levels (id, merchant_id, branch_id, variant_id, on_hand, reserved, version)
+			SELECT gen_random_uuid(), current_setting('app.tenant_id')::uuid, b.id, $1, 0, 0, 0
+			FROM branches b WHERE b.merchant_id = current_setting('app.tenant_id')::uuid
+			ON CONFLICT (branch_id, variant_id) DO NOTHING`, variantID); err != nil {
+		return variantResponse{}, err
+	}
+
+	vr := variantResponse{
+		VariantID: variantID, SKU: v.SKU,
+		CostPrice: formatMoney(v.CostPrice), MRP: formatMoney(v.MRP), SellingPrice: formatMoney(v.SellingPrice),
+	}
+	// Original first, so it naturally becomes this variant's primary
+	// barcode (assignBarcodeInTx's is_primary logic is "whichever
+	// gets inserted first") whenever both are given — the real
+	// barcode already on the item is what a scanner at the
+	// register should match, not an internal one nothing
+	// physically carries yet.
+	if v.OriginalBarcode != "" {
+		code, err := assignBarcodeInTx(ctx, tx, variantID, v.OriginalBarcode)
+		if err != nil {
+			return variantResponse{}, err
+		}
+		vr.OriginalBarcode = &code
+	}
+	if v.GenerateBarcode {
+		code, err := assignBarcodeInTx(ctx, tx, variantID, "")
+		if err != nil {
+			return variantResponse{}, err
+		}
+		vr.GeneratedBarcode = &code
+	}
+
+	return vr, nil
 }

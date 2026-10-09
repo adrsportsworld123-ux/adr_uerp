@@ -481,6 +481,14 @@ Chosen by the user as the next phase once 0–9 were closed: the three items ear
 
 ---
 
+## Cross-cutting: Product Editing & Status Enforcement
+
+**Size: M — closed 2026-10-04**
+
+User-requested audit ("make sure product edit is implemented"): it largely wasn't. Products could be created but not maintained — no way to load one for editing, fix a variant's SKU or attributes, add a size later, or clear a category — and there was no edit screen at all. Discontinuing a product also did nothing: the till kept scanning and selling it, while the product list hid it so it could never be reactivated. Now: full product + variant editing and add-variant (prices still go through the pricing endpoint's guard and history), tenant-checked links, attribute re-validation on category change, audit trail and search reindex on every edit, and one shared "sellable" rule enforced at barcode scan, cart, and quotations. New Products and Product edit screens in the web admin. Full account in `phase0_1_design.md` §3.31.
+
+---
+
 ## Solo-Builder Notes
 
 A few honest calls worth making as you execute this, given it's 1-2 people:
@@ -506,4 +514,5 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 8     | Vertical expansion (grocery, pharmacy, apparel, ...) | Ongoing | Complete (audited 2026-10-04) — all five verticals done and live-verified (Jewelry/Electronics/Sports via attribute-sets; Apparel via collections; Grocery/FMCG via batch/expiry tracking, now batch-aware on every stock path; Pharmacy via prescription linkage + shelf-life policy) — see above |
 | 9     | POS Hold & Recall, barcode visibility                | M       | Done — backend + Flutter POS UI for Hold/Recall, barcode manual-entry/generate visible on the web-admin product list, see above |
 | —     | Session expiry handling, GST-inclusive pricing       | M       | Done — both clients return to login on expiry (silent refresh while active); per-product inclusive/exclusive GST pricing with a merchant default, see above |
+| —     | Product editing & status enforcement                 | M       | Done — edit product/variants, add variant, enforce discontinued/inactive at scan, cart and quotations, Products + edit screens, see above |
 | 10    | Pricing & quotation gaps                             | M       | Done — scheduled price changes (incl. bulk), dynamic price rules (happy hours/weekend/seasonal, branch timezone, MRP cap), draft-quotation editing, and quote conversion now bills the quoted price, see above |

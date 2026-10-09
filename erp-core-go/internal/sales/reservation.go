@@ -13,6 +13,10 @@ import (
 // handles internally and the caller never sees.
 var ErrInsufficientStock = errors.New("insufficient stock")
 
+// ErrProductInactive: the product or variant is inactive/discontinued
+// (catalog.SellablePredicate). Mapped to 409 PRODUCT_INACTIVE.
+var ErrProductInactive = errors.New("product is inactive or discontinued")
+
 const maxOptimisticRetries = 5
 
 // reserveStock increments stock_levels.reserved for one branch/variant by

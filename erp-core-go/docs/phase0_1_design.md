@@ -121,9 +121,13 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `NOT_MATCHED` | 409 | `POST /accounting/payment-gateway/settlement/lines/{id}/unmatch` | The settlement line isn't currently matched to anything |
 | `ALREADY_RECONCILED` | 409 | `POST /cash-reconciliation` | This branch already has a cash reconciliation for this date |
 | `VARIANCE_NOT_AUTHORIZED` | 403 | `POST /cash-reconciliation`, `POST /inventory/reconciliation` | A non-zero variance's `authorized_by`/`authorized_pin` didn't resolve to a Branch Manager/Merchant Admin |
-| `SKU_EXISTS` | 409 | `POST /products` | One of the submitted variants' SKUs is already in use (`product_variants` table's `UNIQUE (merchant_id, sku)`) |
-| `ATTRIBUTE_REQUIRED` | 400 | `POST /products` | The product's category declares this attribute required and a variant's `attribute_combo` is missing it |
-| `ATTRIBUTE_INVALID_VALUE` | 400 | `POST /products` | A `select`-type attribute's value isn't in its controlled value list, or a `number`-type attribute's value doesn't parse as numeric |
+| `SKU_EXISTS` | 409 | `POST /products`, `PATCH /products/variants/{id}`, `POST /products/{id}/variants` | One of the submitted variants' SKUs is already in use (`product_variants` table's `UNIQUE (merchant_id, sku)`) |
+| `ATTRIBUTE_REQUIRED` | 400 | `POST /products`, `PATCH /products/{id}` (category change), `PATCH /products/variants/{id}`, `POST /products/{id}/variants` | The product's category declares this attribute required and a variant's `attribute_combo` is missing it |
+| `ATTRIBUTE_INVALID_VALUE` | 400 | `POST /products`, `PATCH /products/variants/{id}`, `POST /products/{id}/variants` | A `select`-type attribute's value isn't in its controlled value list, or a `number`-type attribute's value doesn't parse as numeric |
+| `INVALID_REFERENCE` | 400 | `POST /products`, `PATCH /products/{id}` | A category/brand/tax slab/collection id doesn't exist **for this merchant** (checked under RLS — a foreign key alone would accept another tenant's id) (§3.31) |
+| `PLU_CODE_EXISTS` | 409 | `POST /products`, `PATCH /products/variants/{id}`, `POST /products/{id}/variants` | Another variant already uses this weighing-scale PLU code |
+| `VARIANT_HAS_STOCK` | 409 | `PATCH /products/variants/{id}` | `track_batch` can only be switched while the variant holds no stock (and no batch quantity) anywhere |
+| `PRODUCT_INACTIVE` | 409 | `GET /products/barcode/{code}`, add-line, `POST /quotations`, `POST /quotations/{id}/lines`, `POST /quotations/{id}/convert` | The product is inactive/discontinued, or that variant is — it can't be scanned, sold or quoted (§3.31) |
 | `COLLECTION_NAME_EXISTS` | 409 | `POST /collections` | A collection with this name already exists for this merchant |
 | `BATCH_REQUIRED` | 400 | `POST /purchase/grn/{id}/lines`, `POST /inventory/adjustments` (positive delta), `POST /inventory/reconciliation` (count above system qty) | The variant has `track_batch = true` and `batch_no` was omitted where stock is being added |
 | `BATCH_INSUFFICIENT` | 409 | `POST /inventory/adjustments`, `POST /inventory/reconciliation`, `POST /purchase/returns` | A specific `batch_no` was named for a removal and that batch doesn't exist at the branch or has less remaining than requested |
@@ -859,6 +863,30 @@ Hours and days are evaluated in **the branch's own timezone** (`branches.timezon
 **Verified:** unit tests for the rule arithmetic (percent/fixed, rounding, MRP cap, floor) and request validation; **50 live checks** against the real API and database — window start inclusive / end exclusive, wrong day, wrong branch, the same instant given in UTC still matching in branch time, overnight windows on both sides of midnight, not-yet-started and already-ended seasons plus auto-activation inside one, variant-over-category, priority, MRP cap, deactivation, price list beating rules, a real POS cart line priced and tagged by a live rule, `PRICE_RULE_IN_USE`; scheduling, past-date and below-cost refusals, cancel and double-cancel, bulk scheduling leaving today's prices untouched, the real sweeper applying a due change with its `price_history` reason, and a change that became below-cost after scheduling ending `failed` with the price untouched; quote line add/negotiate/quantity/remove/last-line/header edits, edits refused once sent, and a converted order billing the negotiated ₹950 while retail had moved to ₹1100. Browser: `e2e/phase10-pricing.spec.ts` drives the Price Rules, Scheduled Price Changes and Quotations screens end to end; it and the existing `quotations`, `price-lists` and `tax-inclusive-pricing` specs pass 4/4.
 
 New error codes: `PRICE_RULE_IN_USE`, `SCHEDULED_CHANGE_NOT_PENDING`, `QUOTATION_EMPTY` (all 409); `NEGATIVE_MARGIN` and `QUOTATION_NOT_DRAFT` extended to more endpoints.
+
+---
+
+### 3.31 Product editing, and product status actually enforced (`internal/catalog/products_edit.go`, closed 2026-10-04)
+
+A "is product edit actually implemented?" audit found it largely wasn't: `PATCH /products/{id}` existed for the product's own fields, but nothing could load one product for an edit screen, an optional link couldn't be cleared (`""` hit the `::uuid` cast — a 500), a category change skipped the attribute-set validation `CreateProduct` enforces, variants couldn't be edited or added after creation, edits never reached search or the audit trail, and **no screen existed** (only the Pricing page's tax-inclusive toggle called the endpoint). Worse, **product status wasn't enforced anywhere**: the API accepted `inactive`/`discontinued`, but the barcode scan, add-line, quotations and search all ignored it — a discontinued product still sold — while `GET /products` hid every non-active product, so once deactivated it could never be found again to reactivate.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /products/{id}` | Full edit view: links with names, status, every variant's attributes, PLU, flags, barcodes, and total on-hand |
+| `PATCH /products/{id}` (fixed) | Partial update; for category/brand/tax slab/collection, omitted = keep, `""` = clear, id = set (checked to exist for this tenant). A category change re-validates every variant's attributes against the new set, naming the variant that doesn't fit. Audited (before/after), search reindexed |
+| `PATCH /products/variants/{id}` | SKU, `attribute_combo` (validated), PLU (`""` clears), variant status, `track_serial`, `track_batch` (only while the variant holds no stock — `409 VARIANT_HAS_STOCK`). **Price fields are refused** with a pointer to `PATCH /pricing/variants/{id}`, so the below-cost guard and price history can't be bypassed |
+| `POST /products/{id}/variants` | Add a variant later, through the same `insertVariant` `CreateProduct` now uses (attribute validation, stock row at every branch, optional barcodes) |
+| `GET /products?status=` | Defaults to `active` (every picker unchanged); `all` or a specific status for the product admin screen |
+
+**One definition of sellable** — `catalog.SellablePredicate`: product `active` and variant not `inactive`/`discontinued`. The barcode scan answers `409 PRODUCT_INACTIVE` naming the product (the Flutter POS shows a non-`PRODUCT_NOT_FOUND` error's message as-is, so the cashier sees why); add-line, quotation create/add-line and quotation conversion refuse it too; the search index stores the effective status (a non-active product hides all its variants). A line already in a cart or a held order isn't pulled out. **Not covered:** the offline POS still sells from its synced catalog regardless of status (the same offline limitation price lists and price rules have), and an offline sale of a discontinued item is accepted on sync, per §3.5's never-reject-a-completed-sale rule.
+
+Also closed in passing: `CreateProduct` now checks link ids against the tenant too (a foreign key bypasses RLS, so another merchant's category id used to be accepted), and maps a duplicate PLU to `409` instead of a 500.
+
+**erp-web-admin:** a new **Products** screen (search, status filter incl. inactive/discontinued, Edit) and **Product edit** screen — details (with "None" for optional links, and warnings before a category or tax-inclusive change), one editor per variant (attributes rendered from the category's attribute set; prices saved through the pricing endpoint with the below-cost override flow), and Add variant.
+
+**Verified:** 42 live API/DB checks (detail load, trim/blank name, clearing links, nonexistent and **other-tenant** category refused on update and create, category move refused then allowed once the variant fits, attribute/SKU/PLU validation and conflicts, price fields refused, add-variant validation and stock rows, batch-toggle lock, scan/cart/quote refusals for a discontinued product and for one discontinued variant while its sibling stays sellable, reactivation, an accepted quote whose product was deactivated refusing to convert, and audit rows with before/after); `e2e/product-edit.spec.ts` drives the whole flow in a browser.
+
+New error codes: `INVALID_REFERENCE` (400), `PLU_CODE_EXISTS`, `VARIANT_HAS_STOCK`, `PRODUCT_INACTIVE` (409); `SKU_EXISTS` and `ATTRIBUTE_*` extended to the edit endpoints.
 
 ---
 

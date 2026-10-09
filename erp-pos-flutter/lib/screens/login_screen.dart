@@ -21,8 +21,8 @@ enum _LoginMode { password, pin }
 class _LoginScreenState extends State<LoginScreen> {
   _LoginMode _mode = _LoginMode.password;
 
-  final _merchantCodeController = TextEditingController(text: 'acme-sports');
-  final _emailController = TextEditingController(text: 'ravi@acme-sports.test');
+  final _merchantCodeController = TextEditingController(text: 'adr_sports_world');
+  final _emailController = TextEditingController(text: '');
   final _passwordController = TextEditingController();
 
   final _employeeCodeController = TextEditingController(text: 'EMP001');

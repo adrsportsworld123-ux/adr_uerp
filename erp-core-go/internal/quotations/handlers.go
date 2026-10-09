@@ -168,6 +168,8 @@ func (h *Handler) CreateQuotation(w http.ResponseWriter, r *http.Request) {
 	})
 
 	switch {
+	case errors.Is(err, sales.ErrProductInactive):
+		httpx.Error(w, http.StatusConflict, "PRODUCT_INACTIVE", "a line's product is inactive or discontinued and can't be quoted")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "customer or a variant referenced by a line was not found")
 	case err != nil:
@@ -492,6 +494,8 @@ func (h *Handler) ConvertQuotation(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "one or more lines exceed available stock")
 	case errors.Is(err, inventory.ErrExpiredOrUntrackedStock):
 		httpx.Error(w, http.StatusConflict, "STOCK_EXPIRED", "one or more lines have no unexpired, batch-tracked stock available")
+	case errors.Is(err, sales.ErrProductInactive):
+		httpx.Error(w, http.StatusConflict, "PRODUCT_INACTIVE", "a quoted product has since been made inactive or discontinued")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "quotation not found")
 	case err != nil:

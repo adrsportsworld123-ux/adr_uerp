@@ -64,13 +64,15 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pluCode, weightKg, isWeighed := decodeWeighingScaleBarcode(code)
 
 	var resp barcodeResponse
+	var sellable bool
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if isWeighed {
 			row := tx.QueryRow(ctx, `
 				SELECT p.id, p.name, COALESCE(p.hsn_code, ''),
 				       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 				       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
+				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
+				       `+SellablePredicate+`
 				FROM product_variants pv
 				JOIN products p ON p.id = pv.product_id
 				LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
@@ -78,7 +80,7 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := row.Scan(
 				&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 				&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
-				&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax,
+				&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax, &sellable,
 			); err != nil {
 				return err
 			}
@@ -91,7 +93,8 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			SELECT p.id, p.name, COALESCE(p.hsn_code, ''),
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
+			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
+			       `+SellablePredicate+`
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
@@ -100,12 +103,18 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return row.Scan(
 			&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 			&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
-			&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax,
+			&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax, &sellable,
 		)
 	})
 
 	if err == pgx.ErrNoRows {
 		httpx.Error(w, http.StatusNotFound, "PRODUCT_NOT_FOUND", "no product matches this barcode")
+		return
+	}
+	// Found, but inactive/discontinued: say so, rather than a confusing
+	// "not found" — the cashier is holding the item.
+	if err == nil && !sellable {
+		httpx.Error(w, http.StatusConflict, "PRODUCT_INACTIVE", resp.ProductName+" ("+resp.SKU+") is inactive or discontinued and can't be sold")
 		return
 	} else if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "barcode lookup failed")

@@ -142,7 +142,11 @@ func FetchDocument(ctx context.Context, database *db.DB, tenantID, variantID str
 			SELECT v.id, v.product_id, v.merchant_id, p.name, v.sku, COALESCE(p.hsn_code, ''),
 			       COALESCE(p.category_id::text, ''), COALESCE(c.name, ''),
 			       COALESCE(p.brand_id::text, ''), COALESCE(b.name, ''),
-			       v.cost_price, v.mrp, v.selling_price, v.status
+			       v.cost_price, v.mrp, v.selling_price,
+			       -- Effective status: a non-active PRODUCT hides all its variants
+			       -- (same rule as catalog.SellablePredicate, which this package
+			       -- can't import without a cycle).
+			       CASE WHEN p.status <> 'active' THEN p.status ELSE v.status END
 			FROM product_variants v
 			JOIN products p ON p.id = v.product_id
 			LEFT JOIN categories c ON c.id = p.category_id
@@ -216,7 +220,11 @@ func FetchAllDocuments(ctx context.Context, database *db.DB, tenantID string) ([
 			SELECT v.id, v.product_id, v.merchant_id, p.name, v.sku, COALESCE(p.hsn_code, ''),
 			       COALESCE(p.category_id::text, ''), COALESCE(c.name, ''),
 			       COALESCE(p.brand_id::text, ''), COALESCE(b.name, ''),
-			       v.cost_price, v.mrp, v.selling_price, v.status
+			       v.cost_price, v.mrp, v.selling_price,
+			       -- Effective status: a non-active PRODUCT hides all its variants
+			       -- (same rule as catalog.SellablePredicate, which this package
+			       -- can't import without a cycle).
+			       CASE WHEN p.status <> 'active' THEN p.status ELSE v.status END
 			FROM product_variants v
 			JOIN products p ON p.id = v.product_id
 			LEFT JOIN categories c ON c.id = p.category_id

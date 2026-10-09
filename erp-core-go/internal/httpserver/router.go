@@ -51,7 +51,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	barcodeAssign := &catalog.BarcodeAssignHandler{DB: database}
 	taxonomy := &catalog.TaxonomyHandler{DB: database}
 	label := &catalog.LabelHandler{DB: database}
-	productList := &catalog.ListHandler{DB: database}
+	productList := &catalog.ListHandler{DB: database, Search: searchClient}
 	prc := &pricing.Handler{DB: database, Search: searchClient}
 	loy := &loyalty.Handler{DB: database}
 	orders := &sales.Handler{DB: database, Loyalty: loy, Notify: notify, HoldDurationMinutes: holdDurationMinutes}
@@ -111,6 +111,13 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Post("/products", productList.CreateProduct)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Patch("/products/{id}", productList.UpdateProduct)
+			// Product editing: one product's full detail for an edit
+			// screen, variant edits, and adding a variant later.
+			protected.Get("/products/{id}", productList.GetProduct)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Patch("/products/variants/{id}", productList.UpdateVariant)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Post("/products/{id}/variants", productList.AddVariant)
 			protected.Get("/products/search", srch.Search)
 
 			protected.Get("/categories", taxonomy.ListCategories)

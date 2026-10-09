@@ -20,6 +20,7 @@ import (
 
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
@@ -228,6 +229,8 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "requested quantity exceeds available stock")
 	case errors.Is(err, inventory.ErrExpiredOrUntrackedStock):
 		httpx.Error(w, http.StatusConflict, "STOCK_EXPIRED", "no unexpired, batch-tracked stock is available to fulfill this quantity")
+	case errors.Is(err, ErrProductInactive):
+		httpx.Error(w, http.StatusConflict, "PRODUCT_INACTIVE", "this product is inactive or discontinued and can't be sold")
 	case errors.Is(err, errOrderNotEditable):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order is no longer a cart")
 	case errors.Is(err, pgx.ErrNoRows):
@@ -276,19 +279,22 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 	}
 
 	var cgst, sgst, igst, cess float64
-	var trackBatch, priceIncludesTax bool
+	var trackBatch, priceIncludesTax, sellable bool
 	var minShelfLifeDays int
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 		       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), pv.track_batch,
-		       COALESCE(c.min_shelf_life_days, 0), p.price_includes_tax
+		       COALESCE(c.min_shelf_life_days, 0), p.price_includes_tax, `+catalog.SellablePredicate+`
 		FROM product_variants pv
 		JOIN products p ON p.id = pv.product_id
 		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 		LEFT JOIN categories c ON c.id = p.category_id
 		WHERE pv.id = $1`, variantID,
-	).Scan(&cgst, &sgst, &igst, &cess, &trackBatch, &minShelfLifeDays, &priceIncludesTax); err != nil {
+	).Scan(&cgst, &sgst, &igst, &cess, &trackBatch, &minShelfLifeDays, &priceIncludesTax, &sellable); err != nil {
 		return resp, err
+	}
+	if !sellable {
+		return resp, ErrProductInactive
 	}
 
 	// Resolved AFTER the tax-rate query above has already confirmed

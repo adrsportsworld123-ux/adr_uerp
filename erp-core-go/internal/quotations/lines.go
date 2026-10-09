@@ -19,8 +19,10 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/pricing"
+	"erp-core-go/internal/sales"
 	"erp-core-go/internal/taxcalc"
 )
 
@@ -37,16 +39,20 @@ var (
 // tax basis, exactly as sales.AddLineToCart does, so conversion bills
 // the same total that was quoted.
 func insertQuotationLine(ctx context.Context, tx pgx.Tx, quotationID, customerID, variantID string, quantity float64, unitPrice *float64) error {
-	var priceIncludesTax bool
+	var priceIncludesTax, sellable bool
 	var taxRate float64
 	if err := tx.QueryRow(ctx, `
 		SELECT p.price_includes_tax,
-		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
+		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0),
+		       `+catalog.SellablePredicate+`
 		FROM product_variants pv
 		JOIN products p ON p.id = pv.product_id
 		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-		WHERE pv.id = $1`, variantID).Scan(&priceIncludesTax, &taxRate); err != nil {
+		WHERE pv.id = $1`, variantID).Scan(&priceIncludesTax, &taxRate, &sellable); err != nil {
 		return err
+	}
+	if !sellable {
+		return sales.ErrProductInactive
 	}
 
 	var price float64
@@ -106,6 +112,8 @@ func respondEdit(w http.ResponseWriter, err error, resp quotationResponse, notFo
 	switch {
 	case errors.Is(err, errQuotationNotDraft):
 		httpx.Error(w, http.StatusConflict, "QUOTATION_NOT_DRAFT", "only a draft quotation can be edited — reject it and create a new one instead")
+	case errors.Is(err, sales.ErrProductInactive):
+		httpx.Error(w, http.StatusConflict, "PRODUCT_INACTIVE", "this product is inactive or discontinued and can't be quoted")
 	case errors.Is(err, errQuotationEmpty):
 		httpx.Error(w, http.StatusConflict, "QUOTATION_EMPTY", errQuotationEmpty.Error())
 	case errors.Is(err, pgx.ErrNoRows):

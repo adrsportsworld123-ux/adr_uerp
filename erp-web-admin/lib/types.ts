@@ -27,11 +27,16 @@ export interface ProductVariant {
   // Phase 8 batch/expiry tracking — stock screens show batch fields only
   // for these (a stock increase on one needs a batch_no).
   track_batch: boolean;
+  status: VariantStatus;
 }
+
+export type ProductStatus = "active" | "inactive" | "discontinued";
+export type VariantStatus = ProductStatus | "out_of_stock";
 
 export interface Product {
   product_id: string;
   name: string;
+  status: ProductStatus;
   hsn_code: string;
   // erp-core-go migrations/033: whether every variant's selling_price
   // already includes tax, and the product's total tax rate.
@@ -1112,4 +1117,43 @@ export interface EffectivePrice {
   source: "price_list" | "price_rule" | "base";
   price_rule_id: string | null;
   price_rule_name?: string;
+}
+
+// GET /products/{id} (erp-core-go internal/catalog/products_edit.go) —
+// everything the product edit screen needs in one call.
+export interface ProductDetailVariant {
+  variant_id: string;
+  sku: string;
+  attribute_combo: Record<string, string | number>;
+  cost_price: string;
+  mrp: string;
+  selling_price: string;
+  track_serial: boolean;
+  track_batch: boolean;
+  plu_code: string | null;
+  status: VariantStatus;
+  original_barcode: string | null;
+  generated_barcode: string | null;
+  // Stock across all branches — batch tracking can only be switched at 0.
+  on_hand_total: string;
+}
+
+export interface ProductDetail {
+  product_id: string;
+  name: string;
+  short_description: string;
+  hsn_code: string;
+  category_id: string | null;
+  category_name: string | null;
+  brand_id: string | null;
+  brand_name: string | null;
+  tax_slab_id: string | null;
+  tax_slab_name: string | null;
+  collection_id: string | null;
+  collection_name: string | null;
+  product_type: string;
+  status: ProductStatus;
+  price_includes_tax: boolean;
+  updated_at: string;
+  variants: ProductDetailVariant[];
 }

@@ -13,6 +13,8 @@ import { test, expect } from "@playwright/test";
 // directly; this spec proves the screens drive it. The rule here is
 // active every day at all hours so the result doesn't depend on when the
 // suite runs.
+// The seed merchant was renamed from "acme-sports"; override per environment.
+const MERCHANT_CODE = process.env.E2E_MERCHANT_CODE ?? "adr_sports_world";
 const API_BASE = "http://localhost:8080/api/v1";
 const BRANCH_ID = "22222222-2222-2222-2222-222222222222";
 
@@ -24,12 +26,17 @@ test("Phase 10: price rule, scheduled change, and draft quotation editing throug
   let headers: Record<string, string> = {};
   let variantId = "";
   let customerId = "";
+  let branchName = ""; // looked up, not hardcoded — the seed branch has been renamed before
 
   await test.step("seed a product with stock and a customer via the API", async () => {
     const login = await request.post(`${API_BASE}/auth/login`, {
-      data: { merchant_code: "acme-sports", email: "admin@adrsw.com", password: "Idontsay3#" },
+      data: { merchant_code: MERCHANT_CODE, email: "admin@adrsw.com", password: "Idontsay3#" },
     });
     headers = { Authorization: `Bearer ${(await login.json()).access_token}` };
+
+    const branches = (await (await request.get(`${API_BASE}/branches`, { headers })).json()).branches as { branch_id: string; name: string }[];
+    branchName = branches.find((b) => b.branch_id === BRANCH_ID)?.name ?? "";
+    expect(branchName).not.toBe("");
 
     const product = await request.post(`${API_BASE}/products`, {
       headers,
@@ -77,7 +84,7 @@ test("Phase 10: price rule, scheduled change, and draft quotation editing throug
     await page.locator("button", { hasText: "Choose a variant" }).last().click();
     await page.getByRole("option", { name: new RegExp(productName) }).click();
     await page.locator("button", { hasText: "Choose a branch" }).click();
-    await page.getByRole("option", { name: "MG Road" }).click();
+    await page.getByRole("option", { name: branchName, exact: true }).click();
     await page.getByRole("button", { name: "Check price" }).click();
     await expect(page.getByTestId("price-check-result")).toContainText("₹800.00");
     await expect(page.getByTestId("price-check-result")).toContainText(ruleName);
