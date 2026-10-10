@@ -260,6 +260,7 @@ function HistorySection() {
           <TableHeader>
             <TableRow>
               <TableHead>Date</TableHead>
+              <TableHead>Drawer</TableHead>
               <TableHead>Opening</TableHead>
               <TableHead>Expected</TableHead>
               <TableHead>Counted</TableHead>
@@ -269,8 +270,9 @@ function HistorySection() {
           </TableHeader>
           <TableBody>
             {history.map((h) => (
-              <TableRow key={h.recon_date}>
+              <TableRow key={h.pos_shift_id ?? h.recon_date}>
                 <TableCell className="text-xs">{h.recon_date}</TableCell>
+                <TableCell className="text-xs">{h.pos_shift_id ? `${h.terminal_name} · shift ${h.shift_number}` : "Whole branch"}</TableCell>
                 <TableCell>₹{h.opening_float}</TableCell>
                 <TableCell>₹{h.system_expected}</TableCell>
                 <TableCell>₹{h.counted_total}</TableCell>
@@ -280,7 +282,7 @@ function HistorySection() {
             ))}
             {history.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
+                <TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">
                   No reconciliations in range
                 </TableCell>
               </TableRow>

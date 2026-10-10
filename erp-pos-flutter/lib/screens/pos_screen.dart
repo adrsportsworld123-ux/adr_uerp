@@ -15,6 +15,7 @@ import 'orders_screen.dart';
 import 'printer_settings_screen.dart';
 import 'product_search_screen.dart';
 import 'receipt_screen.dart';
+import 'shift_screen.dart';
 
 part 'pos/cart_panel.dart';
 part 'pos/dialogs.dart';
@@ -53,8 +54,16 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AppSession>().refreshPendingSyncCount();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final session = context.read<AppSession>();
+      session.refreshPendingSyncCount();
+      // Phase 13: when the merchant requires shifts and this till has
+      // none open, start on the shift screen instead of a till that
+      // can't take payment.
+      await session.refreshShift();
+      if (mounted && session.shiftsRequired && session.currentShift == null && !session.offlineMode) {
+        await _openShift();
+      }
     });
   }
 
@@ -313,6 +322,11 @@ class _PosScreenState extends State<PosScreen> {
 
   /// Phase 13: history works offline too (it then shows this device's
   /// queued sales only); returns inside it need the server.
+  Future<void> _openShift() async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const ShiftScreen())));
+    _refocusScan();
+  }
+
   Future<void> _openSalesHistory() async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const OrdersScreen())));
     _refocusScan();
@@ -427,7 +441,7 @@ class _PosScreenState extends State<PosScreen> {
       child: CallbackShortcuts(
         bindings: _shortcuts,
         child: Scaffold(
-          appBar: _StatusBar(busy: _busy, onSync: _sync, onMenu: _onMenu),
+          appBar: _StatusBar(busy: _busy, onSync: _sync, onShift: _openShift, onMenu: _onMenu),
           body: Column(
             children: [
               if (session.offlineMode)

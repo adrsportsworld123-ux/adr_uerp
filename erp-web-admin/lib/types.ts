@@ -563,6 +563,10 @@ export interface CashReconciliationSummary {
   counted_total: string;
   variance: string;
   authorized: boolean;
+  // Phase 13: set when the count is a POS shift close (one till).
+  pos_shift_id: string | null;
+  terminal_name: string | null;
+  shift_number: number | null;
 }
 
 // Mirrors internal/inventory/reconciliation.go.

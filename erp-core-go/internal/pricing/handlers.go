@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -272,6 +273,8 @@ func recordPriceChange(ctx context.Context, tx pgx.Tx, variantID, field string, 
 	return err
 }
 
+// round2 rounds half away from zero. (int64(v*100+0.5) truncated
+// negatives toward zero: -10.00 became -9.99.)
 func round2(v float64) float64 {
-	return float64(int64(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
 }

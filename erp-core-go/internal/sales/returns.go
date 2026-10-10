@@ -38,12 +38,14 @@ var (
 type salesSettings struct {
 	ReturnsRequireApproval bool `json:"returns_require_approval"`
 	ReturnWindowDays       *int `json:"return_window_days"`
+	// Phase 13 shifts: refuse POS checkout on a till with no open shift.
+	ShiftsRequired bool `json:"shifts_required"`
 }
 
 func loadSalesSettings(ctx context.Context, tx pgx.Tx) (salesSettings, error) {
 	s := salesSettings{ReturnsRequireApproval: true} // the safe default when never configured
-	err := tx.QueryRow(ctx, `SELECT returns_require_approval, return_window_days FROM sales_settings`).
-		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays)
+	err := tx.QueryRow(ctx, `SELECT returns_require_approval, return_window_days, shifts_required FROM sales_settings`).
+		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays, &s.ShiftsRequired)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, nil
 	}
@@ -78,7 +80,13 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
 		return
 	}
-	var req salesSettings
+	// shifts_required is optional so a client that predates it (the
+	// return-policy form) doesn't switch it off by omission.
+	var req struct {
+		ReturnsRequireApproval bool  `json:"returns_require_approval"`
+		ReturnWindowDays       *int  `json:"return_window_days"`
+		ShiftsRequired         *bool `json:"shifts_required"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
 		return
@@ -87,19 +95,25 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "return_window_days must be positive, or null for no limit")
 		return
 	}
+	var saved salesSettings
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
-			INSERT INTO sales_settings (merchant_id, returns_require_approval, return_window_days, updated_at)
-			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, now())
-			ON CONFLICT (merchant_id) DO UPDATE SET returns_require_approval = $1, return_window_days = $2, updated_at = now()`,
-			req.ReturnsRequireApproval, req.ReturnWindowDays)
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO sales_settings (merchant_id, returns_require_approval, return_window_days, shifts_required, updated_at)
+			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, COALESCE($3, false), now())
+			ON CONFLICT (merchant_id) DO UPDATE SET returns_require_approval = $1, return_window_days = $2,
+			    shifts_required = COALESCE($3, sales_settings.shifts_required), updated_at = now()`,
+			req.ReturnsRequireApproval, req.ReturnWindowDays, req.ShiftsRequired); err != nil {
+			return err
+		}
+		var err error
+		saved, err = loadSalesSettings(ctx, tx)
 		return err
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not save sales settings")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, req)
+	httpx.JSON(w, http.StatusOK, saved)
 }
 
 // returnableLine is one sale line with what's already gone back.

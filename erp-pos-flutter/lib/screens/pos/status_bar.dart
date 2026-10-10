@@ -7,14 +7,58 @@ part of '../pos_screen.dart';
 // secondary actions in a menu on the right.
 // ---------------------------------------------------------------------
 
+/// Phase 13: the till's shift at a glance; tapping opens the shift screen.
+/// Shown as a warning when the merchant requires shifts and none is open.
+class _ShiftChip extends StatelessWidget {
+  final VoidCallback onTap;
+  final bool compact;
+
+  const _ShiftChip({required this.onTap, required this.compact});
+
+  @override
+  Widget build(BuildContext context) {
+    final session = context.watch<AppSession>();
+    final theme = Theme.of(context);
+    final shift = session.currentShift;
+    final warn = shift == null && session.shiftsRequired;
+    final label = shift == null ? 'No shift' : 'Shift ${shift.shiftNumber}';
+    final fg = warn ? theme.pos.warn : theme.colorScheme.onSurfaceVariant;
+    return Semantics(
+      button: true,
+      label: '$label. Open shift and cash drawer.',
+      child: InkWell(
+        key: const Key('shift-chip'),
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: warn ? theme.pos.warnSoft : null,
+            border: Border.all(color: warn ? theme.pos.warn : theme.colorScheme.outline),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(shift == null ? Icons.lock_outline : Icons.point_of_sale, size: 16, color: fg),
+            if (!compact) ...[
+              const SizedBox(width: 6),
+              Text(label, style: TextStyle(color: fg, fontWeight: FontWeight.w600, fontSize: 13)),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
 enum _MenuAction { heldOrders, salesHistory, productSearch, syncNow, printer, signOut }
 
 class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
   final bool busy;
   final VoidCallback onSync;
+  final VoidCallback onShift;
   final ValueChanged<_MenuAction> onMenu;
 
-  const _StatusBar({required this.busy, required this.onSync, required this.onMenu});
+  const _StatusBar({required this.busy, required this.onSync, required this.onShift, required this.onMenu});
 
   @override
   Size get preferredSize => const Size.fromHeight(56);
@@ -83,6 +127,8 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                   ),
                 ),
               ),
+              const SizedBox(width: 8),
+              _ShiftChip(onTap: onShift, compact: compact),
               const SizedBox(width: 8),
               if (!compact)
                 Padding(

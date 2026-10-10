@@ -544,6 +544,7 @@ class AppSession extends ChangeNotifier {
         'PAYMENT_MISMATCH' => 'Payment total does not cover the order total',
         'CREDIT_HOLD' => 'This customer is on credit hold — cannot accept a credit payment',
         'CREDIT_LIMIT_EXCEEDED' => 'This sale would put the customer over their credit limit',
+        'SHIFT_NOT_OPEN' => 'Open a shift on this till before taking payment (tap the shift chip at the top)',
         _ => e.message,
       };
       notifyListeners();
@@ -918,6 +919,80 @@ class AppSession extends ChangeNotifier {
 
   Future<ReturnResult> createReturn(String orderId, ReturnRequest req) =>
       _live(() => api.createReturn(orderId: orderId, posTerminalId: posTerminalId, req: req));
+
+  // ---------------------------------------------------------------------
+  // Phase 13 shifts (erp-core-go internal/sales/shifts.go). Online-only:
+  // opening, cash in/out and closing all need the server. The till keeps
+  // selling offline; those sales count in the shift they were made in
+  // once they sync (the server dates them by device time).
+  // ---------------------------------------------------------------------
+
+  /// The till's open shift, null when none (or not loaded yet).
+  Shift? currentShift;
+
+  /// Whether the merchant requires an open shift to take payment.
+  bool shiftsRequired = false;
+
+  /// Loads the open shift and the merchant's shift rule. Quietly does
+  /// nothing offline; the status bar then shows the last known state.
+  Future<void> refreshShift() async {
+    if (offlineMode) return;
+    try {
+      final results = await Future.wait([api.currentShift(posTerminalId), api.shiftsRequired()]);
+      currentShift = results[0] as Shift?;
+      shiftsRequired = results[1] as bool;
+      notifyListeners();
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        offlineMode = true;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<Shift> openShift(double openingFloat, String idempotencyKey) async {
+    final s = await _live(() => api.openShift(terminalId: posTerminalId, openingFloat: openingFloat, idempotencyKey: idempotencyKey));
+    currentShift = s;
+    notifyListeners();
+    return s;
+  }
+
+  Future<Shift> addCashMovement({
+    required String kind,
+    required double amount,
+    required String reason,
+    String? approverCode,
+    String? approverPin,
+    required String idempotencyKey,
+  }) async {
+    final s = await _live(() => api.addCashMovement(
+          shiftId: currentShift!.shiftId,
+          kind: kind,
+          amount: amount,
+          reason: reason,
+          approverCode: approverCode,
+          approverPin: approverPin,
+          idempotencyKey: idempotencyKey,
+        ));
+    currentShift = s;
+    notifyListeners();
+    return s;
+  }
+
+  /// Returns the closed shift (with its Z report); the till then has no
+  /// open shift.
+  Future<Shift> closeShift(Map<double, int> denominations, {String? reason, String? approverCode, String? approverPin}) async {
+    final closed = await _live(() => api.closeShift(
+          shiftId: currentShift!.shiftId,
+          denominations: denominations,
+          reason: reason,
+          approverCode: approverCode,
+          approverPin: approverPin,
+        ));
+    currentShift = null;
+    notifyListeners();
+    return closed;
+  }
 
   /// One key per return attempt; the return screen keeps it across retries.
   String newIdempotencyKey() => _newIdempotencyKey();

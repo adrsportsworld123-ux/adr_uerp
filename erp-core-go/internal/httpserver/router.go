@@ -219,6 +219,15 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/sales/orders/{id}/returnable", orders.GetReturnable)
 			protected.Get("/sales/orders/{id}/returns", orders.ListReturns)
 			protected.Post("/sales/orders/{id}/returns", orders.CreateReturn)
+			// Phase 13 shifts: any signed-in user runs their till's shift;
+			// a count that doesn't match, and a paid-out, need a manager's
+			// code + PIN inline (internal/sales/shifts.go).
+			protected.Get("/pos-shifts", orders.ListShifts)
+			protected.Get("/pos-shifts/current", orders.CurrentShift)
+			protected.Post("/pos-shifts", orders.OpenShift)
+			protected.Get("/pos-shifts/{id}", orders.GetShift)
+			protected.Post("/pos-shifts/{id}/cash-movements", orders.AddCashMovement)
+			protected.Post("/pos-shifts/{id}/close", orders.CloseShift)
 			protected.Get("/sales/settings", orders.GetSettings)
 			protected.With(authn.RequirePermission(database, "sales.settings")).
 				Put("/sales/settings", orders.UpdateSettings)

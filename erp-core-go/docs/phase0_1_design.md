@@ -101,7 +101,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `PAYMENT_MISMATCH` | 400 | checkout | Sum of `payments[].amount` doesn't cover `grand_total` |
 | `DISCOUNT_NOT_AUTHORIZED` | 403 | `POST /sales/orders/{id}/discounts` | Requested discount % exceeds what the presented `authorized_by`/`authorized_pin` permits for their role tier |
 | `DEVICE_MISMATCH` | 403 | `POST /auth/pin-login` | Terminal is already device-bound and the presented `device_fingerprint` doesn't match |
-| `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'`, or (Phase 12) the terminal's branch is inactive |
+| `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'`, or (Phase 12) the terminal's branch is inactive; also `POST /pos-shifts` for a till that isn't an active POS (`channel = 'pos'`) till of this merchant in an active branch |
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
 | `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}`, `POST /pricing/scheduled-changes`, `POST /pricing/rules` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29). For a rule, `details.below_cost_skus` lists every covered variant it would put below cost (§3.30) |
 | `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
@@ -170,6 +170,13 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `OPEN_PRICE_OUT_OF_RANGE` | 422 | `POST /sales/orders/{id}/lines` | `unit_price` outside the variant's min/max, compared in paise; same `details` (§3.35) |
 | `OPEN_PRICE_NOT_APPROVED` | 403 | `POST /sales/orders/{id}/lines` | Price above `approval_above` and the approver code/PIN is missing, wrong, or not a Branch Manager/Merchant Admin (§3.35) |
 | `PRICE_NOT_EDITABLE` | 409 | `POST /sales/orders/{id}/lines` | `unit_price` sent for a fixed-price item (§3.35) |
+| `SHIFT_ALREADY_OPEN` | 409 | `POST /pos-shifts` | The till already has an open shift (also a racing second open) (§3.36) |
+| `SHIFT_CLOSED` | 409 | `POST /pos-shifts/{id}/cash-movements` | The shift is closed (§3.36) |
+| `SHIFT_NOT_OPEN` | 409 | `POST /sales/orders/{id}/checkout` | `sales_settings.shifts_required` and the order's POS till has no open shift; the online storefront's virtual till is exempt (§3.36) |
+| `DAY_ALREADY_RECONCILED` | 409 | `POST /pos-shifts` | The branch's cash for today was already counted as a whole-branch daily count (§3.36) |
+| `SHIFTS_IN_USE` | 409 | `POST /cash-reconciliation` | The branch ran shifts on that date; each drawer was counted at shift close (§3.36) |
+| `INSUFFICIENT_CASH` | 409 | `POST /pos-shifts/{id}/cash-movements` | A drop or paid-out larger than the drawer's expected cash (§3.36) |
+| `CASH_MOVEMENT_NOT_APPROVED` | 403 | `POST /pos-shifts/{id}/cash-movements` | A paid-out without a valid Branch Manager/Merchant Admin code + PIN (§3.36) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -1063,6 +1070,82 @@ For a fixed-price variant, sending `unit_price` is refused (`409 PRICE_NOT_EDITA
 `internal/catalog/open_price_test.go` pins the paise comparison, the threshold boundary and range validation.
 
 New error codes: `OPEN_PRICE_REQUIRED`, `OPEN_PRICE_OUT_OF_RANGE` (422), `OPEN_PRICE_NOT_APPROVED` (403), `PRICE_NOT_EDITABLE` (409).
+
+### 3.36 Phase 13: POS shifts and cash in/out (`internal/sales/shifts.go`, `internal/accounting/cash_flow.go`, `migrations/040_pos_shifts.sql`, 2026-10-10)
+
+A shift is one till's drawer from open to close.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /pos-shifts/current?terminal_id=` | `{shift}`: the open shift with its live X report, or `null` |
+| `POST /pos-shifts` `{pos_terminal_id, opening_float, idempotency_key}` | Open. One open shift per till; a partial unique index also settles a race. `shift_number` counts per till. A replayed key gives `200` with `replayed` |
+| `POST /pos-shifts/{id}/cash-movements` `{kind, amount, reason, approver_code?, approver_pin?, idempotency_key}` | `float_in`, `drop`, `paid_in` or `paid_out`. A reason is required for `paid_*`. A paid-out needs a manager's code and PIN. A drop or paid-out can't exceed the expected cash. Idempotent |
+| `GET /pos-shifts/{id}` | The shift with its X report (open) or Z report (closed) |
+| `POST /pos-shifts/{id}/close` `{denominations: [{denomination, count}], reason?, approver_code?, approver_pin?}` | Count and close. Writes the Z report; a retried close returns it |
+| `GET /pos-shifts?branch_id=&terminal_id=&status=&from=&to=&page=&limit=` | Newest first, paged, with each closed shift's variance |
+| `GET/PUT /sales/settings` | Adds `shifts_required` (optional on PUT, so an older client can't clear it by omission) |
+
+**Closing a shift is a cash reconciliation.** It isn't a parallel mechanism. `accounting.RecordCashCount` is now the single writer of `cash_reconciliations`, for both the daily `POST /cash-reconciliation` and a shift close, which is stored as a row with `pos_shift_id`. Both get:
+- the same denomination lines
+- the same variance rule: a reason, plus a Branch Manager/Merchant Admin approval (by user id + PIN for daily counts, by employee code + PIN for shifts)
+- the same Cash Over/Short posting
+- the same history (`GET /cash-reconciliation/history` now labels each shift row with its till and shift number)
+
+A branch that runs shifts counts per shift. So:
+- a daily count on a date with shifts is refused (`SHIFTS_IN_USE`)
+- a shift can't open on a date already counted daily (`DAY_ALREADY_RECONCILED`)
+- the old one-row-per-branch-per-day constraint now applies only to daily counts
+
+Without these rules, a variance could be posted twice.
+
+**Expected cash, one definition** (`accounting.ComputeCashFlow`), used by both the daily count and the shift close:
+- cash captured on sales that still stand (finalized, partially refunded or refunded; voided sales excluded)
+- minus cash refunds from returns
+- plus float in and paid in
+- minus drops and paid out
+
+A sale counts at the moment the money changed hands: `device_created_at` for an offline sale, otherwise `finalized_at`.
+
+This changes the daily count's figure in two ways:
+- A sale that has since been partly or fully returned used to drop out of the expected cash entirely, even though its cash was taken (a gap opened by §3.34's returns). It now counts, and the refund is subtracted.
+- A synced offline sale now counts on the day it was made, not the day it synced.
+
+**Ledger.** Account 1001 Cash is all of the business's physical cash, drawer and safe, so `float_in` and `drop` post nothing. `paid_in` posts Dr 1001 / Cr 4002 Other Income, and `paid_out` posts Dr 5004 Petty Cash Expenses / Cr 1001. Both use source type `cash_movement`. Migration 040 adds those two accounts for every merchant that has a chart of accounts.
+
+**Reports.** The X report is computed live over `[opened_at, now)` and the Z report over `[opened_at, closed_at)`. Each has:
+- order and void counts, net sales, and tenders by method
+- returns and refunds by method
+- the cash breakdown down to expected cash
+- the cash movements
+
+The Z report also has the count, the variance, the reason and the approver. It is frozen in `pos_shifts.z_report`, so a sale that syncs after the close doesn't rewrite it. The POS syncs before counting and warns about any offline sales still unsynced.
+
+**Rounding fix found on the way.** Every `round2` in the codebase (accounting, sales, catalog, loyalty, payroll, pricing, promotions) was `int64(v*100+0.5)/100`. That truncates negatives toward zero, so a ₹10.00 cash shortage was recorded and posted as ₹9.99. All of them now use `math.Round` (inventory already rounded correctly). `internal/accounting/cash_flow_test.go` pins it.
+
+**Verified live** (throwaway API, compose seed DB, a fresh till per run, 37 checks):
+- **Opening:**
+  - open, replay, a second open (409), and the online till refused (409)
+  - cash and UPI sales and a cash refund feed the X report exactly
+- **Cash movements:**
+  - float in, drop, and an idempotent paid in
+  - a paid-out needs approval (403, then 201)
+  - a paid-in needs a reason (400)
+  - an oversized drop is refused (409)
+  - paid in posts Dr 1001 / Cr 4002, and float/drop post nothing
+- **`shifts_required`:** checkout without an open shift is refused (409), works with one, and a PUT that omits the field keeps it.
+- **Closing:**
+  - a ₹10 short count: no reason gives 400, no approver gives 403, and an approved close records variance −10.00 exactly
+  - the close is a cash reconciliation row posted Dr 5002 10.00 / Cr 1001 10.00
+  - a retried close returns the same Z, and a movement after close is refused (409)
+  - the Z stays frozen after a later sale
+- **Cash reconciliation interplay:**
+  - recon history labels the till
+  - a daily count on a shift day is refused (409), and a no-shift day still works
+- **Afterwards:** the shift list works, the next shift is number 2, and an empty drawer closes without approval.
+
+The returns (32) and open-price (28) checks were re-run green.
+
+New error codes: `SHIFT_ALREADY_OPEN`, `SHIFT_CLOSED`, `SHIFT_NOT_OPEN`, `DAY_ALREADY_RECONCILED`, `SHIFTS_IN_USE`, `INSUFFICIENT_CASH` (409), `CASH_MOVEMENT_NOT_APPROVED` (403); `TERMINAL_UNAVAILABLE` widened.
 
 ---
 

@@ -52,6 +52,8 @@ const (
 	AccountInventoryLoss      = "5001"
 	AccountCashOverShort      = "5002"
 	AccountPaymentGatewayFees = "5003"
+	AccountOtherIncome        = "4002" // Phase 13 cash paid in (migrations/040)
+	AccountPettyCash          = "5004" // Phase 13 cash paid out of the drawer
 )
 
 // AccountCodeForPaymentMethod maps a sales/bill payment method to the

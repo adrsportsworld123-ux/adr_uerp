@@ -721,6 +721,15 @@ Done so far:
   - the approver is recorded on the line, and each line is audited
   - offline sales are enforced on the device and can't go above the threshold
   - normal stock and batch handling
+- **Shifts** (`migrations/040`, §3.36):
+  - open with a float, then cash in/out: float in, drop to safe, paid in, and paid out with manager approval; paid in/out post to the ledger
+  - a live X report
+  - a counted close producing a frozen Z report
+  - the close is recorded through the existing cash reconciliation (`accounting.RecordCashCount`, now its single writer), sharing one expected-cash definition with the daily count. This meets the Definition of Done item "shift close reconciles to the cash-recon figure"
+  - an optional per-merchant rule, set on the admin Sales Policy page, that a till needs an open shift to take payment
+  - POS: a shift chip in the status bar, the shift screen, a denomination count with live variance, sync before closing, and the till starting on the shift screen when shifts are required
+  - fixed on the way: negative rounding truncated toward zero, so a ₹10 shortage posted as ₹9.99, in all seven `round2` copies
+  - the daily expected cash now counts later-returned sales and subtracts cash refunds
 - **Tests:**
   - 32 live API checks
   - Flutter widget tests for history plus an approval-retry return and for offline queued sales, and a live client test
@@ -729,7 +738,9 @@ Done so far:
 
 Open-price tests: 28 live API checks, Go unit tests, 2 Flutter widget tests plus a live client test, and `e2e/phase13-open-price.spec.ts`.
 
-Still to do in this phase: shifts (open, cash in/out, X/Z close), the sync queue screen, product lookup and labels from the POS. **Migrations `038` and `039` must be applied to the host database.**
+Shift tests: 37 live API checks, Go unit tests (rounding, cash flow), 3 Flutter widget tests plus a live client test, `e2e/phase13-shifts.spec.ts`, and the Sales Policy spec. Billing goldens were updated for the shift chip.
+
+Still to do in this phase: the sync queue screen, and product lookup and labels from the POS. **Migrations `038`, `039` and `040` must be applied to the host database.**
 
 **Size: XL | Goal: The POS covers the counter's whole day, from open shift to close, not just a single sale.**
 

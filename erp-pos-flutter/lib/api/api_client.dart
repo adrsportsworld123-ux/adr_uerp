@@ -720,6 +720,120 @@ class ReturnResult {
       );
 }
 
+/// One cash movement within a shift (float in, drop, paid in, paid out).
+class CashMovement {
+  final String kind;
+  final String amount;
+  final String reason;
+  final String performedBy;
+  final String? approvedBy;
+  final String createdAt;
+
+  CashMovement({
+    required this.kind,
+    required this.amount,
+    required this.reason,
+    required this.performedBy,
+    this.approvedBy,
+    required this.createdAt,
+  });
+
+  factory CashMovement.fromJson(Map<String, dynamic> j) => CashMovement(
+        kind: j['kind'] as String,
+        amount: j['amount'] as String,
+        reason: j['reason'] as String? ?? '',
+        performedBy: j['performed_by'] as String? ?? '',
+        approvedBy: j['approved_by'] as String?,
+        createdAt: j['created_at'] as String,
+      );
+}
+
+/// The X (live) or Z (closed, frozen) report of a shift — erp-core-go
+/// internal/sales/shifts.go shiftReport.
+class ShiftReport {
+  final String kind; // 'X' | 'Z'
+  final String generatedAt;
+  final int orderCount;
+  final int voidedCount;
+  final String netSales;
+  final Map<String, String> byMethod;
+  final int returnCount;
+  final String refundTotal;
+  final Map<String, String> cash; // opening_float, cash_sales, cash_refunds, float_in, drops, paid_in, paid_out, expected
+  final List<CashMovement> movements;
+  final Map<String, dynamic>? close; // counted_total, variance, reason, approved_by
+
+  ShiftReport({
+    required this.kind,
+    required this.generatedAt,
+    required this.orderCount,
+    required this.voidedCount,
+    required this.netSales,
+    required this.byMethod,
+    required this.returnCount,
+    required this.refundTotal,
+    required this.cash,
+    required this.movements,
+    this.close,
+  });
+
+  String get expectedCash => cash['expected'] ?? '0.00';
+
+  factory ShiftReport.fromJson(Map<String, dynamic> j) => ShiftReport(
+        kind: j['kind'] as String,
+        generatedAt: j['generated_at'] as String,
+        orderCount: j['order_count'] as int? ?? 0,
+        voidedCount: j['voided_count'] as int? ?? 0,
+        netSales: j['net_sales'] as String? ?? '0.00',
+        byMethod: (j['by_payment_method'] as Map<String, dynamic>? ?? const {}).cast<String, String>(),
+        returnCount: j['return_count'] as int? ?? 0,
+        refundTotal: j['refund_total'] as String? ?? '0.00',
+        cash: (j['cash'] as Map<String, dynamic>? ?? const {}).cast<String, String>(),
+        movements: (j['movements'] as List<dynamic>? ?? const [])
+            .map((e) => CashMovement.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        close: j['close'] as Map<String, dynamic>?,
+      );
+}
+
+class Shift {
+  final String shiftId;
+  final int shiftNumber;
+  final String status; // 'open' | 'closed'
+  final String terminalName;
+  final String openingFloat;
+  final String openedBy;
+  final String openedAt;
+  final String? closedAt;
+  final ShiftReport? report;
+
+  Shift({
+    required this.shiftId,
+    required this.shiftNumber,
+    required this.status,
+    required this.terminalName,
+    required this.openingFloat,
+    required this.openedBy,
+    required this.openedAt,
+    this.closedAt,
+    this.report,
+  });
+
+  bool get isOpen => status == 'open';
+
+  factory Shift.fromJson(Map<String, dynamic> j) => Shift(
+        shiftId: j['shift_id'] as String,
+        shiftNumber: j['shift_number'] as int,
+        status: j['status'] as String,
+        terminalName: j['terminal_name'] as String? ?? '',
+        openingFloat: j['opening_float'] as String,
+        openedBy: j['opened_by'] as String? ?? '',
+        openedAt: j['opened_at'] as String,
+        closedAt: j['closed_at'] as String?,
+        report: j['report'] == null ? null : ShiftReport.fromJson(j['report'] as Map<String, dynamic>),
+      );
+}
+
 /// Talks to erp-core-go's /api/v1 surface, exactly as specified in
 /// phase0_1_design.md §3 and implemented (and verified against live
 /// Postgres) in internal/authn, internal/catalog, internal/sales.
@@ -1283,6 +1397,78 @@ class ApiClient {
       }),
     );
     return ReturnResult.fromJson(_decode(resp));
+  }
+
+  // ------------------------------------------------------- Phase 13 shifts
+
+  /// The till's open shift with its live X report, or null.
+  Future<Shift?> currentShift(String terminalId) async {
+    final uri = Uri.parse('$baseUrl/api/v1/pos-shifts/current').replace(queryParameters: {'terminal_id': terminalId});
+    final body = _decode(await _http.get(uri, headers: _authHeaders));
+    final s = body['shift'];
+    return s == null ? null : Shift.fromJson(s as Map<String, dynamic>);
+  }
+
+  Future<Shift> openShift({required String terminalId, required double openingFloat, required String idempotencyKey}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/pos-shifts'),
+      headers: _authHeaders,
+      body: jsonEncode({'pos_terminal_id': terminalId, 'opening_float': openingFloat, 'idempotency_key': idempotencyKey}),
+    );
+    return Shift.fromJson(_decode(resp));
+  }
+
+  Future<Shift> addCashMovement({
+    required String shiftId,
+    required String kind,
+    required double amount,
+    required String reason,
+    String? approverCode,
+    String? approverPin,
+    required String idempotencyKey,
+  }) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/pos-shifts/$shiftId/cash-movements'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'kind': kind,
+        'amount': amount,
+        'reason': reason,
+        if (approverCode != null && approverCode.isNotEmpty) 'approver_code': approverCode,
+        if (approverPin != null && approverPin.isNotEmpty) 'approver_pin': approverPin,
+        'idempotency_key': idempotencyKey,
+      }),
+    );
+    return Shift.fromJson(_decode(resp));
+  }
+
+  /// [denominations]: note/coin value -> count.
+  Future<Shift> closeShift({
+    required String shiftId,
+    required Map<double, int> denominations,
+    String? reason,
+    String? approverCode,
+    String? approverPin,
+  }) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/pos-shifts/$shiftId/close'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'denominations': [
+          for (final e in denominations.entries) {'denomination': e.key, 'count': e.value},
+        ],
+        if (reason != null && reason.isNotEmpty) 'reason': reason,
+        if (approverCode != null && approverCode.isNotEmpty) 'approver_code': approverCode,
+        if (approverPin != null && approverPin.isNotEmpty) 'approver_pin': approverPin,
+      }),
+    );
+    return Shift.fromJson(_decode(resp));
+  }
+
+  /// GET /sales/settings — the POS reads `shifts_required`.
+  Future<bool> shiftsRequired() async {
+    final body = _decode(await _http.get(Uri.parse('$baseUrl/api/v1/sales/settings'), headers: _authHeaders));
+    return body['shifts_required'] as bool? ?? false;
   }
 
   Map<String, dynamic> _decode(http.Response resp) {

@@ -18,6 +18,7 @@ package promotions
 import (
 	"encoding/json"
 	"errors"
+	"math"
 
 	"erp-core-go/internal/db"
 )
@@ -112,6 +113,8 @@ func marshalConfig(cfg promoConfig) []byte {
 // enough contexts (evaluating candidate promotions vs. distributing an
 // already-resolved amount across lines), that importing sales just for
 // this one function isn't worth it.
+// round2 rounds half away from zero. (int64(v*100+0.5) truncated
+// negatives toward zero: -10.00 became -9.99.)
 func round2(v float64) float64 {
-	return float64(int64(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
 }

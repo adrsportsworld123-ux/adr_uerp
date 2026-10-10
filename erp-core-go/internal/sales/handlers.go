@@ -557,6 +557,9 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		if status != "cart" {
 			return errOrderNotEditable
 		}
+		if err := requireOpenShift(ctx, tx, orderID); err != nil {
+			return err
+		}
 
 		// Found live while verifying the new POST /products endpoint: a
 		// cart with zero lines (subtotal/grand_total both 0) passed the
@@ -768,6 +771,8 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "CREDIT_HOLD", "this customer is on credit hold")
 	case errors.Is(err, errCreditLimitExceeded):
 		httpx.Error(w, http.StatusConflict, "CREDIT_LIMIT_EXCEEDED", "this sale would put the customer over their credit limit")
+	case errors.Is(err, errShiftNotOpen):
+		httpx.Error(w, http.StatusConflict, "SHIFT_NOT_OPEN", "open a shift on this till before taking payment")
 	case errors.Is(err, errPrescriptionRequired):
 		httpx.Error(w, http.StatusConflict, "PRESCRIPTION_REQUIRED", errPrescriptionRequired.Error())
 	case errors.Is(err, errReservationMismatch):

@@ -127,6 +127,13 @@ Returns are online-only, and an offline sale can't be returned until it has sync
 
 It also reopens the keypad after a failed approval PIN. Offline, the device enforces the cached range (local DB v3 adds the range columns and `pending_order_lines.open_price`) and refuses prices that need approval.
 
+**Shifts (Phase 13).** `lib/screens/shift_screen.dart` has three parts:
+- `ShiftScreen`: open with a float, the X report, and cash in/out via `CashMovementDialog`, which keeps one idempotency key across retries
+- `CloseShiftScreen`: a denomination count with live variance. When the count doesn't match, it asks for a reason and a manager's code and PIN. It syncs offline sales before counting.
+- `ShiftReportView`: the X and Z reports
+
+The status bar's shift chip opens it. `AppSession.refreshShift()` loads the open shift and `shifts_required`. When shifts are required and none is open, `PosScreen` starts on the shift screen. Shifts are online-only; offline selling is never blocked.
+
 **Known gap, still real:** `GET /sales/orders/{id}` doesn't yet return
 line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second

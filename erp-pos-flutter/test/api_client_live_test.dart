@@ -323,4 +323,37 @@ void main() {
       expect(await setOpenPrice({'enabled': false}), 200);
     }
   });
+
+  test('Phase 13: a shift opens, takes a float in, and closes on a matching count', () async {
+    if (!serverUp) return;
+
+    const branchId = '22222222-2222-2222-2222-222222222222';
+    final login = await http.post(
+      Uri.parse('$_baseUrl/api/v1/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'merchant_code': 'acme-sports', 'email': 'arjun@acme-sports.test', 'password': 'Passw0rd!'}),
+    );
+    final token = (jsonDecode(login.body) as Map<String, dynamic>)['access_token'] as String;
+    final headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'};
+    // A throwaway till, so nothing else's shift is touched.
+    final created = await http.post(Uri.parse('$_baseUrl/api/v1/pos-terminals'),
+        headers: headers, body: jsonEncode({'branch_id': branchId, 'name': 'Flutter shift ${DateTime.now().microsecondsSinceEpoch}'}));
+    final terminalId = (jsonDecode(created.body) as Map<String, dynamic>)['terminal_id'] as String;
+    try {
+      expect(await api.currentShift(terminalId), isNull);
+      var shift = await api.openShift(terminalId: terminalId, openingFloat: 1000, idempotencyKey: 'flutter-shift-${DateTime.now().microsecondsSinceEpoch}');
+      expect(shift.isOpen, isTrue);
+      expect(shift.report!.expectedCash, '1000.00');
+      shift = await api.addCashMovement(
+          shiftId: shift.shiftId, kind: 'float_in', amount: 250, reason: '', idempotencyKey: 'flutter-mv-${DateTime.now().microsecondsSinceEpoch}');
+      expect(shift.report!.expectedCash, '1250.00');
+      final closed = await api.closeShift(shiftId: shift.shiftId, denominations: {500: 2, 200: 1, 50: 1});
+      expect(closed.status, 'closed');
+      expect(closed.report!.kind, 'Z');
+      expect(closed.report!.close!['variance'], '0.00');
+      expect(await api.currentShift(terminalId), isNull);
+    } finally {
+      await http.patch(Uri.parse('$_baseUrl/api/v1/pos-terminals/$terminalId'), headers: headers, body: jsonEncode({'status': 'inactive'}));
+    }
+  });
 }

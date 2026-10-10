@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"time"
 
@@ -69,6 +70,7 @@ var (
 	errAlreadyReconciled     = errors.New("this branch already has a cash reconciliation for this date")
 	errVarianceNeedsReason   = errors.New("a non-zero variance requires a reason")
 	errVarianceNotAuthorized = errors.New("variance exceeds what the authorizer's role/PIN permits")
+	errShiftsInUse           = errors.New("this branch ran shifts on this date")
 )
 
 func (h *Handler) CreateCashReconciliation(w http.ResponseWriter, r *http.Request) {
@@ -104,99 +106,67 @@ func (h *Handler) CreateCashReconciliation(w http.ResponseWriter, r *http.Reques
 	var resp cashReconciliationResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var already bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM cash_reconciliations WHERE branch_id = $1 AND recon_date = $2::date)`,
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM cash_reconciliations WHERE branch_id = $1 AND recon_date = $2::date AND pos_shift_id IS NULL)`,
 			req.BranchID, req.ReconDate).Scan(&already); err != nil {
 			return err
 		}
 		if already {
 			return errAlreadyReconciled
 		}
-
-		var cashSales float64
+		// Phase 13: a branch that ran shifts that day counted each drawer
+		// at shift close; a whole-branch count would post the same
+		// variance twice.
+		var shifts bool
 		if err := tx.QueryRow(ctx, `
-			SELECT COALESCE(SUM(p.amount), 0)
-			FROM payments p
-			JOIN sales_orders so ON so.id = p.sales_order_id
-			WHERE so.branch_id = $1 AND so.status = 'finalized' AND so.finalized_at::date = $2::date
-			  AND p.method = 'cash' AND p.status = 'captured'`,
-			req.BranchID, req.ReconDate,
-		).Scan(&cashSales); err != nil {
+			SELECT EXISTS(SELECT 1 FROM pos_shifts WHERE branch_id = $1
+			              AND opened_at::date <= $2::date AND (closed_at IS NULL OR closed_at::date >= $2::date))`,
+			req.BranchID, req.ReconDate).Scan(&shifts); err != nil {
 			return err
 		}
-		systemExpected := req.OpeningFloat + cashSales
-
-		var countedTotal float64
-		for _, d := range req.Denominations {
-			countedTotal += d.Denomination * float64(d.Count)
-		}
-		variance := round2(countedTotal - systemExpected)
-
-		var authorizerID *string
-		if variance != 0 {
-			if req.Reason == "" {
-				return errVarianceNeedsReason
-			}
-			ok, err := cashAuthorizerPermits(ctx, tx, req.AuthorizedBy, req.AuthorizedPIN)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return errVarianceNotAuthorized
-			}
-			authorizerID = &req.AuthorizedBy
+		if shifts {
+			return errShiftsInUse
 		}
 
-		var reconID, createdAt string
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO cash_reconciliations
-				(id, merchant_id, branch_id, recon_date, opening_float, system_expected, counted_total, variance, reason, counted_by, authorized_by)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2::date, $3, $4, $5, $6, $7, $8, $9)
-			RETURNING id, created_at::text`,
-			req.BranchID, req.ReconDate, req.OpeningFloat, systemExpected, countedTotal, variance, req.Reason, claims.UserID, authorizerID,
-		).Scan(&reconID, &createdAt); err != nil {
+		// One definition of expected cash for daily counts and shift
+		// closes (cash_flow.go). Phase 13 widened it: sales later returned
+		// still count (their refund is subtracted when paid in cash).
+		flow, err := ComputeCashFlow(ctx, tx, CashScope{BranchID: req.BranchID, Date: req.ReconDate})
+		if err != nil {
 			return err
 		}
+		systemExpected := round2(req.OpeningFloat + flow.Net())
 
-		lines := make([]denominationLine, 0, len(req.Denominations))
-		for _, d := range req.Denominations {
-			subtotal := round2(d.Denomination * float64(d.Count))
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO cash_reconciliation_denominations (id, cash_reconciliation_id, denomination, count, subtotal)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
-				reconID, d.Denomination, d.Count, subtotal); err != nil {
-				return err
-			}
-			lines = append(lines, denominationLine{Denomination: formatMoney(d.Denomination), Count: d.Count, Subtotal: formatMoney(subtotal)})
+		denoms := make([]DenominationCount, len(req.Denominations))
+		for i, d := range req.Denominations {
+			denoms[i] = DenominationCount(d)
 		}
-
-		if variance != 0 {
-			var journalLines []JournalLine
-			if variance > 0 {
-				journalLines = []JournalLine{
-					{AccountCode: AccountCash, Debit: variance},
-					{AccountCode: AccountCashOverShort, Credit: variance},
+		res, err := RecordCashCount(ctx, tx, CashCount{
+			BranchID: req.BranchID, ReconDate: req.ReconDate, OpeningFloat: req.OpeningFloat, SystemExpected: systemExpected,
+			Denominations: denoms, Reason: req.Reason, CountedBy: claims.UserID,
+			Authorize: func(ctx context.Context, tx pgx.Tx) (string, error) {
+				ok, err := cashAuthorizerPermits(ctx, tx, req.AuthorizedBy, req.AuthorizedPIN)
+				if !ok || err != nil {
+					return "", err
 				}
-			} else {
-				journalLines = []JournalLine{
-					{AccountCode: AccountCashOverShort, Debit: -variance},
-					{AccountCode: AccountCash, Credit: -variance},
-				}
-			}
-			if _, err := PostJournalEntryOnDate(ctx, tx, req.BranchID, "cash_reconciliation", reconID, "Cash drawer variance: "+req.Reason, claims.UserID, req.ReconDate, journalLines); err != nil {
-				return err
-			}
+				return req.AuthorizedBy, nil
+			},
+		})
+		if err != nil {
+			return err
 		}
 
 		resp = cashReconciliationResponse{
-			ReconciliationID: reconID, BranchID: req.BranchID, ReconDate: req.ReconDate,
+			ReconciliationID: res.ReconciliationID, BranchID: req.BranchID, ReconDate: req.ReconDate,
 			OpeningFloat: formatMoney(req.OpeningFloat), SystemExpected: formatMoney(systemExpected),
-			CountedTotal: formatMoney(countedTotal), Variance: formatMoney(variance), Reason: req.Reason,
-			Authorized: authorizerID != nil, Denominations: lines, CreatedAt: createdAt,
+			CountedTotal: formatMoney(res.CountedTotal), Variance: formatMoney(res.Variance), Reason: req.Reason,
+			Authorized: res.AuthorizedBy != nil, Denominations: res.Lines, CreatedAt: res.CreatedAt,
 		}
 		return nil
 	})
 
 	switch {
+	case errors.Is(err, errShiftsInUse):
+		httpx.Error(w, http.StatusConflict, "SHIFTS_IN_USE", "this branch ran POS shifts on this date; each till's cash was counted at shift close")
 	case errors.Is(err, errAlreadyReconciled):
 		httpx.Error(w, http.StatusConflict, "ALREADY_RECONCILED", "this branch already has a cash reconciliation for this date")
 	case errors.Is(err, errVarianceNeedsReason):
@@ -272,7 +242,7 @@ func (h *Handler) GetCashReconciliation(w http.ResponseWriter, r *http.Request) 
 		if err := tx.QueryRow(ctx, `
 			SELECT id, branch_id, recon_date::text, opening_float::text, system_expected::text,
 			       counted_total::text, variance::text, COALESCE(reason,''), (authorized_by IS NOT NULL), created_at::text
-			FROM cash_reconciliations WHERE branch_id = $1 AND recon_date = $2::date`, branchID, date,
+			FROM cash_reconciliations WHERE branch_id = $1 AND recon_date = $2::date AND pos_shift_id IS NULL`, branchID, date,
 		).Scan(&resp.ReconciliationID, &resp.BranchID, &resp.ReconDate, &resp.OpeningFloat, &resp.SystemExpected,
 			&resp.CountedTotal, &resp.Variance, &resp.Reason, &authorized, &resp.CreatedAt); err != nil {
 			return err
@@ -319,6 +289,11 @@ type cashReconciliationSummary struct {
 	CountedTotal   string `json:"counted_total"`
 	Variance       string `json:"variance"`
 	Authorized     bool   `json:"authorized"`
+	// Phase 13: set when the row is a shift close (one till), null for a
+	// whole-branch daily count.
+	ShiftID      *string `json:"pos_shift_id"`
+	TerminalName *string `json:"terminal_name"`
+	ShiftNumber  *int    `json:"shift_number"`
 }
 
 func (h *Handler) CashReconciliationHistory(w http.ResponseWriter, r *http.Request) {
@@ -338,17 +313,21 @@ func (h *Handler) CashReconciliationHistory(w http.ResponseWriter, r *http.Reque
 	history := []cashReconciliationSummary{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT recon_date::text, opening_float::text, system_expected::text, counted_total::text, variance::text, (authorized_by IS NOT NULL)
-			FROM cash_reconciliations
-			WHERE branch_id = $1 AND recon_date BETWEEN $2::date AND $3::date
-			ORDER BY recon_date`, branchID, start, end)
+			SELECT cr.recon_date::text, cr.opening_float::text, cr.system_expected::text, cr.counted_total::text, cr.variance::text,
+			       (cr.authorized_by IS NOT NULL), cr.pos_shift_id::text, t.name, sh.shift_number
+			FROM cash_reconciliations cr
+			LEFT JOIN pos_shifts sh ON sh.id = cr.pos_shift_id
+			LEFT JOIN pos_terminals t ON t.id = sh.pos_terminal_id
+			WHERE cr.branch_id = $1 AND cr.recon_date BETWEEN $2::date AND $3::date
+			ORDER BY cr.recon_date, cr.created_at`, branchID, start, end)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var s cashReconciliationSummary
-			if err := rows.Scan(&s.ReconDate, &s.OpeningFloat, &s.SystemExpected, &s.CountedTotal, &s.Variance, &s.Authorized); err != nil {
+			if err := rows.Scan(&s.ReconDate, &s.OpeningFloat, &s.SystemExpected, &s.CountedTotal, &s.Variance, &s.Authorized,
+				&s.ShiftID, &s.TerminalName, &s.ShiftNumber); err != nil {
 				return err
 			}
 			history = append(history, s)
@@ -362,6 +341,8 @@ func (h *Handler) CashReconciliationHistory(w http.ResponseWriter, r *http.Reque
 	httpx.JSON(w, http.StatusOK, map[string]any{"branch_id": branchID, "start": start, "end": end, "history": history})
 }
 
+// round2 rounds half away from zero. (int64(v*100+0.5) truncated
+// negatives toward zero: -10.00 became -9.99.)
 func round2(v float64) float64 {
-	return float64(int64(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
 }

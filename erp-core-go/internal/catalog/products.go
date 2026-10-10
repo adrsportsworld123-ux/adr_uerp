@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -248,6 +249,8 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"products": products, "page": page, "limit": limit, "total": total})
 }
 
+// round2 rounds half away from zero. (int64(v*100+0.5) truncated
+// negatives toward zero: -10.00 became -9.99.)
 func round2(v float64) float64 {
-	return float64(int64(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
 }

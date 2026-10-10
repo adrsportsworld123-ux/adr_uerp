@@ -1,9 +1,10 @@
 "use client";
 
-// Return policy (Phase 13, erp-core-go internal/sales/returns.go): whether a
-// POS return needs a Branch Manager / Merchant Admin to approve it with
-// their employee code and PIN, and how long after a sale it can be
-// returned. Applies to every branch of the merchant.
+// Sales policy (Phase 13, erp-core-go internal/sales/returns.go and
+// shifts.go): whether a POS return needs a Branch Manager / Merchant Admin
+// to approve it with their employee code and PIN, how long after a sale it
+// can be returned, and whether a till must have an open shift to take
+// payment. Applies to every branch of the merchant.
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -15,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/data/page-header";
 
-type SalesSettings = { returns_require_approval: boolean; return_window_days: number | null };
+type SalesSettings = { returns_require_approval: boolean; return_window_days: number | null; shifts_required: boolean };
 
 export default function SalesSettingsPage() {
   const { can } = usePermissions();
@@ -24,6 +25,7 @@ export default function SalesSettingsPage() {
   const [approval, setApproval] = useState(true);
   const [limitWindow, setLimitWindow] = useState(false);
   const [days, setDays] = useState("30");
+  const [shifts, setShifts] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,23 +37,28 @@ export default function SalesSettingsPage() {
         setApproval(s.returns_require_approval);
         setLimitWindow(s.return_window_days != null);
         if (s.return_window_days != null) setDays(String(s.return_window_days));
+        setShifts(s.shifts_required);
       })
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load the return policy"));
+      .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load the sales policy"));
   }, []);
 
   const daysValue = Number(days);
   const daysInvalid = limitWindow && (!Number.isInteger(daysValue) || daysValue < 1 || daysValue > 3650);
-  const next: SalesSettings = { returns_require_approval: approval, return_window_days: limitWindow ? daysValue : null };
-  const dirty = saved != null && (saved.returns_require_approval !== next.returns_require_approval || saved.return_window_days !== next.return_window_days);
+  const next: SalesSettings = { returns_require_approval: approval, return_window_days: limitWindow ? daysValue : null, shifts_required: shifts };
+  const dirty =
+    saved != null &&
+    (saved.returns_require_approval !== next.returns_require_approval ||
+      saved.return_window_days !== next.return_window_days ||
+      saved.shifts_required !== next.shifts_required);
 
   async function save() {
     setSaving(true);
     try {
       const s = await api.put<SalesSettings>("/api/v1/sales/settings", next);
       setSaved(s);
-      toast.success("Return policy saved");
+      toast.success("Sales policy saved");
     } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "Could not save the return policy");
+      toast.error(e instanceof ApiError ? e.message : "Could not save the sales policy");
     } finally {
       setSaving(false);
     }
@@ -60,8 +67,8 @@ export default function SalesSettingsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Return Policy"
-        description="How returns work on every till. Cashiers start a return from the POS's sales history; the refund and restock follow the original sale."
+        title="Sales Policy"
+        description="How returns and shifts work on every till. Cashiers start a return from the POS's sales history; the refund and restock follow the original sale."
       />
       {error && <p className="text-sm text-destructive">{error}</p>}
       {saved == null && !error ? (
@@ -71,7 +78,7 @@ export default function SalesSettingsPage() {
       ) : saved != null ? (
         <Card className="max-w-2xl">
           <CardHeader>
-            <CardTitle>Returns and refunds</CardTitle>
+            <CardTitle>Returns, refunds and shifts</CardTitle>
             <CardDescription>Applies to all branches.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -122,6 +129,21 @@ export default function SalesSettingsPage() {
                   </span>
                 </div>
               )}
+            </fieldset>
+
+            <fieldset className="space-y-3" disabled={!allowed}>
+              <legend className="text-sm font-medium">Shifts</legend>
+              <label className="flex items-start gap-3 text-sm">
+                <input type="checkbox" className="mt-1" checked={shifts} onChange={(e) => setShifts(e.target.checked)} />
+                <span>
+                  <span className="font-medium">Require an open shift to take payment</span>
+                  <span className="block text-muted-foreground">
+                    Each till opens a shift with its cash float and closes it with a counted drawer. The close is that till&apos;s cash
+                    reconciliation, so a branch that runs shifts doesn&apos;t also do a whole-branch daily count. Offline sales are never
+                    blocked.
+                  </span>
+                </span>
+              </label>
             </fieldset>
 
             <div className="flex items-center gap-3">
