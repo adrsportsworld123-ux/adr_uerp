@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 
 import 'api/api_client.dart';
 import 'state/session.dart';
+import 'state/terminal_config.dart';
 import 'screens/login_screen.dart';
+import 'screens/pairing_screen.dart';
 import 'screens/pos_screen.dart';
 import 'ui/theme.dart';
 
@@ -17,10 +19,10 @@ const String kApiBaseUrl = String.fromEnvironment(
   defaultValue: 'http://10.0.2.2:8080',
 );
 
-// Matches migrations/002_seed.sql in erp-core-go. See the TODO in
-// state/session.dart — a real device-binding flow replaces this.
-const String kSeedBranchId = '22222222-2222-2222-2222-222222222222';
-const String kSeedPosTerminalId = '33333333-3333-3333-3333-333333333333';
+// Development shortcut: run with --dart-define=USE_SEED_TERMINAL=true to
+// skip pairing and use the seed terminal (migrations/002_seed.sql) against
+// a fresh docker-compose backend. Real devices pair (Phase 12).
+const bool kUseSeedTerminal = bool.fromEnvironment('USE_SEED_TERMINAL');
 
 /// Lets RootScreen clear any pushed route/dialog when a session ends, so
 /// LoginScreen isn't left hidden underneath e.g. the product search screen.
@@ -30,29 +32,87 @@ void main() {
   runApp(const PosApp());
 }
 
-class PosApp extends StatelessWidget {
-  const PosApp({super.key});
+/// Boots into the pairing screen until this device knows which terminal it
+/// is (Phase 12), then into login/POS for that terminal. [initialConfig]
+/// lets tests start already paired without touching device storage.
+class PosApp extends StatefulWidget {
+  final TerminalConfig? initialConfig;
+
+  const PosApp({super.key, this.initialConfig});
+
+  @override
+  State<PosApp> createState() => _PosAppState();
+}
+
+class _PosAppState extends State<PosApp> {
+  final ApiClient _api = ApiClient(baseUrl: kApiBaseUrl);
+  TerminalConfig? _config;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialConfig != null || kUseSeedTerminal) {
+      _config = widget.initialConfig ?? TerminalConfig.seed;
+      _loading = false;
+    } else {
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    TerminalConfig? config;
+    try {
+      config = await TerminalConfig.load();
+    } catch (_) {
+      config = null; // storage unavailable: treat as unpaired
+    }
+    if (!mounted) return;
+    setState(() {
+      _config = config;
+      _loading = false;
+    });
+  }
+
+  Future<void> _unpair() async {
+    try {
+      await TerminalConfig.clear();
+    } catch (_) {
+      // nothing stored to clear
+    }
+    if (mounted) setState(() => _config = null);
+  }
+
+  MaterialApp _app(Widget home) => MaterialApp(
+        title: 'ERP POS',
+        navigatorKey: kNavigatorKey,
+        theme: posTheme(Brightness.light),
+        darkTheme: posTheme(Brightness.dark),
+        themeMode: ThemeMode.light,
+        home: home,
+      );
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return _app(const Scaffold(body: Center(child: CircularProgressIndicator())));
+    }
+    final config = _config;
+    if (config == null) {
+      return _app(PairingScreen(api: _api, onPaired: (c) => setState(() => _config = c)));
+    }
     return ChangeNotifierProvider(
+      // A different terminal is a different session, never a mutated one.
+      key: ValueKey(config.terminalId),
       create: (_) => AppSession(
-        api: ApiClient(baseUrl: kApiBaseUrl),
-        branchId: kSeedBranchId,
-        posTerminalId: kSeedPosTerminalId,
-      ),
-      child: _ActivityTracker(
-        child: MaterialApp(
-          title: 'ERP POS',
-          navigatorKey: kNavigatorKey,
-          theme: posTheme(Brightness.light),
-          darkTheme: posTheme(Brightness.dark),
-          // Light until Phase 12 adds a per-terminal display setting; the
-          // dark theme exists so that setting is a one-line change.
-          themeMode: ThemeMode.light,
-          home: const RootScreen(),
-        ),
-      ),
+        api: _api,
+        branchId: config.branchId,
+        posTerminalId: config.terminalId,
+        terminalName: config.terminalName,
+        branchName: config.branchName,
+        merchantCode: config.merchantCode,
+      )..onUnpairDevice = _unpair,
+      child: _ActivityTracker(child: _app(const RootScreen())),
     );
   }
 }

@@ -644,6 +644,47 @@ Measured on a mid-range Android tablet (POS) and a mid-range laptop on throttled
 - Two paired terminals in one branch sell concurrently against the same stock without double-reserving (existing optimistic locking, now exercised from two real devices).
 - On-device verification closes Phase 1's still-open hardware item where hardware is available.
 
+**Status: done (2026-10-10), except the on-device items noted below.**
+
+- **Terminals and pairing (backend, `migrations/037`, `internal/terminals`):**
+  - Terminal list, create, rename, activate/deactivate.
+  - Pairing codes: 8 characters from an alphabet with no look-alike characters, live 15 minutes, single use, stored only as a SHA-256 hash.
+  - Device reset.
+  - An unauthenticated pairing endpoint where every failure returns the same 401, so it can't be used to probe merchants or codes.
+  - `terminal.manage` granted by role name across all merchants.
+  - PIN login is refused when the terminal's branch is inactive. This is what deactivating a branch now does.
+  - Discounts accept the approver's employee code (`authorized_by_code`).
+- **Admin:** a POS Terminals screen (pair with a code and countdown, unbind, activate/deactivate) and a branch deactivate toggle whose confirmation says the branch's tills close.
+- **POS pairing:**
+  - The app no longer hardcodes the seed terminal. It boots into a pairing screen until paired, then logs in for its own terminal.
+  - The login screen shows the terminal and branch, fills in the merchant code, and offers "Unpair this device" (signed-out only).
+  - `--dart-define=USE_SEED_TERMINAL=true` keeps the seed terminal for development.
+- **POS billing redesign:** `pos_screen.dart` (813 lines, one file) is split into parts:
+  - a status bar
+  - a product grid (category chips online; offline it searches the device's catalog cache by name/SKU, with cached stock)
+  - a cart panel (quantity steppers, a selected line)
+  - a payment sheet (cash given with quick amounts and change due, card/UPI reference, credit, split payments, and coupon/promotions/loyalty applied just before charging)
+  - a shared `ApprovalPinPad`
+  - the existing dialogs
+
+  F2/F4/F7/F8/F9/F12, `+` `−` `Del` and Esc drive a whole sale. Layouts cover phone (<640 px, with a cart bar), tablet portrait (stacked) and ≥1000 px (two panes). Offline, the screen shows a banner, and live-only actions and the credit tender are disabled with the reason.
+- **Two real bugs caught by the new tests:**
+  - The scan field was disabled while an item was being added, which dropped its focus, so the next item from a scanner gun went nowhere.
+  - The payment sheet looked up the session from its own route, so it only worked when the provider sat above `MaterialApp`.
+
+  Both are fixed and covered.
+- **Tests:**
+  - Go unit tests for pairing-code generation and hashing.
+  - 13 live API checks plus discount-by-code (compose seed DB).
+  - `e2e/phase12-terminals.spec.ts` (3 tests), plus Phase 11 and multi-branch re-run: 18/18.
+  - Flutter: 26 pass. These include a keyboard-only offline cash sale, offline UI states, offline search, pairing and boot tests, and goldens at 390, 800 and 1280 px. The live dialog test was updated for the screen's on-open grid load and passes against the seed backend.
+
+**Not done, by design or environment:**
+- **On-device timing:** the scan-to-cart timing budget on a real mid-range tablet, and two physical terminals selling concurrently. There's no Android/iOS hardware here, the same limitation Phase 1 records. Concurrency is covered by the existing optimistic-locking tests, not by two devices.
+- **`integration_test`:** the keyboard-only sale runs as a widget test against real SQLite, not as an `integration_test` on a device, for the same reason.
+- **Credit live test:** `api_client_live_test.dart`'s credit-payment test fails on data drift. It sets a ₹5,000 credit limit, but the seed bat's price has drifted to ₹15,000 through earlier pricing specs, and the backend correctly answers `CREDIT_LIMIT_EXCEEDED`.
+- **Migrations:** `036` and `037` must be applied to the host development database before an API built from this code runs against it.
+
 ### Phase 13 — New POS Flows: Open Price, Sales History, Returns, Shifts, Labels, Sync Queue (design UI-3)
 
 **Size: XL | Goal: The POS covers the counter's whole day, from open shift to close, not just a single sale.**
@@ -758,7 +799,7 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | —     | Product editing & status enforcement                 | M       | Done — edit product/variants, add variant, enforce discontinued/inactive at scan, cart and quotations, Products + edit screens, see above |
 | 10    | Pricing & quotation gaps                             | M       | Done — scheduled price changes (incl. bulk), dynamic price rules (happy hours/weekend/seasonal, branch timezone, MRP cap), draft-quotation editing, and quote conversion now bills the quoted price, see above |
 | 11    | Design system foundations, admin list/form kit       | L       | Nearly done (2026-10-10) — tokens, shell, kit, master lifecycle, dependencies, `/me/permissions`, a11y + keyboard tests; every planned master screen on the kit; server-search product picker. Open: visual baselines (need fixture data), coupon paging, see above |
-| 12    | POS billing redesign, terminal pairing               | L       | Planned — split POS screen, F-key flow, responsive layouts, offline UI states, `/pos-terminals` + pairing, see above |
+| 12    | POS billing redesign, terminal pairing               | L       | Done (2026-10-10) — terminal management + one-time pairing codes, inactive branch closes its tills, POS pairing screen, billing redesign (grid/cart/payment sheet, F-keys, 3 layouts, offline search), approver by employee code; on-device timing/concurrency not verifiable here, see above |
 | 13    | New POS flows                                        | XL      | Planned — open price, sales history, returns/refunds, shifts, POS product/label tools, sync queue, see above |
 | 14    | Admin sales, label studio, JV workflow               | L       | Planned — admin sale on the shared checkout path, sales history/refunds, label studio (ESC/POS + ZPL/TSPL + system + PDF), configurable JV approval, see above |
 | 15    | Data-scoped RBAC, approval policies                  | M       | Planned — branch-scoped password sessions, configurable approval thresholds, see above |

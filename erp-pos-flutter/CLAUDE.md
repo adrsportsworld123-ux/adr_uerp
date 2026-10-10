@@ -91,6 +91,20 @@ backend, skips itself if none is reachable) is what surfaced them:
    zero-value "sale" — fixed server-side (a real `EMPTY_CART`-shaped
    `INVALID_REQUEST`), verified from this app's own live test.
 
+**Phase 12 (2026-10-10) — billing redesign and pairing.** `pos_screen.dart`
+is now a shell plus `part` files in `lib/screens/pos/` (status bar, product
+grid, cart panel, payment sheet, dialogs); `lib/ui/approval_pin_pad.dart`
+and `lib/ui/format.dart` are shared. Keyboard: F2 scan, F4 customer,
+F7 discount, F8 hold, F9 recall, F12 pay, `+` `−` `Del` on the selected
+line. Two rules to keep: the scan field is never disabled (a disabled
+field drops focus and the next scanner input is lost), and every dialog
+the screen opens gets the session via `_scoped(...)`, so the screen works
+wherever its provider sits. `test/pos_screen_offline_test.dart` drives a
+complete keyboard-only sale offline against real SQLite plus goldens at
+390/800/1280 px (`flutter test --update-goldens` after an intended visual
+change). Live-backend widget tests must let real I/O finish with
+`tester.runAsync` and end by pumping past dart:io's 15 s keep-alive timer.
+
 **Known gap, still real:** `GET /sales/orders/{id}` doesn't yet return
 line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second
@@ -134,10 +148,12 @@ seconds.
   coupons, loyalty, void, customer attach, quantity update all fall in
   this category — `OfflineStore`'s local schema only ever models the
   walking-skeleton cart shape of lines + payments).
-- `branchId`/`posTerminalId` in `AppSession` are hardcoded to the seed data
-  for now (`TODO(phase 2)` comment in `session.dart`) — a real
-  terminal-registration/device-binding flow replaces this later, per FRD
-  §18.
+- `branchId`/`posTerminalId` in `AppSession` come from the device's
+  pairing (`lib/state/terminal_config.dart`, Phase 12): the app boots into
+  `PairingScreen` until an admin-issued code pairs it to a terminal.
+  `--dart-define=USE_SEED_TERMINAL=true` uses the seed terminal for
+  development. Tests construct `AppSession` directly or pass
+  `PosApp(initialConfig: ...)`.
 - The idempotency key generator in `session.dart` (`_newIdempotencyKey`)
   uses `Random().nextInt(1 << 31)` deliberately kept under Dart's
   documented safe boundary for the non-secure `Random` generator.

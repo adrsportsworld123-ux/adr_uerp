@@ -108,7 +108,15 @@ void main() {
         home: ChangeNotifierProvider<AppSession>.value(value: session, child: const PosScreen()),
       ),
     );
-    await tester.pumpAndSettle();
+    // Phase 12: the screen loads its product grid from the live server on
+    // open. That's real network I/O, which fake-async pumping alone never
+    // completes (and its spinner would keep pumpAndSettle from settling),
+    // so let real time pass between frames until the grid has loaded.
+    for (var i = 0; i < 40 && find.byType(CircularProgressIndicator).evaluate().isNotEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await tester.pump(const Duration(milliseconds: 400));
 
     // --- Add walk-in: type NAME ONLY (the exact scenario that exposed
     // the bug — the button's disabled check is an AND of both fields
@@ -152,5 +160,10 @@ void main() {
 
     await tester.tap(find.text('Cancel').last);
     await tester.pumpAndSettle();
+    // Unmount, then let dart:io's 15 s HTTP keep-alive timer (opened by the
+    // grid's live search inside the fake clock) expire, so the test ends
+    // with nothing pending.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 20));
   });
 }

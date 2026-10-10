@@ -1,24 +1,40 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
 import '../state/session.dart';
+import '../ui/approval_pin_pad.dart';
+import '../ui/format.dart';
+import '../ui/theme.dart';
 import 'held_orders_screen.dart';
 import 'printer_settings_screen.dart';
 import 'product_search_screen.dart';
 import 'receipt_screen.dart';
 
-/// The core POS screen: scan → cart → checkout, in one continuous flow —
-/// this is what a cashier actually stares at all day, so it isn't split
-/// across separate scan/cart screens the way a first pass might.
+part 'pos/cart_panel.dart';
+part 'pos/dialogs.dart';
+part 'pos/payment_sheet.dart';
+part 'pos/product_grid.dart';
+part 'pos/status_bar.dart';
+
+/// The billing screen (Phase 12 redesign, design system §06): what a
+/// cashier stares at all day, so it's one continuous scan → cart → pay flow.
 ///
-/// The barcode field is a plain TextField rather than a camera view: most
-/// commodity POS barcode scanners are keyboard-wedge devices (they type
-/// the decoded barcode + Enter into whatever field has focus, indistinguishable
-/// from a human typing fast) — so this is the right input for real hardware,
-/// not a placeholder for one. A camera-based scanner (for phones/tablets
-/// without a dedicated scanner gun) is a real Phase 1 gap worth adding
-/// alongside this, not a replacement for it.
+/// - The scan field always has focus. Most counter scanners are
+///   keyboard-wedge devices (they type the barcode + Enter into whatever has
+///   focus), so a plain text field is the right input for real hardware;
+///   typed letters also search the product grid.
+/// - Every common action has a function key (F2 scan, F4 customer,
+///   F7 discount, F8 hold, F9 recall, F12 pay, + − Del on the selected
+///   line), so a normal sale needs no pointer at all.
+/// - Layout follows the width: two panes from 1000 px (tablet landscape,
+///   POS terminals, desktop), stacked panes from 640 px (tablet portrait),
+///   and a single column with a cart bar below that (phones).
+///
+/// A camera-based scanner for phones without a scanner gun is still open.
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
 
@@ -27,10 +43,10 @@ class PosScreen extends StatefulWidget {
 }
 
 class _PosScreenState extends State<PosScreen> {
-  final _barcodeController = TextEditingController();
-  final _barcodeFocusNode = FocusNode();
-  final _couponController = TextEditingController();
+  final _scanController = TextEditingController();
+  final _scanFocus = FocusNode(debugLabel: 'scan');
   bool _busy = false;
+  String? _selectedLineId;
 
   @override
   void initState() {
@@ -42,188 +58,168 @@ class _PosScreenState extends State<PosScreen> {
 
   @override
   void dispose() {
-    _barcodeController.dispose();
-    _barcodeFocusNode.dispose();
-    _couponController.dispose();
+    _scanController.dispose();
+    _scanFocus.dispose();
     super.dispose();
   }
 
-  Future<void> _onBarcodeSubmitted(String code) async {
-    if (code.trim().isEmpty || _busy) return;
-    setState(() => _busy = true);
+  // ------------------------------------------------------------- helpers
 
-    final session = context.read<AppSession>();
-    final product = await session.scanBarcode(code.trim());
-    if (product != null) {
-      await session.addToCart(product, 1);
-    }
-
-    _barcodeController.clear();
+  void _snack(String text) {
     if (!mounted) return;
-    setState(() => _busy = false);
-    _barcodeFocusNode.requestFocus();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
 
-    if (session.lastError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(session.lastError!)));
+  Future<T?> _withBusy<T>(Future<T> Function() fn) async {
+    setState(() => _busy = true);
+    try {
+      return await fn();
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  void _refocusScan() {
+    if (mounted) _scanFocus.requestFocus();
+  }
+
+  /// Dialogs and sheets are routes above this screen; hand them the
+  /// session explicitly so the screen works wherever its provider sits.
+  Widget _scoped(Widget child) => ChangeNotifierProvider<AppSession>.value(value: context.read<AppSession>(), child: child);
+
+  bool get _liveCart {
+    final s = context.read<AppSession>();
+    final o = s.currentOrder;
+    return o != null && o.status == 'cart' && !s.isCurrentOrderLocal && !s.offlineMode;
+  }
+
+  OrderLine? get _selectedLine {
+    final lines = context.read<AppSession>().currentOrder?.lines ?? const <OrderLine>[];
+    for (final l in lines) {
+      if (l.lineId == _selectedLineId) return l;
+    }
+    return null;
+  }
+
+  // -------------------------------------------------------------- actions
+
+  Future<void> _onScanSubmitted(String code) async {
+    final trimmed = code.trim();
+    if (trimmed.isEmpty || _busy) return;
+    final session = context.read<AppSession>();
+    await _withBusy(() async {
+      final product = await session.scanBarcode(trimmed);
+      if (product != null) {
+        if (await session.addToCart(product, 1)) {
+          _selectLast(session);
+          _scanController.clear();
+        }
+      }
+    });
+    _refocusScan();
+    if (session.lastError != null) _snack(session.lastError!);
+  }
+
+  Future<void> _addFromGrid(GridProduct item) async {
+    final session = context.read<AppSession>();
+    final ok = await _withBusy(() => session.addToCart(item.lookup, 1));
+    if (ok == true) {
+      _selectLast(session);
+    } else if (session.lastError != null) {
+      _snack(session.lastError!);
+    }
+    _refocusScan();
+  }
+
+  void _selectLast(AppSession session) {
+    final lines = session.currentOrder?.lines ?? const <OrderLine>[];
+    if (lines.isNotEmpty) setState(() => _selectedLineId = lines.last.lineId);
+  }
+
+  Future<void> _stepLine(OrderLine line, double delta) async {
+    if (!_liveCart) {
+      _snack(_offlineReason);
+      return;
+    }
+    final next = (double.tryParse(line.quantity) ?? 0) + delta;
+    if (next < 1) return;
+    final session = context.read<AppSession>();
+    final ok = await _withBusy(() => session.updateLineQuantity(line.lineId, next));
+    if (ok != true && session.lastError != null) _snack(session.lastError!);
+    _refocusScan();
+  }
+
+  Future<void> _removeLine(OrderLine line) async {
+    final session = context.read<AppSession>();
+    final ok = await _withBusy(() => session.removeLine(line.lineId));
+    if (ok == true && _selectedLineId == line.lineId) setState(() => _selectedLineId = null);
+    if (ok != true && session.lastError != null) _snack(session.lastError!);
+    _refocusScan();
   }
 
   Future<void> _editQuantity(OrderLine line) async {
+    final value = await _promptText(context, title: line.productName, label: 'Quantity', confirm: 'Update');
+    final qty = double.tryParse(value ?? '');
+    if (qty == null || qty <= 0 || !mounted) return;
     final session = context.read<AppSession>();
-    final controller = TextEditingController(text: line.quantity);
-    final newQty = await showDialog<double>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(line.productName),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, double.tryParse(controller.text)),
-            child: const Text('Update'),
-          ),
-        ],
-      ),
-    );
-    if (newQty == null || newQty <= 0) return;
-    final ok = await session.updateLineQuantity(line.lineId, newQty);
-    if (!mounted) return;
-    if (!ok && session.lastError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(session.lastError!)));
-    }
+    final ok = await _withBusy(() => session.updateLineQuantity(line.lineId, qty));
+    if (ok != true && session.lastError != null) _snack(session.lastError!);
+    _refocusScan();
   }
 
   Future<void> _pickCustomer() async {
+    if (!_liveCart) return;
     final session = context.read<AppSession>();
-    final result = await showDialog<_CustomerPickResult>(
-      context: context,
-      builder: (ctx) => const _CustomerPickerDialog(),
-    );
-    if (result == null) return;
-
-    final ok = result.existing != null
-        ? await session.attachCustomer(customerId: result.existing!.customerId, name: result.existing!.name)
-        : await session.attachCustomer(name: result.walkInName, phone: result.walkInPhone);
-    if (!mounted) return;
-    if (!ok && session.lastError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(session.lastError!)));
-    }
+    final result = await showDialog<_CustomerPickResult>(context: context, builder: (_) => _scoped(const _CustomerPickerDialog()));
+    if (result == null) return _refocusScan();
+    final ok = await _withBusy(() => result.existing != null
+        ? session.attachCustomer(customerId: result.existing!.customerId, name: result.existing!.name)
+        : session.attachCustomer(name: result.walkInName, phone: result.walkInPhone));
+    if (ok != true && session.lastError != null) _snack(session.lastError!);
+    _refocusScan();
   }
 
   Future<void> _applyDiscount() async {
+    if (!_liveCart) return;
     final session = context.read<AppSession>();
-    final result = await showDialog<_DiscountInput>(
-      context: context,
-      builder: (ctx) => const _DiscountDialog(),
-    );
-    if (result == null) return;
-    final ok = await session.applyManualDiscount(
-      valuePercent: result.percent,
-      authorizedBy: result.authorizedBy,
-      authorizedPin: result.authorizedPin,
-      reason: result.reason,
-    );
-    if (!mounted) return;
-    if (session.lastError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Discount applied' : session.lastError!)));
-    }
-  }
-
-  Future<void> _applyPromotions() async {
-    final session = context.read<AppSession>();
-    setState(() => _busy = true);
-    final ok = await session.applyPromotions();
-    if (!mounted) return;
-    setState(() => _busy = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Eligible promotions applied' : (session.lastError ?? 'Could not apply promotions'))),
-    );
-  }
-
-  Future<void> _applyCoupon() async {
-    final code = _couponController.text.trim();
-    if (code.isEmpty) return;
-    final session = context.read<AppSession>();
-    setState(() => _busy = true);
-    final ok = await session.applyCoupon(code);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (ok) _couponController.clear();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Coupon applied' : (session.lastError ?? 'Could not apply coupon'))),
-    );
-  }
-
-  Future<void> _redeemLoyalty() async {
-    final session = context.read<AppSession>();
-    final controller = TextEditingController();
-    final points = await showDialog<int>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Redeem points (${session.loyaltyAvailablePoints ?? 0} available)'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'Points to redeem', border: OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, int.tryParse(controller.text)), child: const Text('Redeem')),
-        ],
-      ),
-    );
-    if (points == null || points <= 0) return;
-    final ok = await session.redeemLoyaltyPoints(points);
-    if (!mounted) return;
-    if (session.lastError != null || ok) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Points redeemed' : session.lastError!)));
-    }
+    final input = await showDialog<_DiscountInput>(context: context, builder: (_) => _scoped(const _DiscountDialog()));
+    if (input == null) return _refocusScan();
+    final ok = await _withBusy(() => session.applyManualDiscount(
+          valuePercent: input.percent,
+          authorizedByCode: input.approverCode,
+          authorizedPin: input.approverPin,
+          reason: input.reason,
+        ));
+    _snack(ok == true
+        ? 'Discount applied'
+        : (session.lastError?.contains('authorizer') == true
+            ? 'The approver’s code or PIN doesn’t allow a discount this size'
+            : session.lastError ?? 'Could not apply the discount'));
+    _refocusScan();
   }
 
   Future<void> _holdOrder() async {
+    if (!_liveCart) return;
     final session = context.read<AppSession>();
-    final noteController = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Hold this cart'),
-        content: TextField(
-          controller: noteController,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Note (optional)', border: OutlineInputBorder()),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Hold')),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    setState(() => _busy = true);
-    final note = noteController.text.trim();
-    final ok = await session.holdCurrentOrder(note: note.isEmpty ? null : note);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Cart held — recall it from Held Orders' : (session.lastError ?? 'Could not hold cart'))),
-    );
+    final note = await _promptText(context, title: 'Hold this cart', label: 'Note (optional)', confirm: 'Hold');
+    if (note == null) return _refocusScan();
+    final ok = await _withBusy(() => session.holdCurrentOrder(note: note.isEmpty ? null : note));
+    if (ok == true) setState(() => _selectedLineId = null);
+    _snack(ok == true ? 'Cart held — recall it with F9' : (session.lastError ?? 'Could not hold the cart'));
+    _refocusScan();
   }
 
   Future<void> _openHeldOrders() async {
-    final unavailable = await Navigator.of(context).push<List<UnavailableLine>>(
-      MaterialPageRoute(builder: (_) => const HeldOrdersScreen()),
-    );
-    if (unavailable == null) return; // cancelled, nothing recalled
-    if (!mounted) return;
+    if (context.read<AppSession>().offlineMode) {
+      _snack('Held orders need a connection');
+      return;
+    }
+    final unavailable = await Navigator.of(context).push<List<UnavailableLine>>(MaterialPageRoute(builder: (_) => const HeldOrdersScreen()));
+    if (unavailable == null || !mounted) return _refocusScan();
     if (unavailable.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cart recalled')));
+      _snack('Cart recalled');
     } else {
       await showDialog<void>(
         context: context,
@@ -244,570 +240,261 @@ class _PosScreenState extends State<PosScreen> {
         ),
       );
     }
+    _refocusScan();
   }
 
-  Future<void> _checkout() async {
+  Future<void> _pay() async {
     final session = context.read<AppSession>();
     final order = session.currentOrder;
-    if (order == null || order.status != 'cart') return;
+    if (order == null || order.status != 'cart' || order.lines.isEmpty || _busy) return;
 
-    final input = await showDialog<_CheckoutInput>(
-      context: context,
-      builder: (ctx) => _CheckoutDialog(grandTotal: order.grandTotal, customerAttached: session.attachedCustomerId != null),
-    );
-    if (input == null) return;
+    final wide = MediaQuery.sizeOf(context).width >= 640;
+    final payments = wide
+        ? await showDialog<List<PaymentInput>>(
+            context: context,
+            builder: (_) => _scoped(Dialog(
+              insetPadding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: const SingleChildScrollView(padding: EdgeInsets.all(24), child: _PaymentSheet()),
+              ),
+            )),
+          )
+        : await showModalBottomSheet<List<PaymentInput>>(
+            context: context,
+            isScrollControlled: true,
+            useSafeArea: true,
+            showDragHandle: true,
+            builder: (ctx) => _scoped(SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 16 + MediaQuery.viewInsetsOf(ctx).bottom),
+              child: const _PaymentSheet(),
+            )),
+          );
+    if (payments == null || payments.isEmpty) return _refocusScan();
 
-    setState(() => _busy = true);
-    final grandTotal = double.tryParse(order.grandTotal) ?? 0;
-    final ok = await session.checkout([
-      PaymentInput(method: input.method, amount: grandTotal, reference: input.reference),
-    ]);
+    final ok = await _withBusy(() => session.checkout(payments));
     if (!mounted) return;
-    setState(() => _busy = false);
+    if (ok != true) {
+      if (session.lastError != null) _snack(session.lastError!);
+      return _refocusScan();
+    }
+    final receipt = await session.fetchReceipt();
+    if (!mounted) return;
+    if (receipt != null) {
+      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReceiptScreen(receipt: receipt)));
+    } else {
+      final o = session.currentOrder!;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Sale complete'),
+          content: Text('Receipt ${o.orderNumber}\nTotal ${formatRupees(o.grandTotal)}'
+              '${session.isCurrentOrderLocal ? '\nSaved offline — it will sync automatically.' : ''}'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
+    }
+    session.startNewSale();
+    setState(() => _selectedLineId = null);
+    _refocusScan();
+  }
 
-    if (ok) {
-      final receipt = await session.fetchReceipt();
-      if (!mounted) return;
-      if (receipt != null) {
-        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ReceiptScreen(receipt: receipt)));
-      } else {
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Sale complete'),
-            content: Text('Receipt ${session.currentOrder!.orderNumber}\nTotal ₹${session.currentOrder!.grandTotal}'),
-            actions: [
-              FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-            ],
-          ),
-        );
-      }
-      session.startNewSale();
-    } else if (session.lastError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(session.lastError!)));
+  Future<void> _sync() async {
+    final session = context.read<AppSession>();
+    await _withBusy(session.syncNow);
+    _snack(session.offlineMode
+        ? 'Still offline — sales are safe on this device and will sync when the connection is back'
+        : session.pendingSyncCount == 0
+            ? 'All sales synced'
+            : '${session.pendingSyncCount} sale(s) still waiting to sync');
+  }
+
+  Future<void> _onMenu(_MenuAction action) async {
+    final session = context.read<AppSession>();
+    switch (action) {
+      case _MenuAction.heldOrders:
+        await _openHeldOrders();
+      case _MenuAction.productSearch:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen()));
+        _refocusScan();
+      case _MenuAction.syncNow:
+        await _sync();
+      case _MenuAction.printer:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrinterSettingsScreen()));
+        _refocusScan();
+      case _MenuAction.signOut:
+        final o = session.currentOrder;
+        if (o != null && o.status == 'cart' && o.lines.isNotEmpty) {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Sign out with items in the cart?'),
+              content: const Text('Hold the cart first (F8) if you want to come back to it.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign out')),
+              ],
+            ),
+          );
+          if (ok != true) return;
+        }
+        session.logout();
     }
   }
+
+  // ------------------------------------------------------------ shortcuts
+
+  Map<ShortcutActivator, VoidCallback> get _shortcuts => {
+        const SingleActivator(LogicalKeyboardKey.f2): () {
+          _scanController.selection = TextSelection(baseOffset: 0, extentOffset: _scanController.text.length);
+          _scanFocus.requestFocus();
+        },
+        const SingleActivator(LogicalKeyboardKey.f4): _pickCustomer,
+        const SingleActivator(LogicalKeyboardKey.f7): _applyDiscount,
+        const SingleActivator(LogicalKeyboardKey.f8): _holdOrder,
+        const SingleActivator(LogicalKeyboardKey.f9): _openHeldOrders,
+        const SingleActivator(LogicalKeyboardKey.f12): _pay,
+        const SingleActivator(LogicalKeyboardKey.numpadAdd): () => _stepSelected(1),
+        const SingleActivator(LogicalKeyboardKey.numpadSubtract): () => _stepSelected(-1),
+        // Plain +/−/Delete only reach here when the scan field is empty —
+        // a non-empty field keeps them as text (see _keyFilter).
+        const SingleActivator(LogicalKeyboardKey.equal, shift: true): () => _stepSelected(1),
+        const SingleActivator(LogicalKeyboardKey.minus): () => _stepSelected(-1),
+        const SingleActivator(LogicalKeyboardKey.delete): () {
+          final l = _selectedLine;
+          if (l != null) _removeLine(l);
+        },
+        const SingleActivator(LogicalKeyboardKey.escape): () => setState(() => _selectedLineId = null),
+      };
+
+  void _stepSelected(double delta) {
+    final l = _selectedLine;
+    if (l != null) _stepLine(l, delta);
+  }
+
+  /// While the cashier is typing a search into the scan field, + − Delete
+  /// are text editing, not cart commands; once the field is empty they act
+  /// on the selected cart line. Function keys always work.
+  KeyEventResult _keyFilter(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final k = event.logicalKey;
+    final editingKey = k == LogicalKeyboardKey.minus || k == LogicalKeyboardKey.equal || k == LogicalKeyboardKey.delete;
+    if (editingKey && _scanFocus.hasFocus && _scanController.text.isNotEmpty) return KeyEventResult.skipRemainingHandlers;
+    return KeyEventResult.ignored;
+  }
+
+  // --------------------------------------------------------------- layout
 
   @override
   Widget build(BuildContext context) {
     final session = context.watch<AppSession>();
-    final order = session.currentOrder;
-    final cartActive = order != null && order.status == 'cart' && order.lines.isNotEmpty && !session.isCurrentOrderLocal && !session.offlineMode;
+    final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('New Sale'),
-        actions: [
-          TextButton.icon(
-            onPressed: _busy || session.isCurrentOrderLocal || session.offlineMode || order == null ? null : _pickCustomer,
-            icon: Icon(Icons.person, color: Theme.of(context).colorScheme.onPrimary),
-            label: Text(
-              session.attachedCustomerName ?? 'Customer',
-              style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.search),
-            tooltip: 'Find a product (name/category)',
-            onPressed: session.offlineMode ? null : () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.pause_circle_outline),
-            tooltip: 'Held orders',
-            onPressed: _busy || session.offlineMode ? null : _openHeldOrders,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_ethernet),
-            tooltip: 'Printer settings',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrinterSettingsScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Sign out',
-            onPressed: _busy ? null : session.logout,
-          ),
-          if (session.offlineMode || session.pendingSyncCount > 0)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Center(
-                child: TextButton.icon(
-                  onPressed: _busy
-                      ? null
-                      : () async {
-                          setState(() => _busy = true);
-                          await session.syncNow();
-                          if (mounted) setState(() => _busy = false);
-                        },
-                  icon: Icon(
-                    session.offlineMode ? Icons.cloud_off : Icons.sync,
-                    color: Theme.of(context).colorScheme.onPrimary,
-                  ),
-                  label: Text(
-                    session.pendingSyncCount > 0
-                        ? '${session.pendingSyncCount} pending'
-                        : 'Offline',
-                    style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: TextField(
-              controller: _barcodeController,
-              focusNode: _barcodeFocusNode,
-              autofocus: true,
-              enabled: !_busy,
-              decoration: InputDecoration(
-                labelText: 'Scan or enter barcode',
-                border: const OutlineInputBorder(),
-                suffixIcon: _busy
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                      )
-                    : const Icon(Icons.qr_code_scanner),
-              ),
-              onSubmitted: _onBarcodeSubmitted,
-            ),
-          ),
-          if (cartActive)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  OutlinedButton(onPressed: _busy ? null : _applyDiscount, child: const Text('Discount')),
-                  OutlinedButton(onPressed: _busy ? null : _applyPromotions, child: const Text('Apply promotions')),
-                  OutlinedButton(onPressed: _busy ? null : _holdOrder, child: const Text('Hold')),
-                  if (session.attachedCustomerId != null && (session.loyaltyAvailablePoints ?? 0) > 0)
-                    OutlinedButton(onPressed: _busy ? null : _redeemLoyalty, child: const Text('Redeem points')),
-                  SizedBox(
-                    width: 180,
-                    child: TextField(
-                      controller: _couponController,
-                      enabled: !_busy,
-                      decoration: InputDecoration(
-                        labelText: 'Coupon code',
-                        isDense: true,
-                        border: const OutlineInputBorder(),
-                        suffixIcon: IconButton(icon: const Icon(Icons.check), onPressed: _busy ? null : _applyCoupon),
-                      ),
-                      onSubmitted: (_) => _applyCoupon(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: (order == null || order.lines.isEmpty)
-                ? const Center(child: Text('Cart is empty — scan an item to begin'))
-                : ListView.builder(
-                    itemCount: order.lines.length,
-                    itemBuilder: (context, i) {
-                      final line = order.lines[i];
-                      return ListTile(
-                        title: Text(line.productName),
-                        subtitle: Text('${line.sku} · qty ${line.quantity}'),
-                        onTap: _busy || order.status != 'cart' || session.isCurrentOrderLocal ? null : () => _editQuantity(line),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('₹${line.lineTotal}'),
-                            IconButton(
-                              icon: const Icon(Icons.close, size: 18),
-                              tooltip: 'Remove',
-                              onPressed: _busy || order.status != 'cart'
-                                  ? null
-                                  : () => session.removeLine(line.lineId),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          if (order != null) _OrderTotalsBar(order: order, onCheckout: _busy ? null : _checkout),
-        ],
-      ),
+    final productPane = _ProductPane(
+      scanController: _scanController,
+      scanFocus: _scanFocus,
+      busy: _busy,
+      onScanSubmitted: _onScanSubmitted,
+      onAdd: _addFromGrid,
     );
-  }
-}
+    Widget cartPanel() => _CartPanel(
+          busy: _busy,
+          selectedLineId: _selectedLineId,
+          onSelect: (id) => setState(() => _selectedLineId = id),
+          onStep: _stepLine,
+          onRemove: _removeLine,
+          onEditQuantity: _editQuantity,
+          onCustomer: _pickCustomer,
+          onHold: _holdOrder,
+          onDiscount: _applyDiscount,
+          onPay: _pay,
+        );
 
-class _OrderTotalsBar extends StatelessWidget {
-  final OrderSummary order;
-  final VoidCallback? onCheckout;
-
-  const _OrderTotalsBar({required this.order, required this.onCheckout});
-
-  @override
-  Widget build(BuildContext context) {
-    final hasDiscount = double.tryParse(order.discountTotal) != null && double.parse(order.discountTotal) > 0;
-    return SafeArea(
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _totalRow('Subtotal', order.subtotal),
-            if (hasDiscount) _totalRow('Discount', '-${order.discountTotal}'),
-            _totalRow('Tax', order.taxTotal),
-            _totalRow('Total', order.grandTotal, emphasize: true),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: order.status == 'cart' ? onCheckout : null,
-              child: Text(order.status == 'cart' ? 'Checkout' : 'Order ${order.status}'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _totalRow(String label, String value, {bool emphasize = false}) {
-    final style = emphasize ? const TextStyle(fontWeight: FontWeight.bold, fontSize: 18) : null;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [Text(label, style: style), Text('₹$value', style: style)],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------
-// Customer picker: search an existing customer, or register a walk-in
-// inline — both paths call AppSession.attachCustomer, mirroring
-// internal/sales/customer.go's own {customer_id} vs {name,phone,email}
-// duality.
-// ---------------------------------------------------------------------
-
-class _CustomerPickResult {
-  final Customer? existing;
-  final String? walkInName;
-  final String? walkInPhone;
-
-  _CustomerPickResult.existing(this.existing) : walkInName = null, walkInPhone = null;
-  _CustomerPickResult.walkIn(this.walkInName, this.walkInPhone) : existing = null;
-}
-
-class _CustomerPickerDialog extends StatefulWidget {
-  const _CustomerPickerDialog();
-
-  @override
-  State<_CustomerPickerDialog> createState() => _CustomerPickerDialogState();
-}
-
-class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
-  final _searchController = TextEditingController();
-  final _walkInNameController = TextEditingController();
-  final _walkInPhoneController = TextEditingController();
-  List<Customer> _results = [];
-  bool _searching = false;
-
-  Future<void> _search(String query) async {
-    if (query.trim().isEmpty) {
-      setState(() => _results = []);
-      return;
-    }
-    setState(() => _searching = true);
-    try {
-      final results = await context.read<AppSession>().searchCustomers(query.trim());
-      if (!mounted) return;
-      setState(() => _results = results);
-    } catch (_) {
-      // Best-effort search — leave the previous results on screen.
-    } finally {
-      if (mounted) setState(() => _searching = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _walkInNameController.dispose();
-    _walkInPhoneController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Attach a customer'),
-      content: SizedBox(
-        width: 360,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _searchController,
-              autofocus: true,
-              decoration: InputDecoration(
-                labelText: 'Search by name/phone/email',
-                border: const OutlineInputBorder(),
-                suffixIcon: _searching
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                      )
-                    : const Icon(Icons.search),
-              ),
-              onChanged: _search,
-            ),
-            if (_results.isNotEmpty)
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 180),
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    for (final c in _results)
-                      ListTile(
-                        dense: true,
-                        title: Text(c.name),
-                        subtitle: Text(c.phone),
-                        trailing: c.creditHold ? Icon(Icons.block, color: Theme.of(context).colorScheme.error, size: 18) : null,
-                        onTap: () => Navigator.pop(context, _CustomerPickResult.existing(c)),
-                      ),
-                  ],
-                ),
-              ),
-            const Divider(height: 24),
-            Text('Or register a walk-in', style: Theme.of(context).textTheme.labelMedium),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _walkInNameController,
-              decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder(), isDense: true),
-              // Bug fix: this dialog is a real State (not a StatefulBuilder),
-              // so without onChanged->setState here, typing a name/phone
-              // never rebuilds it — the "Add walk-in" button's disabled
-              // check below reads these controllers' .text but was only
-              // ever evaluated once, at the dialog's first build, when both
-              // fields were still empty. That's the "Add Walk-in button not
-              // working" symptom reported live: the button visually exists
-              // but silently stays disabled no matter what's typed.
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _walkInPhoneController,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder(), isDense: true),
-              onChanged: (_) => setState(() {}),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: _walkInNameController.text.trim().isEmpty && _walkInPhoneController.text.trim().isEmpty
-              ? null
-              : () => Navigator.pop(
-                    context,
-                    _CustomerPickResult.walkIn(_walkInNameController.text.trim(), _walkInPhoneController.text.trim()),
-                  ),
-          child: const Text('Add walk-in'),
-        ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------
-// Manual discount dialog — mirrors internal/sales/discounts.go's tiers
-// (0-5% no approval, 5-15% Branch Manager PIN, 15-25% Merchant Admin
-// PIN) as a UX nicety only; the server enforces the real boundaries.
-// ---------------------------------------------------------------------
-
-class _DiscountInput {
-  final double percent;
-  final String authorizedBy;
-  final String authorizedPin;
-  final String reason;
-
-  _DiscountInput(this.percent, this.authorizedBy, this.authorizedPin, this.reason);
-}
-
-class _DiscountDialog extends StatefulWidget {
-  const _DiscountDialog();
-
-  @override
-  State<_DiscountDialog> createState() => _DiscountDialogState();
-}
-
-class _DiscountDialogState extends State<_DiscountDialog> {
-  final _percentController = TextEditingController();
-  final _reasonController = TextEditingController();
-  final _authorizedByController = TextEditingController();
-  final _authorizedPinController = TextEditingController();
-
-  double get _percent => double.tryParse(_percentController.text) ?? 0;
-  bool get _needsApproval => _percent > 5;
-
-  @override
-  void dispose() {
-    _percentController.dispose();
-    _reasonController.dispose();
-    _authorizedByController.dispose();
-    _authorizedPinController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return StatefulBuilder(
-      builder: (context, setState) => AlertDialog(
-        title: const Text('Manual discount'),
-        content: SizedBox(
-          width: 320,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+    return Focus(
+      onKeyEvent: _keyFilter,
+      child: CallbackShortcuts(
+        bindings: _shortcuts,
+        child: Scaffold(
+          appBar: _StatusBar(busy: _busy, onSync: _sync, onMenu: _onMenu),
+          body: Column(
             children: [
-              TextField(
-                controller: _percentController,
-                autofocus: true,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Discount %', border: OutlineInputBorder()),
-                onChanged: (_) => setState(() {}),
+              if (session.offlineMode)
+                Container(
+                  key: const Key('offline-banner'),
+                  width: double.infinity,
+                  color: theme.pos.warnSoft,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Text(
+                    'Offline — cash, card and UPI sales continue and sync later. Discounts, customers, coupons and credit need a connection.',
+                    style: TextStyle(color: theme.pos.warn),
+                  ),
+                ),
+              Expanded(
+                child: LayoutBuilder(builder: (context, constraints) {
+                  final w = constraints.maxWidth;
+                  if (w >= 1000) {
+                    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      Expanded(child: productPane),
+                      SizedBox(width: w >= 1280 ? 420 : 380, child: cartPanel()),
+                    ]);
+                  }
+                  if (w >= 640) {
+                    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      Expanded(flex: 5, child: productPane),
+                      Expanded(flex: 6, child: cartPanel()),
+                    ]);
+                  }
+                  return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Expanded(child: productPane),
+                    _PhoneCartBar(
+                      onOpen: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => _scoped(Scaffold(appBar: AppBar(title: const Text('Cart')), body: SafeArea(child: cartPanel()))),
+                      )),
+                    ),
+                  ]);
+                }),
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _reasonController,
-                decoration: const InputDecoration(labelText: 'Reason', border: OutlineInputBorder()),
-                // Bug fix: without this, typing a reason never rebuilds the
-                // dialog, so the Apply button's disabled check below (which
-                // reads _reasonController.text) can stay stuck on a stale
-                // "empty" evaluation from before the reason was typed —
-                // the exact "Apply button not working" symptom reported
-                // live: percent typed first (rebuilds via its own
-                // onChanged) reads reason as empty and disables Apply;
-                // typing the reason afterward never re-enables it.
-                onChanged: (_) => setState(() {}),
-              ),
-              if (_needsApproval) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Above 5% needs a Branch Manager/Merchant Admin PIN',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _authorizedByController,
-                  decoration: const InputDecoration(labelText: 'Approver user ID', border: OutlineInputBorder()),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _authorizedPinController,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Approver PIN', border: OutlineInputBorder()),
-                ),
-              ],
             ],
           ),
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: _percent <= 0 || _reasonController.text.trim().isEmpty
-                ? null
-                : () => Navigator.pop(
-                      context,
-                      _DiscountInput(_percent, _authorizedByController.text.trim(), _authorizedPinController.text.trim(),
-                          _reasonController.text.trim()),
-                    ),
-            child: const Text('Apply'),
-          ),
-        ],
       ),
     );
   }
 }
 
-// ---------------------------------------------------------------------
-// Checkout dialog — cash/card/upi/credit, an optional gateway reference
-// for card/upi, and credit disabled unless a customer is already
-// attached (the backend rejects a credit payment with no customer, but
-// disabling it here saves a round trip).
-// ---------------------------------------------------------------------
+/// Phone layout's bottom bar (design system §06, phone mock): item count
+/// and total, opening the full cart and payment.
+class _PhoneCartBar extends StatelessWidget {
+  final VoidCallback onOpen;
 
-class _CheckoutInput {
-  final String method;
-  final String? reference;
-
-  _CheckoutInput(this.method, this.reference);
-}
-
-class _CheckoutDialog extends StatefulWidget {
-  final String grandTotal;
-  final bool customerAttached;
-
-  const _CheckoutDialog({required this.grandTotal, required this.customerAttached});
-
-  @override
-  State<_CheckoutDialog> createState() => _CheckoutDialogState();
-}
-
-class _CheckoutDialogState extends State<_CheckoutDialog> {
-  String? _method;
-  final _referenceController = TextEditingController();
-
-  @override
-  void dispose() {
-    _referenceController.dispose();
-    super.dispose();
-  }
+  const _PhoneCartBar({required this.onOpen});
 
   @override
   Widget build(BuildContext context) {
-    final needsReference = _method == 'card' || _method == 'upi';
-    return AlertDialog(
-      title: Text('Charge ₹${widget.grandTotal}'),
-      content: RadioGroup<String>(
-        groupValue: _method,
-        onChanged: (v) {
-          if (v == 'credit' && !widget.customerAttached) return;
-          setState(() => _method = v);
-        },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final m in const ['cash', 'card', 'upi', 'credit'])
-              RadioListTile<String>(
-                value: m,
-                title: Text(m.toUpperCase()),
-                subtitle: m == 'credit' && !widget.customerAttached ? const Text('Attach a customer first') : null,
-              ),
-            if (needsReference)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: TextField(
-                  controller: _referenceController,
-                  decoration: const InputDecoration(labelText: 'Gateway reference (optional)', border: OutlineInputBorder()),
-                ),
-              ),
-          ],
+    final session = context.watch<AppSession>();
+    final pos = Theme.of(context).pos;
+    final order = session.currentOrder;
+    final lines = order?.lines ?? const <OrderLine>[];
+    final count = lines.fold<double>(0, (s, l) => s + (double.tryParse(l.quantity) ?? 0));
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: FilledButton(
+          key: const Key('phone-cart-bar'),
+          style: FilledButton.styleFrom(backgroundColor: pos.pay, foregroundColor: pos.onPay, minimumSize: const Size.fromHeight(60)),
+          onPressed: lines.isEmpty ? null : onOpen,
+          child: Row(children: [
+            Expanded(
+              child: Text(lines.isEmpty
+                  ? 'Cart is empty'
+                  : '${formatQty(count.toString())} item${count == 1 ? '' : 's'} · ${formatRupees(order!.grandTotal)}'),
+            ),
+            const Text('Review & pay'),
+            const Icon(Icons.chevron_right),
+          ]),
         ),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: _method == null
-              ? null
-              : () => Navigator.pop(context, _CheckoutInput(_method!, needsReference ? _referenceController.text.trim() : null)),
-          child: const Text('Confirm'),
-        ),
-      ],
     );
   }
 }

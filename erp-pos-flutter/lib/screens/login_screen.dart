@@ -32,6 +32,33 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _submitting = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Phase 12: a paired terminal knows its merchant; no retyping it.
+    final code = context.read<AppSession>().merchantCode;
+    if (code.isNotEmpty) _merchantCodeController.text = code;
+  }
+
+  Future<void> _confirmUnpair() async {
+    final session = context.read<AppSession>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unpair this device?'),
+        content: Text(
+          'This device will stop being ${session.terminalName}. To use it as a till again, '
+          'an admin issues a new pairing code on the POS Terminals screen.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Unpair')),
+        ],
+      ),
+    );
+    if (ok == true) session.onUnpairDevice?.call();
+  }
+
+  @override
   void dispose() {
     _merchantCodeController.dispose();
     _emailController.dispose();
@@ -76,6 +103,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 const Icon(Icons.storefront, size: 48),
                 const SizedBox(height: 8),
                 Text('ERP POS', style: Theme.of(context).textTheme.headlineSmall, textAlign: TextAlign.center),
+                const SizedBox(height: 4),
+                Text(
+                  [context.read<AppSession>().terminalName, context.read<AppSession>().branchName]
+                      .where((s) => s.isNotEmpty)
+                      .join(' · '),
+                  key: const Key('terminal-identity'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
                 const SizedBox(height: 16),
                 // Set when AppSession ended a session (inactivity or a
                 // rejected refresh) rather than a manual sign-out.
@@ -109,6 +145,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Text('Log in'),
                 ),
+                if (context.read<AppSession>().onUnpairDevice != null) ...[
+                  const SizedBox(height: 8),
+                  TextButton(onPressed: _submitting ? null : _confirmUnpair, child: const Text('Unpair this device')),
+                ],
               ],
             ),
           ),
@@ -152,8 +192,8 @@ class _LoginScreenState extends State<LoginScreen> {
           decoration: const InputDecoration(labelText: 'PIN', border: OutlineInputBorder(), counterText: ''),
         ),
         Text(
-          'This terminal binds to the first device that logs in with a given '
-          'employee code — see FRD §18.',
+          'Sign in with your employee code and PIN. Only the device paired to '
+          'this terminal is accepted (FRD §18).',
           style: Theme.of(context).textTheme.bodySmall,
           textAlign: TextAlign.center,
         ),

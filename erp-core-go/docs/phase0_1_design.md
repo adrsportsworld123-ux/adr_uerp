@@ -101,7 +101,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `PAYMENT_MISMATCH` | 400 | checkout | Sum of `payments[].amount` doesn't cover `grand_total` |
 | `DISCOUNT_NOT_AUTHORIZED` | 403 | `POST /sales/orders/{id}/discounts` | Requested discount % exceeds what the presented `authorized_by`/`authorized_pin` permits for their role tier |
 | `DEVICE_MISMATCH` | 403 | `POST /auth/pin-login` | Terminal is already device-bound and the presented `device_fingerprint` doesn't match |
-| `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'` |
+| `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'`, or (Phase 12) the terminal's branch is inactive |
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
 | `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}`, `POST /pricing/scheduled-changes`, `POST /pricing/rules` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29). For a rule, `details.below_cost_skus` lists every covered variant it would put below cost (§3.30) |
 | `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
@@ -158,6 +158,9 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `DUPLICATE_NAME` | 409 | `POST`/`PATCH` `/categories`, `/brands`, `/tax-slabs` | Another record of that kind already uses the name (case-insensitive; per parent for categories) — enforced by unique indexes, `migrations/036` (§3.32) |
 | `IN_USE` | 409 | `DELETE /categories/{id}`, `/brands/{id}`, `/tax-slabs/{id}` | Something still references the record; `details.dependencies` lists what and how many (the same list `GET /dependencies/{entity}/{id}` returns) — deactivate instead (§3.32) |
 | `INACTIVE_REFERENCE` | 409 | `POST /products`, `PATCH /products/{id}` | A category/brand/tax slab being newly linked was deactivated. An existing link to a since-deactivated record is left alone (§3.32) |
+| `INVALID_PAIRING_CODE` | 401 | `POST /pos-terminals/pair` | Merchant code or pairing code wrong, expired, already used, or the terminal/branch is inactive — deliberately one answer for all (§3.33) |
+| `BRANCH_INACTIVE` | 409 | `POST /pos-terminals`, `POST /pos-terminals/{id}/pairing-code` | The branch is inactive — reactivate it first (§3.33) |
+| `TERMINAL_INACTIVE` | 409 | `POST /pos-terminals/{id}/pairing-code` | The terminal is inactive — reactivate it first (§3.33) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -933,6 +936,37 @@ New error codes: `DUPLICATE_NAME`, `IN_USE`, `INACTIVE_REFERENCE` (409).
 Verified live: customers sorted by spend with the correct total; invalid status 400; branches unpaged vs paged; branch GSTIN cleared; blank name and `Mars/Olympus` both 400, `Asia/Dubai` accepted; supplier credit limit set to 0 with GSTIN cleared and payment terms untouched; negative limit and blank name both 400. The same flows are driven through the browser by `e2e/phase11-masters.spec.ts`.
 
 **Part 3:** `GET /hr/employees` follows the list convention: `q` matches name, employee code, email, phone, designation or department; `status` is `all|active|exited` (unknown → 400); `sort` is `name` (default, as before), `code`, `joined` or `created`; `total` is returned. It stays unpaged unless `page`/`limit` is passed, because payroll, RBAC and shifts read the whole list. Verified live: 6 rows unpaged, a newest-first page of 2 with total 6, a designation search, the 400, and a POS user still denied (403 `hr.manage`).
+
+### 3.33 Phase 12: POS terminals and device pairing (`internal/terminals`, `migrations/037_terminal_management.sql`, 2026-10-10)
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /pos-terminals?branch_id=&status=&q=` | Physical terminals (the per-branch virtual "online" terminal is excluded) with branch, status, `paired`, `pairing_pending`, last sync. Any authenticated user |
+| `POST /pos-terminals` `{branch_id, name}` | Create — `terminal.manage`; branch must be this merchant's and active (`409 BRANCH_INACTIVE`) |
+| `PATCH /pos-terminals/{id}` `{name?, status?}` | Rename / activate / deactivate — `terminal.manage`; deactivating also drops any live pairing code |
+| `POST /pos-terminals/{id}/pairing-code` | Issue a code — `terminal.manage`. Returns `{code, expires_at}` once; only `sha256(upper(code))` is stored. 8 characters from `23456789ABCDEFGHJKMNPQRSTUVWXYZ` (no 0/O/1/I/L), drawn by rejection sampling, live 15 minutes, single use; a new code replaces an unused one |
+| `POST /pos-terminals/{id}/reset-device` | Unbind the device (lost/replaced tablet) — `terminal.manage` |
+| `POST /pos-terminals/pair` `{merchant_code, pairing_code, device_fingerprint}` | **Unauthenticated** (a fresh device has no session). Claims the code atomically in one `UPDATE … RETURNING` that only matches a live code on an active terminal in an active branch, binds the fingerprint, clears the code. Every failure is `401 INVALID_PAIRING_CODE` |
+
+**Tenancy:** `pos_terminals` has no RLS (`migrations/003`), so every query in `internal/terminals` names `merchant_id` explicitly; branch lookups run inside `WithTenant`.
+
+**Branch deactivation:** `POST /auth/pin-login` now also refuses (`403 TERMINAL_UNAVAILABLE`) when the terminal's branch is inactive, and pairing codes can't be issued or used for it. That is the whole effect of an inactive branch: stock, sales, transfers and reports are untouched.
+
+**Discount approver by code:** `POST /sales/orders/{id}/discounts` accepts `authorized_by_code` (employee code), resolved to `authorized_by` server-side. An unknown code gets the same `403 DISCOUNT_NOT_AUTHORIZED` as a wrong PIN. The user-id path is unchanged.
+
+**Verified live** on a throwaway API container on the compose seed DB:
+- **Terminals:** physical-only list; POS user denied (403); create.
+- **Pairing codes:**
+  - wrong code and wrong merchant give the same 401
+  - lower-case input works
+  - reuse is refused (401)
+- **Device binding:** PIN login works from the paired device and gives `DEVICE_MISMATCH` from another.
+- **Deactivation:** an inactive terminal refuses codes (409) and PIN login (403). After reactivating and resetting, a new device binds. An inactive branch refuses codes (409), PIN login (403) and terminal creation (409).
+- **Discount by code:** a 10% discount approved by employee code with the correct PIN succeeds (200); an unknown code and a wrong PIN are both 403; the user-id path still works.
+
+`internal/terminals/pairing_test.go` pins the code shape, alphabet, uniqueness and case-insensitive hashing.
+
+New error codes: `INVALID_PAIRING_CODE` (401), `BRANCH_INACTIVE`, `TERMINAL_INACTIVE` (409); `TERMINAL_UNAVAILABLE` widened.
 
 ---
 

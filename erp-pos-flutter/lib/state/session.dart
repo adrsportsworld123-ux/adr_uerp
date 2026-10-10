@@ -34,6 +34,12 @@ class AppSession extends ChangeNotifier {
   final String posTerminalId;
   final String terminalName;
   final String branchName;
+  final String merchantCode;
+
+  /// Set by the app shell: forgets this device's pairing (login screen
+  /// only — never offered mid-sale). Null in tests that build a session
+  /// directly.
+  VoidCallback? onUnpairDevice;
 
   final OfflineStore _offline = OfflineStore();
 
@@ -43,6 +49,7 @@ class AppSession extends ChangeNotifier {
     required this.posTerminalId,
     this.terminalName = 'POS terminal',
     this.branchName = '',
+    this.merchantCode = '',
   }) {
     api.canRefresh = () => !_isIdle;
     api.onSessionExpired = _endSession;
