@@ -161,6 +161,11 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `INVALID_PAIRING_CODE` | 401 | `POST /pos-terminals/pair` | Merchant code or pairing code wrong, expired, already used, or the terminal/branch is inactive — deliberately one answer for all (§3.33) |
 | `BRANCH_INACTIVE` | 409 | `POST /pos-terminals`, `POST /pos-terminals/{id}/pairing-code` | The branch is inactive — reactivate it first (§3.33) |
 | `TERMINAL_INACTIVE` | 409 | `POST /pos-terminals/{id}/pairing-code` | The terminal is inactive — reactivate it first (§3.33) |
+| `ORDER_NOT_RETURNABLE` | 409 | `POST /sales/orders/{id}/returns` | The order isn't `finalized`/`partially_refunded` (voided, fully refunded, or still a cart) (§3.34) |
+| `RETURN_WINDOW_CLOSED` | 409 | `POST /sales/orders/{id}/returns` | Older than the merchant's `return_window_days` (§3.34) |
+| `RETURN_NOT_APPROVED` | 403 | `POST /sales/orders/{id}/returns` | Approval is required and the approver code/PIN is missing, wrong, or not a Branch Manager/Merchant Admin — one answer for all (§3.34) |
+| `RETURN_QUANTITY_EXCEEDED` | 409 | `POST /sales/orders/{id}/returns` | A line isn't on the order, or more than sold minus already returned (§3.34) |
+| `CREDIT_REFUND_EXCEEDED` | 409 | `POST /sales/orders/{id}/returns` | `refund_method: credit` beyond the sale's unpaid credit, or no customer (§3.34) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -967,6 +972,47 @@ Verified live: customers sorted by spend with the correct total; invalid status 
 `internal/terminals/pairing_test.go` pins the code shape, alphabet, uniqueness and case-insensitive hashing.
 
 New error codes: `INVALID_PAIRING_CODE` (401), `BRANCH_INACTIVE`, `TERMINAL_INACTIVE` (409); `TERMINAL_UNAVAILABLE` widened.
+
+### 3.34 Phase 13: sales history, returns and refunds (`internal/sales/history.go`, `internal/sales/returns.go`, `migrations/038_sales_returns.sql`, 2026-10-10)
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /sales/orders?terminal_id=&branch_id=&cashier_id=&status=&payment_method=&q=&from=&to=&page=&limit=` | Sales history, newest first, always paged (default 25). `status` ∈ finalized, voided, refunded, partially_refunded (cart/held are never history). `q` matches order number, customer name or phone. `from`/`to` are the **branch-local** calendar date (`branches.timezone`). Rows carry branch/terminal/cashier/customer names, item count, totals and the distinct payment methods |
+| `GET /sales/summary` (same filters) | `order_count`, `voided_count`, `refunded_count`, gross/discount/tax/net over finalized + partially refunded sales, `by_payment_method` (captured payments), `by_cashier` |
+| `GET /sales/settings` / `PUT /sales/settings` `{returns_require_approval, return_window_days}` | Merchant return policy. Default when never set: approval required, no window. `PUT` needs `sales.settings` (Merchant Admin) |
+| `GET /sales/orders/{id}/returnable` | Each line with sold, already returned, still returnable quantity and per-unit refund; `returnable`, `window_open`, `requires_approval`, `credit_outstanding` |
+| `POST /sales/orders/{id}/returns` `{lines:[{line_id, quantity}], reason, refund_method, refund_reference?, restock?, approver_code?, approver_pin?, idempotency_key, pos_terminal_id?}` | Record a return. `201` new, `200` with `replayed: true` for a repeated `idempotency_key` |
+| `GET /sales/orders/{id}/returns` | Returns already made against the sale, newest first |
+
+**Amounts.** A returned quantity refunds its share of the line's `taxable_value` and `tax_amount` (both already net of every discount, and `grand_total` is exactly their sum — `recalcOrderTotals`), rounded to paise. The return that takes a line's last units gets whatever is left, so a line's returns always add up to exactly what was paid for it.
+
+**Stock.** `restock` defaults to true; false refunds damaged goods without putting them back. Restocked units go back to `stock_levels.on_hand` with a `stock_movements` row of type `return`, and, for batch-tracked variants, to the same batches the sale consumed (`sales_order_line_batches`), never more per batch than the sale took minus earlier returns (`sales_return_line_batches`). Each batch gets a `stock_batch_movements` row with reference type `sales_return`.
+
+**Ledger.** A `sales_return` journal entry mirrors the returned share of the sale: Dr Sales Revenue (taxable), Dr GST Payable (tax), Cr the refund account (`AccountCodeForPaymentMethod`). A `credit` refund instead credits Accounts Receivable for the customer and lowers the order's `credit_amount`. It is only allowed up to the unpaid credit.
+
+**Status.** `partially_refunded` until every unit of every line is back, then `refunded`. Neither can be voided (void still requires `finalized`).
+
+**Approval.** When `returns_require_approval` is set, the approver's employee code and PIN must belong to an active Branch Manager or Merchant Admin. The approver is stored on the return (`approved_by`), the cashier in `processed_by`.
+
+**Concurrency.** The order row is locked (`FOR UPDATE`) for the whole return, so two tills can't both pass the "still returnable" check.
+
+**Offline.** Returns are online-only. An offline sale has no server order until it syncs, so the POS refuses to start a return against it.
+
+**Verified live** (throwaway API on the compose seed DB, 32 checks):
+- settings default and permission
+- history: list, search, status/date validation, branch-local summary
+- approval: missing approver, wrong PIN and a POS-user approver all give 403
+- an approved partial return, with the refund equal to the paid unit price
+- idempotent replay restocks exactly once
+- the journal balances and equals the refund
+- over-return is refused (409)
+- batch-tracked partial and no-restock returns: only restocked units go back to batches, and the line's returns sum to its `line_total`
+- `refunded` after the last unit, then 409 on any further return
+- a credit refund against a cash sale is refused (409)
+- with approval turned off, a cashier return succeeds with no approver
+- the return window is enforced (409)
+
+New error codes: `ORDER_NOT_RETURNABLE`, `RETURN_WINDOW_CLOSED`, `RETURN_QUANTITY_EXCEEDED`, `CREDIT_REFUND_EXCEEDED` (409), `RETURN_NOT_APPROVED` (403).
 
 ---
 

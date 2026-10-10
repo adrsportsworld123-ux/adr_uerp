@@ -189,6 +189,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Post("/search/reindex", srch.Reindex)
 
 			protected.Post("/sales/orders", orders.CreateOrder)
+			// Phase 13: sales history (newest first, paged) and the
+			// terminal/day summary, on the branch's local calendar day.
+			protected.Get("/sales/orders", orders.ListOrders)
+			protected.Get("/sales/summary", orders.Summary)
 			protected.Get("/sales/orders/held", orders.ListHeld)
 			protected.Get("/sales/orders/{id}", orders.GetOrder)
 			protected.Post("/sales/orders/{id}/hold", orders.Hold)
@@ -210,6 +214,14 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/sales/orders/{id}/checkout", orders.Checkout)
 			protected.With(authn.RequirePermission(database, "sales.void")).
 				Post("/sales/orders/{id}/void", orders.Void)
+			// Phase 13 returns: any cashier may start one; whether a manager
+			// must approve is the merchant's setting (sales_settings).
+			protected.Get("/sales/orders/{id}/returnable", orders.GetReturnable)
+			protected.Get("/sales/orders/{id}/returns", orders.ListReturns)
+			protected.Post("/sales/orders/{id}/returns", orders.CreateReturn)
+			protected.Get("/sales/settings", orders.GetSettings)
+			protected.With(authn.RequirePermission(database, "sales.settings")).
+				Put("/sales/settings", orders.UpdateSettings)
 
 			protected.Get("/inventory", inv.GetStock)
 			protected.With(authn.RequirePermission(database, "inventory.adjust")).
