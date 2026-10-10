@@ -687,7 +687,7 @@ Measured on a mid-range Android tablet (POS) and a mid-range laptop on throttled
 
 ### Phase 13 — New POS Flows: Open Price, Sales History, Returns, Shifts, Labels, Sync Queue (design UI-3)
 
-**Status: in progress (2026-10-10).** Decisions taken at the start:
+**Status: done (2026-10-10), except the on-device items noted below.** Decisions taken at the start:
 - open-price items use normal stock
 - whether returns need approval is a per-merchant setting, defaulting to a manager's PIN
 - the POS journal is cash in/out only
@@ -747,7 +747,25 @@ Shift tests: 37 live API checks, Go unit tests (rounding, cash flow), 3 Flutter 
 
 Sync-queue tests: 14 live API checks, a Flutter widget test (real SQLite, retry, server flag), and `e2e/phase13-stock-review.spec.ts`. The open-price live client test now creates its own product instead of relying on accumulated E2E data.
 
-Still to do in this phase: product lookup and labels from the POS. **Migrations `038` to `041` must be applied to the host database.**
+- **Product lookup and labels at the POS** (§3.38):
+  - menu → Product lookup (scan or search) shows price, stock here and in other branches, and batches
+  - Edit price (`pricing.manage`, below cost confirmed) and Adjust stock (`inventory.adjust`, batch-aware), with buttons disabled up front from `/me/permissions`
+  - Print label to the network printer: FRD §12's two missing templates now exist server-side, Detailed 100×50 with batch and expiry, and QR 50×50 (ESC/POS `GS ( k`), plus copies
+  - search's info button opens the same screen
+- **Definition of Done check:**
+  - offline idempotency was proven by a retry storm (15 concurrent and sequential pushes gave one sale, one payment, one ledger posting and one stock decrement)
+  - a return posts the exact mirror entry (§3.34)
+  - shift close reconciles to the cash-recon figure (§3.36)
+  - open price outside min/max is refused, and so is a price above the threshold without a valid PIN (§3.35)
+  - every new error code is catalogued in §3
+
+Lookup tests: 15 live API checks, Go unit tests (labels and QR), 2 Flutter widget tests, which caught a dropdown overflow in the label dialog, plus a live client test. Flutter: 40/40.
+
+**Not done, by design or environment:**
+- **On-device verification:** printing labels on a real label printer, and the till flows on Android/iOS hardware. There's no hardware here, the same limitation as Phases 1 and 12. The ESC/POS bytes are verified by decoding them.
+- **Blind close:** the shift close shows expected cash while counting, like the existing admin cash count. A blind count is a possible later option.
+- **Admin-side equivalents** (a sales history list, a label studio) are Phase 14, as planned.
+- **Migrations:** `038` to `041` must be applied to the host database.
 
 **Size: XL | Goal: The POS covers the counter's whole day, from open shift to close, not just a single sale.**
 
@@ -862,7 +880,7 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 10    | Pricing & quotation gaps                             | M       | Done — scheduled price changes (incl. bulk), dynamic price rules (happy hours/weekend/seasonal, branch timezone, MRP cap), draft-quotation editing, and quote conversion now bills the quoted price, see above |
 | 11    | Design system foundations, admin list/form kit       | L       | Nearly done (2026-10-10) — tokens, shell, kit, master lifecycle, dependencies, `/me/permissions`, a11y + keyboard tests; every planned master screen on the kit; server-search product picker. Open: visual baselines (need fixture data), coupon paging, see above |
 | 12    | POS billing redesign, terminal pairing               | L       | Done (2026-10-10) — terminal management + one-time pairing codes, inactive branch closes its tills, POS pairing screen, billing redesign (grid/cart/payment sheet, F-keys, 3 layouts, offline search), approver by employee code; on-device timing/concurrency not verifiable here, see above |
-| 13    | New POS flows                                        | XL      | Planned — open price, sales history, returns/refunds, shifts, POS product/label tools, sync queue, see above |
+| 13    | New POS flows                                        | XL      | Done (2026-10-10) — sales history + returns/refunds, open price, shifts with X/Z close feeding cash recon, sync queue + Stock Review, POS product lookup + Detailed/QR labels; on-device printing not verifiable here, see above |
 | 14    | Admin sales, label studio, JV workflow               | L       | Planned — admin sale on the shared checkout path, sales history/refunds, label studio (ESC/POS + ZPL/TSPL + system + PDF), configurable JV approval, see above |
 | 15    | Data-scoped RBAC, approval policies                  | M       | Planned — branch-scoped password sessions, configurable approval thresholds, see above |
 | 16    | SaaS subscriptions, entitlements, report builder     | XL      | Planned — FRD §19 tiers enforced server-side, read-only on expiry (never delete), SaaS console, report template engine, load-test gate; 7 open decisions listed above |

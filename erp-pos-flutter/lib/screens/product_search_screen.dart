@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/api_client.dart';
 import '../state/session.dart';
 import '../ui/open_price_dialog.dart';
+import 'product_lookup_screen.dart';
 
 /// Name/category/subcategory product lookup, pushed from PosScreen's AppBar
 /// alongside the barcode field — the barcode field stays the fast path for
@@ -12,8 +13,15 @@ import '../ui/open_price_dialog.dart';
 /// product by name). Tapping a result adds it to the cart directly via
 /// AppSession.addToCart and stays open, so a cashier can add several items
 /// from one search/browse session without re-opening this screen each time.
+///
+/// Phase 13: with [lookupMode] it is the POS's product lookup instead: a
+/// tap (or a scanned barcode) opens the product's price, stock and label
+/// screen rather than adding it to the cart. In normal mode the info
+/// button on each row opens the same screen.
 class ProductSearchScreen extends StatefulWidget {
-  const ProductSearchScreen({super.key});
+  final bool lookupMode;
+
+  const ProductSearchScreen({super.key, this.lookupMode = false});
 
   @override
   State<ProductSearchScreen> createState() => _ProductSearchScreenState();
@@ -71,6 +79,29 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
     });
   }
 
+  Future<void> _openLookup(String productId, String variantId) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ChangeNotifierProvider<AppSession>.value(
+        value: context.read<AppSession>(),
+        child: ProductLookupScreen(productId: productId, variantId: variantId),
+      ),
+    ));
+  }
+
+  /// Lookup mode: a scanned barcode goes straight to the product; anything
+  /// else is a name/SKU search.
+  Future<void> _lookupSubmitted() async {
+    final q = _queryController.text.trim();
+    if (RegExp(r'^\d{6,}$').hasMatch(q)) {
+      final product = await context.read<AppSession>().scanBarcode(q);
+      if (product != null && mounted) {
+        await _openLookup(product.productId, product.variantId);
+        return;
+      }
+    }
+    await _search();
+  }
+
   Future<void> _addToCart(ProductSearchResult r) async {
     setState(() => _addingVariantId = r.variantId);
     final session = context.read<AppSession>();
@@ -86,7 +117,7 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Find a product')),
+      appBar: AppBar(title: Text(widget.lookupMode ? 'Product lookup' : 'Find a product')),
       body: Column(
         children: [
           Padding(
@@ -99,7 +130,7 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(icon: const Icon(Icons.search), onPressed: _search),
               ),
-              onSubmitted: (_) => _search(),
+              onSubmitted: (_) => widget.lookupMode ? _lookupSubmitted() : _search(),
             ),
           ),
           Padding(
@@ -167,17 +198,27 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
                             children: [
                               Text('₹${r.sellingPrice.toStringAsFixed(2)}'),
                               const SizedBox(width: 8),
-                              adding
-                                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                                  : IconButton(
-                                      icon: const Icon(Icons.add_circle_outline),
-                                      tooltip: 'Add to cart',
-                                      onPressed: () => _addToCart(r),
-                                    ),
+                              if (widget.lookupMode)
+                                const Icon(Icons.chevron_right)
+                              else if (adding)
+                                const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                              else
+                                IconButton(
+                                  icon: const Icon(Icons.add_circle_outline),
+                                  tooltip: 'Add to cart',
+                                  onPressed: () => _addToCart(r),
+                                ),
                             ],
                           ),
                         ),
-                        onTap: adding ? null : () => _addToCart(r),
+                        leading: widget.lookupMode
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.info_outline),
+                                tooltip: 'Price, stock and label',
+                                onPressed: () => _openLookup(r.productId, r.variantId),
+                              ),
+                        onTap: widget.lookupMode ? () => _openLookup(r.productId, r.variantId) : (adding ? null : () => _addToCart(r)),
                       );
                     },
                   ),

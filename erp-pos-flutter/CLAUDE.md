@@ -144,6 +144,8 @@ It also lists the server's open review items for this till. Local DB v4 records 
 
 Live tests need seed stock and seed credentials. After a full admin e2e run, restore the dev passwords, and if needed Arjun's PIN `1234`, and top up the seed bat (`99999999-…`) with an inventory adjustment.
 
+**Product lookup (Phase 13).** `lib/screens/product_lookup_screen.dart`, reached from menu → Product lookup (`ProductSearchScreen(lookupMode: true)`, where a scanned barcode opens the product directly) or from the search screen's info button. It shows price, stock by branch and batches, and offers Edit price, Adjust stock and Print label (Standard, Compact, Detailed or QR, with copies, to the receipt printer). Permissions come from `GET /me/permissions` (`AppSession.can`). While they're unknown, actions stay enabled and the server's 403 decides.
+
 **Known gap, still real:** `GET /sales/orders/{id}` doesn't yet return
 line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second

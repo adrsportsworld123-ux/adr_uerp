@@ -37,6 +37,7 @@ const (
 	cmdBarcodeWid  = "\x1D\x77"     // GS w <n>  — barcode module width
 	cmdBarcodeHRI  = "\x1D\x48"     // GS H <n>  — human-readable text position
 	cmdBarcodePrnB = "\x1D\x6B"     // GS k <m> <n> <data> — Function B (explicit length, no NUL terminator)
+	cmdQR          = "\x1D\x28\x6B" // GS ( k <pL> <pH> <cn=0x31> <fn> ... — the 2D (QR) function set
 )
 
 // Barcode symbology codes for the GS k "Function B" form — the byte
@@ -147,6 +148,30 @@ func (b *Builder) BarcodeEAN13(code string, height, width byte) *Builder {
 
 func (b *Builder) BarcodeCode128(code string, height, width byte) *Builder {
 	return b.Barcode(symCODE128, height, width, HRIBelow, code)
+}
+
+// QRCode prints a QR code (Phase 13's QR label, pos_frd_complete.md §12)
+// with the GS ( k function set: model 2, the given module size in dots
+// (1-16), error correction M, then store the data and print it. The
+// sequence and byte values are fixed by the ESC/POS spec.
+func (b *Builder) QRCode(data string, moduleSize byte) *Builder {
+	if moduleSize < 1 {
+		moduleSize = 1
+	} else if moduleSize > 16 {
+		moduleSize = 16
+	}
+	b.buf.WriteString(cmdQR + "\x04\x00\x31\x41\x32\x00") // model 2
+	b.buf.WriteString(cmdQR + "\x03\x00\x31\x43")         // module size
+	b.buf.WriteByte(moduleSize)
+	b.buf.WriteString(cmdQR + "\x03\x00\x31\x45\x31") // error correction M
+	n := len(data) + 3
+	b.buf.WriteString(cmdQR)
+	b.buf.WriteByte(byte(n % 256))
+	b.buf.WriteByte(byte(n / 256))
+	b.buf.WriteString("\x31\x50\x30") // store
+	b.buf.WriteString(data)
+	b.buf.WriteString(cmdQR + "\x03\x00\x31\x51\x30") // print
+	return b
 }
 
 func (b *Builder) Cut() *Builder {

@@ -720,6 +720,108 @@ class ReturnResult {
       );
 }
 
+/// GET /products/{id}, the parts the POS product lookup shows.
+class ProductDetailData {
+  final String productId;
+  final String name;
+  final bool priceIncludesTax;
+  final List<VariantDetail> variants;
+
+  ProductDetailData({required this.productId, required this.name, required this.priceIncludesTax, required this.variants});
+
+  factory ProductDetailData.fromJson(Map<String, dynamic> j) => ProductDetailData(
+        productId: j['product_id'] as String,
+        name: j['name'] as String,
+        priceIncludesTax: j['price_includes_tax'] as bool? ?? false,
+        variants: (j['variants'] as List<dynamic>? ?? const []).map((e) => VariantDetail.fromJson(e as Map<String, dynamic>)).toList(),
+      );
+}
+
+class VariantDetail {
+  final String variantId;
+  final String sku;
+  final String mrp;
+  final String sellingPrice;
+  final String costPrice;
+  final bool trackBatch;
+  final String status;
+  final String? barcode;
+  final OpenPriceRange? openPrice;
+
+  VariantDetail({
+    required this.variantId,
+    required this.sku,
+    required this.mrp,
+    required this.sellingPrice,
+    required this.costPrice,
+    required this.trackBatch,
+    required this.status,
+    this.barcode,
+    this.openPrice,
+  });
+
+  factory VariantDetail.fromJson(Map<String, dynamic> j) => VariantDetail(
+        variantId: j['variant_id'] as String,
+        sku: j['sku'] as String,
+        mrp: j['mrp'] as String,
+        sellingPrice: j['selling_price'] as String,
+        costPrice: j['cost_price'] as String? ?? '0',
+        trackBatch: j['track_batch'] as bool? ?? false,
+        status: j['status'] as String? ?? 'active',
+        barcode: (j['original_barcode'] ?? j['generated_barcode']) as String?,
+        openPrice: OpenPriceRange.fromJson(j['open_price']),
+      );
+}
+
+class BranchStock {
+  final String branchId;
+  final String branchName;
+  final String onHand;
+  final String available;
+
+  BranchStock({required this.branchId, required this.branchName, required this.onHand, required this.available});
+}
+
+class StockBatch {
+  final String batchId;
+  final String batchNo;
+  final String? expiryDate;
+  final String remaining;
+  final bool expired;
+
+  StockBatch({required this.batchId, required this.batchNo, this.expiryDate, required this.remaining, required this.expired});
+}
+
+/// GET /inventory/variants/{id}/branches.
+class VariantStockData {
+  final List<BranchStock> branches;
+  final List<StockBatch> batches;
+
+  VariantStockData(this.branches, this.batches);
+
+  factory VariantStockData.fromJson(Map<String, dynamic> j) => VariantStockData(
+        [
+          for (final b in (j['branches'] as List<dynamic>? ?? const []).cast<Map<String, dynamic>>())
+            BranchStock(
+              branchId: b['branch_id'] as String,
+              branchName: b['branch_name'] as String,
+              onHand: b['on_hand'] as String,
+              available: b['available'] as String,
+            ),
+        ],
+        [
+          for (final b in (j['batches'] as List<dynamic>? ?? const []).cast<Map<String, dynamic>>())
+            StockBatch(
+              batchId: b['batch_id'] as String,
+              batchNo: b['batch_no'] as String,
+              expiryDate: b['expiry_date'] as String?,
+              remaining: b['quantity_remaining'] as String,
+              expired: b['expired'] as bool? ?? false,
+            ),
+        ],
+      );
+}
+
 /// An oversold offline sale line waiting for review (GET /inventory/review).
 class StockReviewItem {
   final String itemId;
@@ -1428,6 +1530,77 @@ class ApiClient {
       }),
     );
     return ReturnResult.fromJson(_decode(resp));
+  }
+
+  // ------------------------------------------------- Phase 13 product lookup
+
+  /// GET /me/permissions — what the signed-in user may do, so the POS can
+  /// disable an action up front instead of waiting for a 403.
+  Future<Set<String>> myPermissions() async {
+    final body = _decode(await _http.get(Uri.parse('$baseUrl/api/v1/me/permissions'), headers: _authHeaders));
+    return (body['permissions'] as List<dynamic>? ?? const []).cast<String>().toSet();
+  }
+
+  Future<ProductDetailData> productDetail(String productId) async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/products/$productId'), headers: _authHeaders);
+    return ProductDetailData.fromJson(_decode(resp));
+  }
+
+  Future<VariantStockData> variantStock(String variantId, String branchId) async {
+    final uri = Uri.parse('$baseUrl/api/v1/inventory/variants/$variantId/branches').replace(queryParameters: {'branch_id': branchId});
+    return VariantStockData.fromJson(_decode(await _http.get(uri, headers: _authHeaders)));
+  }
+
+  /// PATCH /pricing/variants/{id} — pricing.manage. [override] accepts a
+  /// below-cost price after NEGATIVE_MARGIN.
+  Future<void> updateSellingPrice({required String variantId, required double sellingPrice, required String reason, bool override = false}) async {
+    final resp = await _http.patch(
+      Uri.parse('$baseUrl/api/v1/pricing/variants/$variantId'),
+      headers: _authHeaders,
+      body: jsonEncode({'selling_price': sellingPrice, 'reason': reason, 'override': override}),
+    );
+    _decode(resp);
+  }
+
+  /// POST /inventory/adjustments — inventory.adjust. A positive change on
+  /// a batch-tracked variant needs the batch (and its expiry when new).
+  Future<void> adjustStock({
+    required String variantId,
+    required String branchId,
+    required double delta,
+    required String reason,
+    String? batchNo,
+    String? expiryDate,
+  }) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/inventory/adjustments'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'variant_id': variantId,
+        'branch_id': branchId,
+        'quantity_delta': delta,
+        'reason': reason,
+        if (batchNo != null && batchNo.isNotEmpty) 'batch_no': batchNo,
+        if (expiryDate != null && expiryDate.isNotEmpty) 'expiry_date': expiryDate,
+      }),
+    );
+    _decode(resp);
+  }
+
+  /// GET /products/variants/{id}/label — raw ESC/POS bytes for the label
+  /// printer (templates: standard, compact, detailed, qr).
+  Future<List<int>> labelBytes({required String variantId, required String template, int copies = 1, String? branchId, String? batchId}) async {
+    final uri = Uri.parse('$baseUrl/api/v1/products/variants/$variantId/label').replace(queryParameters: {
+      'template': template,
+      'copies': '$copies',
+      if (branchId != null) 'branch_id': branchId,
+      if (batchId != null) 'batch_id': batchId,
+    });
+    final resp = await _http.get(uri, headers: _authHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      _decode(resp); // throws the server's error
+    }
+    return resp.bodyBytes;
   }
 
   /// GET /inventory/review — open oversold-offline items (Phase 13).

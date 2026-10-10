@@ -13,6 +13,10 @@ type Command struct {
 	IsBarcode        bool
 	BarcodeSymbology byte
 	BarcodeData      string
+	// QR codes (Builder.QRCode): the stored data and its module size.
+	IsQR         bool
+	QRData       string
+	QRModuleSize byte
 }
 
 // Decode walks a byte stream produced by Builder and recovers the
@@ -31,9 +35,22 @@ func Decode(data []byte) []Command {
 		}
 	}
 
+	var qrSize byte
 	i := 0
 	for i < len(data) {
 		switch {
+		case matches(data, i, cmdQR): // GS ( k pL pH cn fn [params]
+			n := int(data[i+3]) + int(data[i+4])*256
+			fn := data[i+6]
+			params := data[i+7 : i+5+n]
+			switch fn {
+			case 0x43: // module size
+				qrSize = params[0]
+			case 0x50: // store: m, then the data
+				flush()
+				cmds = append(cmds, Command{IsQR: true, QRData: string(params[1:]), QRModuleSize: qrSize})
+			}
+			i += 5 + n
 		case matches(data, i, "\x1B\x40"): // ESC @ (init)
 			i += 2
 		case matches(data, i, "\x1B\x61"): // ESC a <n>

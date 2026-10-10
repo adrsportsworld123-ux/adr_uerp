@@ -1011,6 +1011,50 @@ class AppSession extends ChangeNotifier {
     return closed;
   }
 
+  // ---------------------------------------------------------------------
+  // Phase 13 product lookup: the admin's own endpoints and permission
+  // guards (pricing.manage, inventory.adjust), never a POS-only shortcut.
+  // ---------------------------------------------------------------------
+
+  /// The signed-in user's permissions; null until loaded (or when the
+  /// server is unreachable), which [can] treats as "let the server decide".
+  Set<String>? permissions;
+
+  bool can(String code) => permissions == null || permissions!.contains(code);
+
+  Future<void> refreshPermissions() async {
+    if (offlineMode) return;
+    try {
+      permissions = await api.myPermissions();
+      notifyListeners();
+    } catch (_) {
+      // Unknown: actions stay enabled and the server's 403 is the answer.
+    }
+  }
+
+  Future<ProductDetailData> productDetail(String productId) => _live(() => api.productDetail(productId));
+
+  Future<VariantStockData> variantStock(String variantId) => _live(() => api.variantStock(variantId, branchId));
+
+  Future<void> updateSellingPrice(String variantId, double price, String reason, {bool override = false}) =>
+      _live(() => api.updateSellingPrice(variantId: variantId, sellingPrice: price, reason: reason, override: override));
+
+  Future<void> adjustStock(String variantId, double delta, String reason, {String? batchNo, String? expiryDate}) => _live(() =>
+      api.adjustStock(variantId: variantId, branchId: branchId, delta: delta, reason: reason, batchNo: batchNo, expiryDate: expiryDate));
+
+  /// Fetches the label's ESC/POS bytes and sends them to the configured
+  /// network printer (the same one receipts use).
+  Future<void> printLabel(PrinterService printer, String variantId, String template, int copies, {String? batchId}) async {
+    final bytes = await _live(() => api.labelBytes(
+          variantId: variantId,
+          template: template,
+          copies: copies,
+          branchId: branchId,
+          batchId: batchId,
+        ));
+    await printer.printBytes(bytes);
+  }
+
   /// One key per return attempt; the return screen keeps it across retries.
   String newIdempotencyKey() => _newIdempotencyKey();
 

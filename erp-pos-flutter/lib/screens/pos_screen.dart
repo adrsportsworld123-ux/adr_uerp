@@ -62,6 +62,7 @@ class _PosScreenState extends State<PosScreen> {
       // none open, start on the shift screen instead of a till that
       // can't take payment.
       await session.refreshShift();
+      session.refreshPermissions();
       if (mounted && session.shiftsRequired && session.currentShift == null && !session.offlineMode) {
         await _openShift();
       }
@@ -342,6 +343,9 @@ class _PosScreenState extends State<PosScreen> {
         await _openSalesHistory();
       case _MenuAction.productSearch:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen()));
+        _refocusScan();
+      case _MenuAction.productLookup:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const ProductSearchScreen(lookupMode: true))));
         _refocusScan();
       case _MenuAction.syncNow:
         await _sync();

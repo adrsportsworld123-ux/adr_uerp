@@ -373,4 +373,30 @@ void main() {
       await http.patch(Uri.parse('$_baseUrl/api/v1/pos-terminals/$terminalId'), headers: headers, body: jsonEncode({'status': 'inactive'}));
     }
   });
+
+  test('Phase 13: product lookup reads stock by branch, prints a QR label, and price edits keep the cost guard', () async {
+    if (!serverUp) return;
+
+    const branchId = '22222222-2222-2222-2222-222222222222';
+    const variantId = '99999999-9999-9999-9999-999999999999';
+    final stock = await api.variantStock(variantId, branchId);
+    expect(stock.branches.first.branchId, branchId, reason: 'this branch first');
+    final perms = await api.myPermissions();
+    expect(perms, contains('pricing.manage'), reason: 'the suite signs in as a Merchant Admin');
+
+    final bytes = await api.labelBytes(variantId: variantId, template: 'qr', copies: 2, branchId: branchId);
+    expect(String.fromCharCodes(bytes), contains('(k'), reason: 'a QR command');
+    try {
+      await api.labelBytes(variantId: variantId, template: 'fancy');
+      fail('expected INVALID_REQUEST');
+    } on ApiException catch (e) {
+      expect(e.code, 'INVALID_REQUEST');
+    }
+    try {
+      await api.updateSellingPrice(variantId: variantId, sellingPrice: 1, reason: 'flutter live: must be refused');
+      fail('expected NEGATIVE_MARGIN');
+    } on ApiException catch (e) {
+      expect(e.code, 'NEGATIVE_MARGIN', reason: 'nothing changed: the guard refused it');
+    }
+  });
 }

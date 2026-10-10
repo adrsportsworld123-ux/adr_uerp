@@ -234,6 +234,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 
 			protected.Get("/inventory", inv.GetStock)
 			// Phase 13: oversold offline sales waiting for review (migrations/041).
+			protected.Get("/inventory/variants/{id}/branches", inv.VariantStock)
 			protected.Get("/inventory/review", inv.ListStockReview)
 			protected.With(authn.RequirePermission(database, "inventory.adjust")).
 				Post("/inventory/review/{id}/resolve", inv.ResolveStockReview)

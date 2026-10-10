@@ -1182,6 +1182,31 @@ The local DB is now v4, adding `synced_at` and `needs_review` on `pending_orders
 
 `e2e/phase13-stock-review.spec.ts` covers the admin flow and a POS user's read-only view.
 
+### 3.38 Phase 13: product lookup and labels at the POS (`internal/inventory/variant_stock.go`, `internal/catalog/label_handler.go`, `internal/printing`, 2026-10-10)
+
+The POS lookup reuses the back office's own endpoints and guards: `GET /products/{id}`, `PATCH /pricing/variants/{id}` (`pricing.manage`; below-cost needs `override`; past sales are never re-priced) and `POST /inventory/adjustments` (`inventory.adjust`). It also reads `GET /me/permissions`, so an action the user lacks is disabled up front. It adds two server pieces:
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /inventory/variants/{id}/branches?branch_id=` | The variant's stock in every active branch (`branch_id` first), and that branch's batches with stock, soonest expiry first, flagged `expired`. Any signed-in user |
+| `GET /products/variants/{id}/label?template=&copies=&branch_id=&batch_id=` | Extended. Templates are `standard`, `compact`, and Phase 13's FRD §12 additions: `detailed` (100×50: name, barcode, MRP and price, SKU, batch and expiry) and `qr` (50×50: a QR code of the barcode, name, price). `copies` is 1–100, in one job with a cut after each. For `detailed`, `batch_id` names a batch, otherwise `branch_id` picks the one that sells next. A non-batch variant prints no batch line. An unknown template is now a `400` (it used to silently print `standard`); an empty one still means `standard` |
+
+`internal/printing` gains `Builder.QRCode`, the ESC/POS `GS ( k` sequence (model 2, module size, error correction M, store, print). `Decode` reads it back, so `label_test.go` asserts the QR data and module size, the detailed label's batch and expiry lines, and the number of copies. Label text truncation is now rune-safe (it cut bytes, which could split a `₹` or a Devanagari name).
+
+**Verified live** (15 checks, using a throwaway batch-tracked product with two batches):
+- **Stock:** stock by branch with this branch first, and batches soonest-first; an unknown variant gives 404.
+- **Labels:**
+  - the detailed label picks the batch that sells next, or a chosen batch; a foreign batch gives 404
+  - the QR label carries the barcode in a QR command and no linear barcode
+  - 3 copies print 3 cuts
+  - an unknown template gives 400, more than 100 copies gives 400, and no template still prints `standard`
+- **Permissions:**
+  - a POS user is refused a price edit and a stock adjustment (403)
+  - a below-cost price gives 409 `NEGATIVE_MARGIN`
+  - a manager's price edit works
+
+**Phase 13 Definition of Done, offline idempotency.** A retry storm pushed one offline sale 12 times concurrently plus 3 sequential retries. The result was 1 `ok` and 14 `duplicate`, with exactly one order, one payment, one journal entry and one stock decrement. This confirms §3.5's contract holds when a device retries.
+
 ---
 
 ## 4. What Phase 0 concretely delivers against this design
