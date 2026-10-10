@@ -51,7 +51,7 @@ const config: MasterConfig<TaxSlab, TaxSlabForm> = {
       align: "right",
       cell: (t) => (
         <span className="tabular font-medium">
-          {(Math.max(rate(t.cgst_rate) + rate(t.sgst_rate), rate(t.igst_rate)) + rate(t.cess_rate)).toFixed(2)}%
+          {(rate(t.cgst_rate) + rate(t.sgst_rate) + rate(t.igst_rate) + rate(t.cess_rate)).toFixed(2)}%
         </span>
       ),
     },
@@ -81,7 +81,8 @@ const config: MasterConfig<TaxSlab, TaxSlabForm> = {
         </div>
       ))}
       <p className="col-span-2 text-xs text-muted-foreground">
-        Intra-state sales use CGST + SGST; inter-state sales use IGST.
+        A slab is either intra-state (CGST + SGST, e.g. 6 + 6 for GST 12%) or inter-state (IGST only). Every rate entered is
+        charged, so don&apos;t fill both.
       </p>
     </div>
   ),
@@ -91,6 +92,8 @@ const config: MasterConfig<TaxSlab, TaxSlabForm> = {
       const v = rate(f[key]);
       if (Number.isNaN(v) || v < 0 || v > 100) return `${label} must be between 0 and 100.`;
     }
+    if (rate(f.igst_rate) > 0 && (rate(f.cgst_rate) > 0 || rate(f.sgst_rate) > 0))
+      return "Use CGST + SGST or IGST, not both: every rate on a slab is charged.";
     return null;
   },
   toCreateBody: (f) => ({

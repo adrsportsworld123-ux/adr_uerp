@@ -38,6 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Sales",
     icon: Receipt,
     items: [
+      { href: "/sales", label: "Sales", match: ["/sales/"] },
       { href: "/quotations", label: "B2B Quotations" },
       { href: "/prescriptions", label: "Prescriptions" },
       { href: "/sales-settings", label: "Sales Policy" },

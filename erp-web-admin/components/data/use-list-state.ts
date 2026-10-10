@@ -22,7 +22,11 @@ export function useListState(defaults: { sort: string; dir?: "asc" | "desc"; sta
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const filterKeys = useMemo(() => defaults.filterKeys ?? [], [defaults.filterKeys]);
+  // Keyed on the names, not the array: callers pass a fresh literal each
+  // render, which would otherwise give `state` a new identity every render
+  // and re-run any effect that depends on it (an endless fetch loop).
+  const filterKeysKey = (defaults.filterKeys ?? []).join(",");
+  const filterKeys = useMemo(() => (filterKeysKey ? filterKeysKey.split(",") : []), [filterKeysKey]);
 
   const state: ListState = useMemo(() => {
     const limit = Number(params.get("limit"));

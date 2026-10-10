@@ -792,6 +792,25 @@ Lookup tests: 15 live API checks, Go unit tests (labels and QR), 2 Flutter widge
 
 ### Phase 14 — Admin Sales, Label Studio, JV Workflow (design UI-4)
 
+**Status: in progress (2026-10-10).**
+
+Part 1 done: **admin sales** (`migrations/042`, `phase0_1_design.md` §3.39):
+- **Selling from the admin app:** a `backoffice` channel from a virtual terminal per branch, running the till's own cart code. A fixture cart totals identically to the paisa on the till and in the admin, which meets the first Definition of Done item.
+- **Admin pages:**
+  - Sales list (filters, summary)
+  - Sale detail (items, GST by rate, payments, discounts, returns, ledger, audit)
+  - Void
+  - Return/refund under the merchant's policy
+  - Payment-method correction with a manager's PIN, reclassed in the ledger and audited
+  - New Sale screen (product search, open price, customer, discount, split payment)
+- **Fixed on the way:**
+  - Tax slabs could combine CGST/SGST and IGST, which the till then charged twice. Such slabs are now refused, and the admin shows the rate actually charged.
+  - The list kit's `filterKeys` memo keyed on array identity, which caused a request loop on any page whose effects depend on the filters.
+
+**Decision for later: GST place of supply.** A slab names its components; choosing CGST+SGST vs IGST per sale by place of supply (inter-state B2B) would be a broader change to the cart, offline POS, GSTR-1/3B and e-invoicing.
+
+Still to do: label studio (part 2), JV workflow (part 3).
+
 **Size: L | Goal: The back office can sell, refund and print labels with exactly the same rules as the till.**
 
 **In:**

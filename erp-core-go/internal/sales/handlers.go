@@ -94,6 +94,11 @@ type createOrderRequest struct {
 	BranchID       string `json:"branch_id"`
 	POSTerminalID  string `json:"pos_terminal_id"`
 	IdempotencyKey string `json:"idempotency_key"`
+	// Phase 14: "backoffice" = a sale rung up in the admin app. The server
+	// picks the branch's virtual back-office terminal (pos_terminal_id is
+	// then ignored), so the channel still comes from a terminal, never
+	// from the client's say-so. Needs sales.backoffice.
+	Channel string `json:"channel"`
 }
 
 func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +113,11 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
 		return
 	}
-	if req.BranchID == "" || req.POSTerminalID == "" || req.IdempotencyKey == "" {
+	if req.Channel != "" && req.Channel != "backoffice" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "channel may only be \"backoffice\" (a till's channel comes from its terminal)")
+		return
+	}
+	if req.BranchID == "" || req.IdempotencyKey == "" || (req.POSTerminalID == "" && req.Channel == "") {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "branch_id, pos_terminal_id and idempotency_key are required")
 		return
 	}
@@ -127,6 +136,11 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
+		if req.Channel == "backoffice" {
+			if req.POSTerminalID, err = backofficeTerminal(ctx, tx, claims.UserID, req.BranchID); err != nil {
+				return err
+			}
+		}
 		// "" customerID: a POS cart starts anonymous, same as always —
 		// AttachCustomer (customer.go) is the existing separate step for
 		// attaching one, unlike a quotation conversion which already knows
@@ -134,12 +148,55 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		resp, err = CreateCart(ctx, tx, req.BranchID, req.POSTerminalID, claims.UserID, "", req.IdempotencyKey, orderNumber)
 		return err
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, errBackofficeForbidden):
+		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", "selling from the back office needs the sales.backoffice permission")
+		return
+	case errors.Is(err, errBranchUnavailable):
+		httpx.Error(w, http.StatusConflict, "BRANCH_INACTIVE", "that branch isn't an active branch of this merchant")
+		return
+	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create order")
 		return
 	}
 
 	httpx.JSON(w, http.StatusCreated, resp)
+}
+
+var (
+	errBackofficeForbidden = errors.New("needs sales.backoffice")
+	errBranchUnavailable   = errors.New("branch not active")
+)
+
+// backofficeTerminal checks sales.backoffice and returns the branch's
+// virtual back-office terminal (migrations/042), creating it for a branch
+// that predates it. pos_terminals has no RLS: merchant_id explicitly.
+func backofficeTerminal(ctx context.Context, tx pgx.Tx, userID, branchID string) (string, error) {
+	perms, err := authn.FetchPermissions(ctx, tx, userID)
+	if err != nil {
+		return "", err
+	}
+	if !authn.HasPermission(perms, "sales.backoffice") {
+		return "", errBackofficeForbidden
+	}
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM branches WHERE id::text = $1 AND status = 'active')`, branchID).Scan(&active); err != nil {
+		return "", err
+	}
+	if !active {
+		return "", errBranchUnavailable
+	}
+	var id string
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM pos_terminals
+		WHERE merchant_id = current_setting('app.tenant_id')::uuid AND branch_id::text = $1 AND channel = 'backoffice'
+		ORDER BY created_at LIMIT 1`, branchID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `
+			INSERT INTO pos_terminals (merchant_id, branch_id, name, channel, status)
+			VALUES (current_setting('app.tenant_id')::uuid, $1::uuid, 'Back Office', 'backoffice', 'active') RETURNING id`, branchID).Scan(&id)
+	}
+	return id, err
 }
 
 // CreateCart is CreateOrder's core, exported so internal/quotations'

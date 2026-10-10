@@ -84,9 +84,12 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 		// same as any in-person order) — see
 		// migrations/026_wholesale_b2b.sql's header for why this is a
 		// virtual terminal rather than relaxing that constraint.
+		// Phase 14: and one for sales rung up in the admin app
+		// (migrations/042_backoffice_sales.sql).
 		_, err := tx.Exec(ctx, `
 			INSERT INTO pos_terminals (id, merchant_id, branch_id, name, channel, status)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, 'Online Storefront', 'online', 'active')`,
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, 'Online Storefront', 'online', 'active'),
+			       (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, 'Back Office', 'backoffice', 'active')`,
 			resp.BranchID)
 		return err
 	})

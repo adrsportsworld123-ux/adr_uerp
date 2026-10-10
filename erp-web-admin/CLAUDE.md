@@ -54,3 +54,7 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
   - **Merchant codes:** set `NEXT_PUBLIC_DEFAULT_MERCHANT_CODE=acme-sports` for the web build under test and `E2E_MERCHANT_CODE=acme-sports` for the specs that read it.
   - **Seed credentials:** after a seed-volume reset, restore the dev passwords with `POST /dev/set-password`, and Arjun's manager PIN (`1234`) by writing a `/dev/hash-password` hash to `users.pin_hash`. Both PIN-approval specs depend on it.
   - **Time window:** specs that read "today" are unreliable between 00:00 and 05:30 IST.
+  - **Seed passwords:**
+    - Ravi, Arjun and the E2E users use `Passw0rd!`, but Meera's password is `9999`. Restoring hers to anything else locks her account after the next run.
+    - `forgot-password.spec.ts` resets Ravi's password as part of what it tests.
+  - **Specs create their own data:** a spec that needs a product, slab or till creates it through the API instead of hard-coding an id or barcode, because generated barcodes are reused after other specs reset data.

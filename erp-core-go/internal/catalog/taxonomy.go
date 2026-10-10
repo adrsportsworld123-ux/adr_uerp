@@ -552,6 +552,16 @@ func (h *TaxonomyHandler) CreateTaxSlab(w http.ResponseWriter, r *http.Request) 
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "rates must be between 0 and 100")
 		return
 	}
+	// A slab lists the components that apply, and the cart, the offline
+	// POS, GSTR-1/3B and e-invoicing all charge or report every component
+	// on it. One with both CGST+SGST and IGST would charge both (an 18%
+	// slab entered as 9+9 and 18 became 36% at the till). So a slab is
+	// intra-state (CGST+SGST) or inter-state (IGST), never both.
+	if req.IGSTRate > 0 && (req.CGSTRate > 0 || req.SGSTRate > 0) {
+		httpx.Error(w, http.StatusBadRequest, "TAX_SLAB_MIXED",
+			"a tax slab is either intra-state (CGST + SGST) or inter-state (IGST), not both: every component on a slab is charged")
+		return
+	}
 
 	var resp taxSlabResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {

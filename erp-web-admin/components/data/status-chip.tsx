@@ -33,6 +33,7 @@ const statusTone: Record<string, Tone> = {
   approved: "info",
   posted: "teal",
   refunded: "teal",
+  partially_refunded: "teal",
   returned: "plum",
   reversed: "plum",
   voided: "bad",

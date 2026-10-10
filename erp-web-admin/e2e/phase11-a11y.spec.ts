@@ -18,6 +18,7 @@ const SCREENS = [
   "/terminals",
   "/sales-settings",
   "/inventory/review",
+  "/sales",
 ];
 
 async function login(page: Page) {

@@ -51,7 +51,7 @@ var historyStatuses = map[string]bool{"finalized": true, "voided": true, "refund
 // historyFilter is shared by the list and the summary so both always
 // describe the same set of orders.
 type historyFilter struct {
-	terminalID, branchID, cashierID, status, method, q, from, to string
+	terminalID, branchID, cashierID, status, method, q, from, to, channel string
 }
 
 func readHistoryFilter(r *http.Request) historyFilter {
@@ -65,6 +65,7 @@ func readHistoryFilter(r *http.Request) historyFilter {
 		q:          strings.TrimSpace(q.Get("q")),
 		from:       q.Get("from"),
 		to:         q.Get("to"),
+		channel:    q.Get("channel"),
 	}
 }
 
@@ -83,13 +84,18 @@ const historyWhere = `
 	  AND ($5 = '' OR EXISTS (SELECT 1 FROM payments p WHERE p.sales_order_id = so.id AND p.method = $5))
 	  AND ($6 = '' OR so.order_number ILIKE '%' || $6 || '%' OR c.name ILIKE '%' || $6 || '%' OR c.phone ILIKE '%' || $6 || '%')
 	  AND ($7 = '' OR (COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone)::date >= $7::date)
-	  AND ($8 = '' OR (COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone)::date <= $8::date)`
+	  AND ($8 = '' OR (COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone)::date <= $8::date)
+	  AND ($9 = '' OR so.channel = $9)`
 
 func (f historyFilter) args() []any {
-	return []any{f.terminalID, f.branchID, f.cashierID, f.status, f.method, f.q, f.from, f.to}
+	return []any{f.terminalID, f.branchID, f.cashierID, f.status, f.method, f.q, f.from, f.to, f.channel}
 }
 
 func (f historyFilter) validate(w http.ResponseWriter) bool {
+	if f.channel != "" && f.channel != "pos" && f.channel != "online" && f.channel != "backoffice" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "channel must be pos, online or backoffice")
+		return false
+	}
 	if f.status != "" && !historyStatuses[f.status] {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be finalized, voided, refunded or partially_refunded")
 		return false
@@ -104,7 +110,7 @@ func (f historyFilter) validate(w http.ResponseWriter) bool {
 }
 
 // ListOrders: GET /sales/orders?terminal_id=&branch_id=&cashier_id=&status=
-// &payment_method=&q=&from=&to=&page=&limit=  — newest first, paged
+// &payment_method=&channel=&q=&from=&to=&page=&limit=  — newest first, paged
 // (default 25). q matches order number, customer name or phone.
 func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
@@ -140,7 +146,7 @@ func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 			       COALESCE((SELECT array_agg(DISTINCT p.method) FROM payments p WHERE p.sales_order_id = so.id), '{}'),
 			       so.channel`+historyWhere+`
 			ORDER BY `+p.OrderBy+`, so.id
-			LIMIT $9 OFFSET $10`, append(args, limit, offset)...)
+			LIMIT $10 OFFSET $11`, append(args, limit, offset)...)
 		if err != nil {
 			return err
 		}

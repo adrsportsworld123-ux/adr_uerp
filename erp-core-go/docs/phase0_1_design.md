@@ -178,6 +178,9 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `INSUFFICIENT_CASH` | 409 | `POST /pos-shifts/{id}/cash-movements` | A drop or paid-out larger than the drawer's expected cash (§3.36) |
 | `CASH_MOVEMENT_NOT_APPROVED` | 403 | `POST /pos-shifts/{id}/cash-movements` | A paid-out without a valid Branch Manager/Merchant Admin code + PIN (§3.36) |
 | `ALREADY_RESOLVED` | 409 | `POST /inventory/review/{id}/resolve` | The review item was already resolved (§3.37) |
+| `PAYMENT_NOT_CORRECTABLE` | 409 | `POST /sales/orders/{id}/payments/{payment_id}/correct` | Not a captured cash/card/UPI payment on a completed sale, or the same method (§3.39) |
+| `CORRECTION_NOT_APPROVED` | 403 | `POST /sales/orders/{id}/payments/{payment_id}/correct` | Missing or wrong Branch Manager/Merchant Admin code + PIN (§3.39) |
+| `TAX_SLAB_MIXED` | 400 | `POST /tax-slabs` | A slab with both CGST/SGST and IGST: every component on a slab is charged, so it's one or the other (§3.39) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -1206,6 +1209,50 @@ The POS lookup reuses the back office's own endpoints and guards: `GET /products
   - a manager's price edit works
 
 **Phase 13 Definition of Done, offline idempotency.** A retry storm pushed one offline sale 12 times concurrently plus 3 sequential retries. The result was 1 `ok` and 14 `duplicate`, with exactly one order, one payment, one journal entry and one stock decrement. This confirms §3.5's contract holds when a device retries.
+
+### 3.39 Phase 14: back-office sales (`internal/sales/detail.go`, `migrations/042_backoffice_sales.sql`, 2026-10-10)
+
+**A third channel, `backoffice`.** A sale rung up in the admin app gets its channel the same way `online` does: from a virtual terminal per branch, never from the client.
+- `POST /sales/orders` accepts `{branch_id, channel: "backoffice", idempotency_key}`. The server picks or creates the branch's Back Office terminal, needs `sales.backoffice`, and refuses an inactive branch with `409 BRANCH_INACTIVE`. Any other `channel` value is a 400.
+- New branches get the terminal at creation.
+- Terminal management, pairing and PIN login only see `channel = 'pos'`, so the virtual terminal is invisible to them, and shifts don't apply to it.
+- Everything after cart creation is the till's own code: add line (incl. open price), quantity, discounts, customer, promotions, credit, checkout.
+
+`sales.backoffice` is granted to Merchant Admin and Branch Manager by role name.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /sales/orders?channel=pos\|online\|backoffice` | History and `/sales/summary` gain a channel filter |
+| `GET /sales/orders/{id}/detail` | The full sale: header (branch, channel, till, cashier, customer, times); lines with returned quantity, taxable value, effective tax rate and open-price approver; a GST summary by rate with a CGST/SGST split; payments with their corrections; discounts with who applied and approved them; returns; every ledger entry the sale caused (sale, void, returns, payment corrections); and the audit trail (order, lines, returns, corrections). Any signed-in user |
+| `POST /sales/orders/{id}/payments/{payment_id}/correct` `{to_method, to_reference?, reason, approver_code, approver_pin}` | `sales.backoffice` plus a manager's code + PIN (FRD §3 "Bill Modification"). Moves a captured cash, card or UPI payment on a completed sale to another of those methods. The change is kept in `payment_corrections` and `audit_logs`, and a `payment_correction` journal entry reclasses the amount (Dr new method's account, Cr old). Returns the updated detail |
+
+**Effective tax rate.** Each line's rate is computed as tax ÷ taxable value from its own stored figures, snapped to 0.25%, so a later change to a slab never rewrites an old sale. The CGST/SGST split halves each bucket: a counter sale is intra-state.
+
+**Why only payment corrections.** Prices and quantities on a finalized sale are corrected with a return plus a new sale (§3.34), which keeps the GST record of what was invoiced. Voids keep their existing rule (`sales.void`, whole sale, no returns yet).
+
+**Tax slab rule (a latent bug, found while building the fixture).** The cart, the offline POS, GSTR-1/3B and e-invoicing all charge or report every component on a slab, CGST + SGST + IGST + cess. The admin Tax Slabs page, however, displayed `max(CGST+SGST, IGST) + cess`. So a slab entered as a full GST master (9 + 9 with IGST 18) showed as 18% but was charged 36% at the till. The seed slab only worked because its IGST is 0.
+- `POST /tax-slabs` now refuses a slab with both (`400 TAX_SLAB_MIXED`).
+- The admin form validates the same rule and explains it.
+- The list's total shows what is actually charged.
+
+Choosing intra- vs inter-state components by place of supply is a broader GST change, recorded in the roadmap as a decision for later.
+
+**Verified live** (23 checks):
+- **Channel rules:** the mixed slab is refused; a POS user can't sell from the back office (403); a client can't choose another channel (400); the order lands on the Back Office terminal.
+- **Fixture parity:** a fixture cart (2 × 18% items, 3 × 5% items, 5% discount) totals identically to the paisa on the till and in the back office.
+- **Checkout and history:** back-office checkout works with `shifts_required` on; history filters by channel (a bad channel gives 400).
+- **Detail:** two tax buckets that sum to the order's tax, CGST + SGST = tax per rate, discount and payment listed.
+- **Corrections:**
+  - a POS user is refused (403), and so is a correction with no approver (403); a move to credit gives 400 and to the same method gives 409
+  - an approved cash → card correction records the history, posts Dr 1003 / Cr 1001, and shows in the detail's journal and audit trail
+  - a second correction stacks
+- **Branches:** a new branch gets its Back Office terminal.
+
+`e2e/phase14-admin-sales.spec.ts` runs the browser flow:
+- rings up the same cart as a till-side fixture and checks the total to the paisa
+- completes the sale, corrects the payment with a manager's PIN, and partly returns it
+- finds it under the Back office channel
+- checks a POS user is refused
 
 ---
 

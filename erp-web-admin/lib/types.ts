@@ -1175,3 +1175,125 @@ export interface ProductDetail {
   updated_at: string;
   variants: ProductDetailVariant[];
 }
+
+// ---------------------------------------------------------------------
+// Phase 14: back-office sales (erp-core-go internal/sales history.go,
+// detail.go, returns.go). Money stays a string end to end.
+// ---------------------------------------------------------------------
+
+export type SaleChannel = "pos" | "online" | "backoffice";
+
+export interface SaleSummaryRow {
+  order_id: string;
+  order_number: string;
+  status: string;
+  finalized_at: string | null;
+  branch_name: string;
+  terminal_name: string;
+  cashier_name: string;
+  customer_name: string | null;
+  item_count: string;
+  grand_total: string;
+  payment_methods: string[];
+  channel: SaleChannel;
+}
+
+export interface SalesSummary {
+  order_count: number;
+  voided_count: number;
+  refunded_count: number;
+  net_sales: string;
+  discount_total: string;
+  tax_total: string;
+  by_payment_method: { method: string; amount: string; count: number }[];
+}
+
+export interface SaleDetailLine {
+  line_id: string;
+  sku: string;
+  product_name: string;
+  quantity: string;
+  returned_quantity: string;
+  unit_price: string;
+  discount_amount: string;
+  taxable_value: string;
+  tax_rate: string;
+  tax_amount: string;
+  line_total: string;
+  open_price: boolean;
+  price_approved_by: string | null;
+}
+
+export interface SaleDetailPayment {
+  payment_id: string;
+  method: string;
+  amount: string;
+  reference: string;
+  status: string;
+  created_at: string;
+  corrections: { from_method: string; to_method: string; reason: string; performed_by: string; approved_by: string; created_at: string }[];
+}
+
+export interface SaleReturn {
+  return_id: string;
+  return_number: string;
+  refund_method: string;
+  refund_amount: string;
+  restocked: boolean;
+  approved_by: string | null;
+  created_at: string;
+}
+
+export interface SaleDetail {
+  order_id: string;
+  order_number: string;
+  status: string;
+  channel: SaleChannel;
+  branch_id: string;
+  branch_name: string;
+  terminal_name: string;
+  cashier_name: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  created_at: string;
+  finalized_at: string | null;
+  device_created_at: string | null;
+  subtotal: string;
+  discount_total: string;
+  tax_total: string;
+  grand_total: string;
+  credit_amount: string;
+  credit_paid: string;
+  lines: SaleDetailLine[];
+  tax_summary: { rate: string; taxable_value: string; tax_amount: string; cgst: string; sgst: string }[];
+  payments: SaleDetailPayment[];
+  discounts: { type: string; value_percent: string; discount_amount: string; applied_by: string; authorized_by: string | null; reason: string }[];
+  returns: SaleReturn[];
+  journal: { entry_number: string; entry_date: string; source_type: string; description: string; amount: string }[];
+  audit: { entity_type: string; action: string; performed_by: string | null; reason: string; created_at: string }[];
+}
+
+export interface ReturnableOrder {
+  order_id: string;
+  order_number: string;
+  status: string;
+  returnable: boolean;
+  window_open: boolean;
+  requires_approval: boolean;
+  credit_outstanding: string;
+  lines: { line_id: string; product_name: string; sku: string; sold_quantity: string; returned_quantity: string; returnable_quantity: string; unit_refund: string }[];
+}
+
+// The cart as POST /sales/orders and its line endpoints return it.
+export interface CartOrder {
+  order_id: string;
+  order_number: string;
+  status: string;
+  channel: SaleChannel;
+  subtotal: string;
+  discount_total: string;
+  tax_total: string;
+  grand_total: string;
+  lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean }[];
+}
