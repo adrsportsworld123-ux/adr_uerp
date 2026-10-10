@@ -87,6 +87,12 @@ func BranchScopeMiddleware(database *db.DB) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Phase 16: a platform-staff token has no tenant and no business
+			// on a tenant route.
+			if claims.TenantID == "" {
+				writeAuthError(w, "INVALID_TOKEN", "this token isn't for a merchant account")
+				return
+			}
 			key := claims.TenantID + "|" + claims.UserID + "|" + claims.BranchID
 			var scope db.BranchScope
 			if c, hit := scopeCache.Load(key); hit && time.Now().Before(c.(cachedScope).expires) {

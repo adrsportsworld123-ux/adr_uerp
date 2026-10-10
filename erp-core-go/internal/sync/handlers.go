@@ -19,6 +19,7 @@ import (
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/subscriptions"
 )
 
 type Handler struct {
@@ -111,6 +112,13 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 	deviceCreatedAt, err := time.Parse(time.RFC3339, o.DeviceCreatedAt)
 	if err != nil {
 		deviceCreatedAt = time.Now()
+	}
+	// Phase 16: a read-only (expired) merchant's offline sales made before
+	// the expiry are real and still accepted; later ones aren't.
+	if e, ok := subscriptions.FromContext(ctx); ok && !e.AllowsOfflineSale(deviceCreatedAt) {
+		res.Status = "error"
+		res.Error = "SUBSCRIPTION_EXPIRED: this sale was made after the subscription expired; renew it, then sync again"
+		return res
 	}
 
 	var negativeStock bool

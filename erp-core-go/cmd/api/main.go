@@ -25,6 +25,7 @@ import (
 	"erp-core-go/internal/quotations"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
+	"erp-core-go/internal/subscriptions"
 )
 
 func main() {
@@ -108,6 +109,8 @@ func main() {
 	// Phase 10: applies due scheduled price changes. Every minute, so a
 	// change set for 09:00 is live by 09:01 at the latest.
 	go (&pricing.Handler{DB: database, Search: searchClient}).RunScheduledPriceSweeper(ctx, time.Minute)
+	// Phase 16: subscription lifecycle transitions and renewal invoices.
+	go subscriptions.RunSweeper(ctx, database, time.Hour)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

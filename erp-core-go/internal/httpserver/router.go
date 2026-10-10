@@ -33,6 +33,7 @@ import (
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
+	"erp-core-go/internal/subscriptions"
 	"erp-core-go/internal/sync"
 	"erp-core-go/internal/terminals"
 )
@@ -92,6 +93,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		r.Route("/dev", func(dev chi.Router) {
 			dev.Post("/hash-password", hashPassword.ServeHTTP)
 			dev.Post("/set-password", setPassword.ServeHTTP)
+			dev.Post("/set-platform-password", subscriptions.DevSetPlatformPassword(database))
 		})
 	}
 
@@ -106,6 +108,23 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		// single-use code an admin issued — no session exists yet.
 		api.Post("/pos-terminals/pair", terms.Pair)
 
+		// Phase 16: the SaaS console (platform staff, no tenant). A platform
+		// token is refused by every tenant route, and the other way round.
+		plat := &subscriptions.PlatformHandler{DB: database, Issuer: issuer}
+		api.Post("/platform/auth/login", plat.Login)
+		api.Group(func(pr chi.Router) {
+			pr.Use(authn.RequireAuth(issuer))
+			pr.Use(subscriptions.RequirePlatform)
+			pr.Get("/platform/merchants", plat.ListMerchants)
+			pr.Post("/platform/merchants", plat.CreateMerchant)
+			pr.Get("/platform/merchants/{id}", plat.GetMerchant)
+			pr.Patch("/platform/merchants/{id}/subscription", plat.UpdateSubscription)
+			pr.Post("/platform/merchants/{id}/invoices/{invoice_id}/{action}", plat.InvoiceAction)
+			pr.Get("/platform/plans", plat.ListPlans)
+			pr.Patch("/platform/plans/{code}", plat.UpdatePlan)
+			pr.Get("/platform/audit-log", plat.AuditLog)
+		})
+
 		// Authenticated — everything below requires a valid Bearer token,
 		// and every handler inside this group gets its tenant from
 		// authn.FromContext(ctx), never from a client-supplied parameter.
@@ -113,6 +132,15 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Use(authn.RequireAuth(issuer))
 			// Phase 15: own-branch vs all-branches data scope, enforced by RLS.
 			protected.Use(authn.BranchScopeMiddleware(database))
+			// Phase 16: the merchant's plan: read-only once expired, plan
+			// features, report retention (internal/subscriptions).
+			protected.Use(subscriptions.Middleware(database))
+			subH := &subscriptions.Handler{DB: database, Provider: subscriptions.StubProvider{}}
+			protected.Get("/me/entitlements", subH.Entitlements)
+			protected.Get("/plans", subH.Plans)
+			protected.With(authn.RequirePermission(database, "subscription.manage")).Get("/subscription", subH.Get)
+			protected.With(authn.RequirePermission(database, "subscription.manage")).Post("/subscription/change", subH.Change)
+			protected.With(authn.RequirePermission(database, "subscription.manage")).Post("/subscription/invoices/{id}/pay", subH.Pay)
 			protected.Post("/auth/logout", logout.ServeHTTP)
 			// Phase 11: the caller's permission codes (a UI hint — every
 			// gate below still enforces on its own), and "what uses this
@@ -122,9 +150,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 
 			// Phase 12: POS terminal management (migrations/037).
 			protected.Get("/pos-terminals", terms.List)
-			protected.With(authn.RequirePermission(database, "terminal.manage")).
+			protected.With(authn.RequirePermission(database, "terminal.manage"), subscriptions.Limit(database, subscriptions.LimitPOSTerminals)).
 				Post("/pos-terminals", terms.Create)
-			protected.With(authn.RequirePermission(database, "terminal.manage")).
+			protected.With(authn.RequirePermission(database, "terminal.manage"), subscriptions.Limit(database, subscriptions.LimitPOSTerminals)).
 				Patch("/pos-terminals/{id}", terms.Update)
 			protected.With(authn.RequirePermission(database, "terminal.manage")).
 				Post("/pos-terminals/{id}/pairing-code", terms.IssuePairingCode)
@@ -138,9 +166,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/labels/preview", label.PreviewLabels)
 			protected.Post("/labels/print", label.PrintLabels)
 			protected.Get("/products", productList.ListProducts)
-			protected.With(authn.RequirePermission(database, "catalog.manage")).
+			protected.With(authn.RequirePermission(database, "catalog.manage"), subscriptions.Limit(database, subscriptions.LimitProducts)).
 				Post("/products", productList.CreateProduct)
-			protected.With(authn.RequirePermission(database, "catalog.manage")).
+			protected.With(authn.RequirePermission(database, "catalog.manage"), subscriptions.Limit(database, subscriptions.LimitProducts)).
 				Patch("/products/{id}", productList.UpdateProduct)
 			// Product editing: one product's full detail for an edit
 			// screen, variant edits, and adding a variant later.
@@ -195,7 +223,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "search.reindex")).
 				Post("/search/reindex", srch.Reindex)
 
-			protected.Post("/sales/orders", orders.CreateOrder)
+			protected.With(subscriptions.Limit(database, subscriptions.LimitTransactionsPM)).Post("/sales/orders", orders.CreateOrder)
 			// Phase 13: sales history (newest first, paged) and the
 			// terminal/day summary, on the branch's local calendar day.
 			protected.Get("/sales/orders", orders.ListOrders)
@@ -340,9 +368,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/cash-reconciliation", acct.GetCashReconciliation)
 			protected.Get("/cash-reconciliation/history", acct.CashReconciliationHistory)
 
-			protected.Post("/branches", br.CreateBranch)
+			protected.With(subscriptions.Limit(database, subscriptions.LimitBranches)).Post("/branches", br.CreateBranch)
 			protected.Get("/branches", br.ListBranches)
-			protected.Patch("/branches/{id}", br.UpdateBranch)
+			protected.With(subscriptions.Limit(database, subscriptions.LimitBranches)).Patch("/branches/{id}", br.UpdateBranch)
 
 			protected.Post("/branch-transfers", br.CreateTransfer)
 			protected.Get("/branch-transfers", br.ListTransfers)
@@ -540,7 +568,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/quotations/{id}/send", quoH.SendQuotation)
 			protected.Post("/quotations/{id}/accept", quoH.AcceptQuotation)
 			protected.Post("/quotations/{id}/reject", quoH.RejectQuotation)
-			protected.Post("/quotations/{id}/convert", quoH.ConvertQuotation)
+			protected.With(subscriptions.Limit(database, subscriptions.LimitTransactionsPM)).Post("/quotations/{id}/convert", quoH.ConvertQuotation)
 			protected.Delete("/quotations/{id}", quoH.DeleteQuotation)
 			// Phase 10: editing a draft (draft-only; 409 QUOTATION_NOT_DRAFT otherwise).
 			protected.Patch("/quotations/{id}", quoH.UpdateQuotation)
