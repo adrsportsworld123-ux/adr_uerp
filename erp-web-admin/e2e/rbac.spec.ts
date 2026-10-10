@@ -78,6 +78,7 @@ test("UACL: create a custom role, assign permissions, grant/revoke on a user, an
   await test.step("delete the now-unused role", async () => {
     const roleRow = page.getByRole("row", { name: new RegExp(roleName) });
     await roleRow.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete role" }).click(); // Phase 11: confirm step
     // Scoped to the roles table's own rows, not a bare text search — a
     // closed base-ui Select can leave its last-rendered listbox content
     // sitting in the DOM (an exit-animation artifact), and a loose

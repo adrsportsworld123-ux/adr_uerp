@@ -105,6 +105,7 @@ test("wholesale price list: create, set an item price via the UI, and confirm it
   await test.step("deleting the list while a customer is still assigned is refused, through the real UI (found missing during a completeness audit)", async () => {
     await page.reload();
     await page.getByRole("row", { name: new RegExp(listName) }).getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete price list" }).click(); // Phase 11: confirm step
     await expect(page.getByText(/assigned to this price list/i)).toBeVisible();
     // Still there — the refusal didn't silently drop the row.
     await expect(page.getByRole("cell", { name: listName })).toBeVisible();
@@ -115,6 +116,7 @@ test("wholesale price list: create, set an item price via the UI, and confirm it
     await request.patch(`${API_BASE}/customers/${customerId}`, { headers, data: { price_list_id: "" } });
 
     await page.getByRole("row", { name: new RegExp(listName) }).getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete price list" }).click(); // Phase 11: confirm step
     await expect(page.getByText("Price list deleted")).toBeVisible();
     await expect(page.getByRole("cell", { name: listName })).toHaveCount(0);
   });

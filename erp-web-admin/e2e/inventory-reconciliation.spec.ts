@@ -18,9 +18,11 @@ import { test, expect, Page } from "@playwright/test";
 const SEED_VARIANT_LABEL = "SG Cricket Bat";
 
 async function addSeedVariantLine(page: Page) {
-  // Combobox order on this page: Branch, Type, then the variant picker.
-  await page.getByRole("combobox").nth(2).click();
-  await page.getByRole("option", { name: new RegExp(SEED_VARIANT_LABEL) }).click();
+  // Phase 11: the variant picker searches the server instead of loading a
+  // capped list, so the seed bat is found by name however big the catalog.
+  await page.getByRole("button", { name: "Choose a product variant" }).click();
+  await page.getByLabel("Search products").fill(SEED_VARIANT_LABEL);
+  await page.getByRole("option", { name: new RegExp(SEED_VARIANT_LABEL) }).first().click();
   const addButton = page.getByRole("button", { name: "Add line" });
   await expect(addButton).toBeEnabled();
   await addButton.click();
@@ -86,6 +88,10 @@ test("a zero-variance count auto-closes, a variance needs a manager PIN, and his
     // this specific one changed the right thing by the right amount is
     // the live system-quantity re-read in the next step, not this text.
     await expect(page.getByText(/variance value ₹-?\d/)).toBeVisible();
+    // That badge can still be the *previous* result. The form clearing its
+    // lines is what proves this submission finished; without waiting for
+    // it, the next step's re-added line could be wiped by a late reset.
+    await expect(page.getByText("No lines added yet")).toBeVisible();
   });
 
   await test.step("the shortage actually reduced the live system quantity by 3", async () => {
@@ -101,6 +107,10 @@ test("a zero-variance count auto-closes, a variance needs a manager PIN, and his
     await page.fill("#authorizedPin", "1234");
     await page.getByRole("button", { name: "Submit reconciliation" }).click();
     await expect(page.getByText(/variance value ₹-?\d/)).toBeVisible();
+    // That badge can still be the *previous* result. The form clearing its
+    // lines is what proves this submission finished; without waiting for
+    // it, the next step's re-added line could be wiped by a late reset.
+    await expect(page.getByText("No lines added yet")).toBeVisible();
   });
 
   await test.step("the restore actually brought the live system quantity back to its original value", async () => {

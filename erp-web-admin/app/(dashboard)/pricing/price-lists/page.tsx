@@ -8,13 +8,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Product, PriceListSummary, PriceListDetail } from "@/lib/types";
+import { PriceListSummary, PriceListDetail } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AlertModal } from "@/components/ui/dialog";
+import { PageHeader } from "@/components/data/page-header";
+import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
 export default function PriceListsPage() {
   const [lists, setLists] = useState<PriceListSummary[]>([]);
@@ -24,8 +26,9 @@ export default function PriceListsPage() {
 
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<PriceListDetail | null>(null);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [variantId, setVariantId] = useState("");
+  const [variant, setVariant] = useState<VariantOption | null>(null);
+  const variantId = variant?.variantId ?? "";
+  const [deleting, setDeleting] = useState<PriceListSummary | null>(null);
   const [price, setPrice] = useState("");
   const [savingItem, setSavingItem] = useState(false);
 
@@ -33,7 +36,6 @@ export default function PriceListsPage() {
 
   useEffect(() => {
     fetchLists().then((d) => setLists(d.price_lists)).catch((e) => setError(e instanceof ApiError ? e.message : "Could not load price lists"));
-    api.get<{ products: Product[] }>("/api/v1/products?limit=200").then((d) => setProducts(d.products)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -70,7 +72,7 @@ export default function PriceListsPage() {
     setSavingItem(true);
     try {
       await api.put(`/api/v1/pricing/price-lists/${selectedId}/items/${variantId}`, { price: Number(price) });
-      setVariantId("");
+      setVariant(null);
       setPrice("");
       await loadDetail(selectedId);
       loadLists();
@@ -92,6 +94,7 @@ export default function PriceListsPage() {
   }
 
   async function deleteList(id: string) {
+    setDeleting(null);
     try {
       await api.delete(`/api/v1/pricing/price-lists/${id}`);
       toast.success("Price list deleted");
@@ -107,15 +110,12 @@ export default function PriceListsPage() {
     }
   }
 
-  const variantOptions = products.flatMap((p) => p.variants.map((v) => ({ id: v.variant_id, label: `${p.name} (${v.sku})` })));
-
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
-      <h1 className="text-2xl font-semibold">Wholesale Price Lists</h1>
-      <p className="text-sm text-muted-foreground">
-        Assign a customer to a price list (Customers screen) to have their orders and quotations automatically use
-        these prices instead of the plain retail selling price.
-      </p>
+      <PageHeader
+        title="Wholesale Price Lists"
+        description="Assign a customer to a price list (on their Customers page) and their orders and quotations use these prices instead of retail."
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
@@ -150,7 +150,7 @@ export default function PriceListsPage() {
                     <Button variant="outline" onClick={() => loadDetail(l.price_list_id)}>
                       View / edit
                     </Button>
-                    <Button variant="destructive" onClick={() => deleteList(l.price_list_id)}>
+                    <Button variant="destructive" onClick={() => setDeleting(l)}>
                       Delete
                     </Button>
                   </TableCell>
@@ -177,14 +177,7 @@ export default function PriceListsPage() {
             <div className="flex items-end gap-2 flex-wrap">
               <div className="flex flex-col gap-2 w-64">
                 <Label>Product</Label>
-                <Select value={variantId} onValueChange={(v) => setVariantId(v ?? "")} items={Object.fromEntries(variantOptions.map((o) => [o.id, o.label]))}>
-                  <SelectTrigger><SelectValue placeholder="Select a product" /></SelectTrigger>
-                  <SelectContent>
-                    {variantOptions.map((o) => (
-                      <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <ProductPicker value={variant} onChange={setVariant} />
               </div>
               <div className="flex flex-col gap-2 w-36">
                 <Label htmlFor="itemPrice">Price</Label>
@@ -225,6 +218,24 @@ export default function PriceListsPage() {
           </CardContent>
         </Card>
       )}
+      <AlertModal
+        open={!!deleting}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={`Delete price list “${deleting?.name ?? ""}”?`}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => deleting && deleteList(deleting.price_list_id)}>
+              Delete price list
+            </Button>
+          </>
+        }
+      >
+        Its {deleting?.item_count ?? 0} item price{deleting?.item_count === 1 ? "" : "s"} will be removed. Past orders and quotations keep
+        the prices they were billed at. A list that customers are still assigned to can&rsquo;t be deleted.
+      </AlertModal>
     </div>
   );
 }

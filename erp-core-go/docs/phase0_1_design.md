@@ -932,6 +932,8 @@ New error codes: `DUPLICATE_NAME`, `IN_USE`, `INACTIVE_REFERENCE` (409).
 
 Verified live: customers sorted by spend with the correct total; invalid status 400; branches unpaged vs paged; branch GSTIN cleared; blank name and `Mars/Olympus` both 400, `Asia/Dubai` accepted; supplier credit limit set to 0 with GSTIN cleared and payment terms untouched; negative limit and blank name both 400. The same flows are driven through the browser by `e2e/phase11-masters.spec.ts`.
 
+**Part 3:** `GET /hr/employees` follows the list convention: `q` matches name, employee code, email, phone, designation or department; `status` is `all|active|exited` (unknown → 400); `sort` is `name` (default, as before), `code`, `joined` or `created`; `total` is returned. It stays unpaged unless `page`/`limit` is passed, because payroll, RBAC and shifts read the whole list. Verified live: 6 rows unpaged, a newest-first page of 2 with total 6, a designation search, the 400, and a POS user still denied (403 `hr.manage`).
+
 ---
 
 ## 4. What Phase 0 concretely delivers against this design

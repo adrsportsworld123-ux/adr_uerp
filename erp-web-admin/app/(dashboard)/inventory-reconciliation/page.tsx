@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
-import { Branch, InventoryReconciliation, InventoryReconciliationSummary, Product } from "@/lib/types";
+import { Branch, InventoryReconciliation, InventoryReconciliationSummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ProductPicker, VariantOption as PickerOption } from "@/components/data/product-picker";
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -57,6 +58,16 @@ function NewCountSection() {
   const [reconType, setReconType] = useState<"cycle" | "full">("cycle");
   const [date, setDate] = useState(today());
   const [selectedVariant, setSelectedVariant] = useState("");
+  // The picker searches the server (no catalog-size cap); variantOptions
+  // keeps the label/batch flag of every variant picked so far, for lines.
+  const [picked, setPicked] = useState<PickerOption | null>(null);
+  function pickVariant(o: PickerOption) {
+    setPicked(o);
+    setSelectedVariant(o.variantId);
+    setVariantOptions((prev) =>
+      prev.some((x) => x.variantId === o.variantId) ? prev : [...prev, { variantId: o.variantId, label: o.label, trackBatch: o.trackBatch }],
+    );
+  }
   const [counts, setCounts] = useState<Record<string, string>>({}); // variant_id -> counted_qty
   const [systemQty, setSystemQty] = useState<Record<string, string>>({}); // variant_id -> live system on_hand, fetched when a line is added
   // Phase 8: batch-tracked lines only. A count ABOVE system stock needs
@@ -76,22 +87,6 @@ function NewCountSection() {
       .get<{ branches: Branch[] }>("/api/v1/branches")
       .then((d) => setBranches(d.branches))
       .catch(() => {});
-    api
-      // limit=200 (the backend's own cap), not the default 50 — same
-      // pagination fragility already found and fixed on the Pricing page:
-      // as the catalog grows, the seed variant this picker's own e2e test
-      // depends on can sort alphabetically past a smaller page.
-      .get<{ products: Product[] }>("/api/v1/products?limit=200")
-      .then((d) => {
-        const options: VariantOption[] = [];
-        for (const p of d.products) {
-          for (const v of p.variants) {
-            options.push({ variantId: v.variant_id, label: `${p.name} (${v.sku})`, trackBatch: v.track_batch });
-          }
-        }
-        setVariantOptions(options);
-      })
-      .catch(() => {});
   }, []);
 
   async function addLine() {
@@ -104,6 +99,7 @@ function NewCountSection() {
       setSystemQty((prev) => ({ ...prev, [selectedVariant]: "0.000" }));
     }
     setSelectedVariant("");
+    setPicked(null);
   }
 
   function removeLine(variantId: string) {
@@ -215,24 +211,7 @@ function NewCountSection() {
           <div className="flex items-end gap-2">
             <div className="flex flex-col gap-2 w-72">
               <Label>Add a variant to count</Label>
-              <Select
-                value={selectedVariant}
-                onValueChange={(v) => setSelectedVariant(v ?? "")}
-                items={Object.fromEntries(variantOptions.map((o) => [o.variantId, o.label]))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a product variant" />
-                </SelectTrigger>
-                <SelectContent>
-                  {variantOptions
-                    .filter((o) => counts[o.variantId] === undefined)
-                    .map((o) => (
-                      <SelectItem key={o.variantId} value={o.variantId}>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+              <ProductPicker value={picked} onChange={pickVariant} placeholder="Choose a product variant" />
             </div>
             <Button type="button" variant="outline" onClick={addLine} disabled={!selectedVariant}>
               Add line

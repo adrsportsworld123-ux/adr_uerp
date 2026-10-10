@@ -595,7 +595,17 @@ Measured on a mid-range Android tablet (POS) and a mid-range laptop on throttled
 - **Accessibility:** `e2e/phase11-a11y.spec.ts` runs an axe WCAG 2.1 A/AA scan of the kit screens in light and dark, plus a keyboard-only create/edit/deactivate test. The scan found three light-theme status colors below 4.5:1 on their chip backgrounds (green 4.28, amber 4.14, red 4.45). They were darkened to ≥4.7:1 in both clients. Writing the keyboard test also exposed two real gaps, both fixed: no skip link (a keyboard user had to Tab through ~75 sidebar links on every page), and dialogs not returning focus to the control that opened them.
 - **e2e:** 13 Phase 11 tests pass. Full suite: 41 pass, 7 fail. Six are the known environment failures listed below; the seventh, `barcode.spec.ts`, had a timing race in the spec (it read the barcode before Generate had saved), now fixed and passing 3/3.
 
-**Still to do in Phase 11:** Promotions/Coupons, Price Lists, Employees and Roles onto the kit; light/dark screenshot baselines (these need fixed fixture data rather than the accumulating seed DB, or they will flap). Branch deactivation is deliberately not in the UI yet: every branch picker lists all branches, so it would change nothing visible; the rules come with terminal management in Phase 12. Units of measure need a table first, so they move to a later phase.
+- **Remaining masters (part 3):**
+  - Employees: server-paged list, newest first, plus an exit confirmation that says what exiting does (login disabled, irreversible from the UI).
+  - Price Lists: delete now asks first.
+  - Roles & Permissions: permissions grouped by module with "Select all"; an unsaved-change count and a guard when switching roles; delete confirmation; revoke with Undo.
+  - Promotions & Loyalty: a section jump bar.
+- **Product picker:** a shared, server-search `ProductPicker` replaces "load the first 200 products" in Price Lists, Promotions and Inventory Reconciliation. Items past 200 were silently unreachable on a real catalog, and this was the actual cause of the inventory-reconciliation spec failure.
+- **Category picker:** Promotions' category scope now uses a real picker. It used to ask for a pasted category UUID.
+- **Seed PIN and spec race:** restoring the seed manager PIN (`1234` for Arjun, compose seed DB only, via `/dev/hash-password`) let the two PIN-approval specs run for real. That exposed a latent race in `inventory-reconciliation.spec.ts`: it waited on a result badge that could still show the *previous* submission. It now waits for the form to clear, and passed 5/5.
+- **Full suite:** 46 pass, 4 fail. All four are environment-only: `pricing` (copy clash from `9c786bc`), `grocery` and `payment-gateway-reconciliation` (accumulated seed-run data), and `einvoice` (merchant GSTIN wiped by a seed reset).
+
+**Still to do in Phase 11:** light/dark screenshot baselines, which need fixed fixture data rather than the accumulating seed DB or they will flap. Coupon lists load unpaged; fine today, but single-use campaign coupons will need the list convention. Branch deactivation stays out of the UI until Phase 12 defines what an inactive branch may do. Units of measure need a table first.
 
 **e2e environment notes, found while verifying (not caused by Phase 11):**
 
@@ -747,7 +757,7 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | —     | Session expiry handling, GST-inclusive pricing       | M       | Done — both clients return to login on expiry (silent refresh while active); per-product inclusive/exclusive GST pricing with a merchant default, see above |
 | —     | Product editing & status enforcement                 | M       | Done — edit product/variants, add variant, enforce discontinued/inactive at scan, cart and quotations, Products + edit screens, see above |
 | 10    | Pricing & quotation gaps                             | M       | Done — scheduled price changes (incl. bulk), dynamic price rules (happy hours/weekend/seasonal, branch timezone, MRP cap), draft-quotation editing, and quote conversion now bills the quoted price, see above |
-| 11    | Design system foundations, admin list/form kit       | L       | In progress (2026-10-10) — tokens, grouped shell, list/form kit, master lifecycle, dependencies, `/me/permissions`, a11y scan + keyboard test done; Categories/Brands/Tax Slabs/Suppliers/Products/Customers/Branches on the kit; Promotions, Price Lists, Employees, Roles and visual baselines to go, see above |
+| 11    | Design system foundations, admin list/form kit       | L       | Nearly done (2026-10-10) — tokens, shell, kit, master lifecycle, dependencies, `/me/permissions`, a11y + keyboard tests; every planned master screen on the kit; server-search product picker. Open: visual baselines (need fixture data), coupon paging, see above |
 | 12    | POS billing redesign, terminal pairing               | L       | Planned — split POS screen, F-key flow, responsive layouts, offline UI states, `/pos-terminals` + pairing, see above |
 | 13    | New POS flows                                        | XL      | Planned — open price, sales history, returns/refunds, shifts, POS product/label tools, sync queue, see above |
 | 14    | Admin sales, label studio, JV workflow               | L       | Planned — admin sale on the shared checkout path, sales history/refunds, label studio (ESC/POS + ZPL/TSPL + system + PDF), configurable JV approval, see above |

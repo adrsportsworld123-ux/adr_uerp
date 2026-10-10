@@ -158,24 +158,48 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ListEmployees: GET /hr/employees?status=active|exited&branch_id=
+// ListEmployees: GET /hr/employees?status=active|exited&branch_id=&q=&sort=&dir=&page=&limit=
+// Phase 11 list convention (httpx.ListParams), additive: q matches name,
+// employee code, email, phone, designation or department; sort is
+// name (default, as before) | code | joined | created; `total` counts the
+// filtered set. Unpaged unless page/limit is given — payroll and the
+// shift screens read the whole list.
 func (h *Handler) ListEmployees(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
 		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
 		return
 	}
-	status := r.URL.Query().Get("status")
+	p := httpx.ParseListParams(r, map[string]string{
+		"name": "name", "code": "employee_code", "joined": "date_of_joining", "created": "created_at",
+	}, "name")
+	status := p.Status
+	if status == "all" {
+		status = ""
+	}
+	if status != "" && status != "active" && status != "exited" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be all, active, or exited")
+		return
+	}
 	branchID := r.URL.Query().Get("branch_id")
+	limit, offset := p.SQLLimit()
 
 	var employees []employeeResponse
+	total := 0
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT id FROM users
+		where := `
+			FROM users
 			WHERE ($1 = '' OR ($1 = 'active' AND date_of_exit IS NULL) OR ($1 = 'exited' AND date_of_exit IS NOT NULL))
 			  AND ($2 = '' OR branch_id::text = $2)
 			  AND employee_code IS NOT NULL
-			ORDER BY name`, status, branchID)
+			  AND ($3 = '' OR name ILIKE '%' || $3 || '%' OR employee_code ILIKE '%' || $3 || '%'
+			       OR email ILIKE '%' || $3 || '%' OR phone ILIKE '%' || $3 || '%'
+			       OR designation ILIKE '%' || $3 || '%' OR department ILIKE '%' || $3 || '%')`
+		if err := tx.QueryRow(ctx, `SELECT count(*)`+where, status, branchID, p.Q).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT id`+where+` ORDER BY `+p.OrderBy+`, id LIMIT $4 OFFSET $5`,
+			status, branchID, p.Q, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -206,7 +230,7 @@ func (h *Handler) ListEmployees(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not list employees")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"employees": employees})
+	httpx.JSON(w, http.StatusOK, p.Envelope("employees", employees, total))
 }
 
 // GetEmployee: GET /hr/employees/{id}

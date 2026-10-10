@@ -220,3 +220,66 @@ test("Phase 11: customers list filters by type", async ({ page }) => {
   const cells = page.getByRole("cell", { name: "B2C", exact: true });
   await expect(cells).toHaveCount(0);
 });
+
+test("Phase 11: a category-scoped promotion is created from the category picker (no pasted UUID)", async ({ page }) => {
+  const promo = `E2E Cat Promo ${unique}`;
+  await login(page, "meera@acme-sports.test", "9999");
+  await page.goto("/promotions");
+  await page.fill("#promoName", promo);
+  await page.fill("#valuePercent", "5");
+  // Comboboxes in the form, in order: Type, Applies to.
+  await page.getByRole("combobox").nth(1).click();
+  await page.getByRole("option", { name: "One category" }).click();
+  const category = page.locator("#categoryId");
+  const firstReal = await category.locator("option").nth(1).getAttribute("value");
+  expect(firstReal).toBeTruthy();
+  await category.selectOption(firstReal!);
+  await page.click('button[type="submit"]:has-text("Create promotion")');
+  await expect(page.getByText("Promotion created")).toBeVisible();
+  await expect(page.getByRole("row", { name: new RegExp(promo) })).toContainText("category");
+});
+
+test("Phase 11: RBAC groups permissions and guards unsaved ticks when switching roles", async ({ page }) => {
+  const roleA = `E2E Guard A ${unique}`;
+  const roleB = `E2E Guard B ${unique}`;
+  await login(page, "arjun@acme-sports.test", "Passw0rd!");
+  await page.goto("/rbac");
+  for (const r of [roleA, roleB]) {
+    await page.fill("#newRoleName", r);
+    await page.getByRole("button", { name: "Add role" }).click();
+    await expect(page.getByRole("row", { name: new RegExp(r) })).toBeVisible();
+  }
+
+  await page.getByRole("row", { name: new RegExp(roleA) }).click();
+  await expect(page.getByRole("group", { name: "Catalog" })).toBeVisible(); // fieldset per module
+  await page.getByRole("group", { name: "Catalog" }).getByRole("button", { name: "Select all" }).click();
+  await expect(page.getByText(/unsaved change/)).toBeVisible();
+
+  await page.getByRole("row", { name: new RegExp(roleB) }).click();
+  const guard = page.getByRole("alertdialog", { name: "Discard unsaved permission changes?" });
+  await expect(guard).toBeVisible();
+  await guard.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page.getByText(`Permissions for "${roleA}"`)).toBeVisible();
+
+  // Clean up both throwaway roles (nobody holds them).
+  for (const r of [roleA, roleB]) {
+    await page.getByRole("row", { name: new RegExp(r) }).getByRole("button", { name: "Delete" }).click();
+    const confirm = page.getByRole("alertdialog");
+    if (await confirm.getByRole("button", { name: "Discard" }).isVisible().catch(() => false)) {
+      await confirm.getByRole("button", { name: "Discard" }).click();
+    }
+    await page.getByRole("button", { name: "Delete role" }).click();
+    await expect(page.getByRole("row", { name: new RegExp(r) })).toHaveCount(0);
+  }
+});
+
+test("Phase 11: marking an employee exited asks first and explains the effect", async ({ page }) => {
+  await login(page, "admin@adrsw.com", "Idontsay3#");
+  await page.goto("/hr/employees?status=active");
+  await page.getByRole("row", { name: /Ravi Kumar/ }).click();
+  await page.getByRole("button", { name: "Mark as exited" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("login is disabled immediately");
+  await dialog.getByRole("button", { name: "Cancel" }).click(); // never actually exit the seed POS user
+  await expect(page.getByRole("row", { name: /Ravi Kumar/ })).toContainText(/Active/);
+});

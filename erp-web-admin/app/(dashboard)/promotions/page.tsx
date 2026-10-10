@@ -12,22 +12,43 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Coupon, LoyaltyConfig, Product, Promotion, PromotionConfig, VolumeTier } from "@/lib/types";
+import { Coupon, LoyaltyConfig, Promotion, PromotionConfig, VolumeTier } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/data/page-header";
+import { StatusChip } from "@/components/data/status-chip";
+import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function PromotionsPage() {
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Promotions & Loyalty</h1>
-      <PromotionsSection />
-      <CouponsSection />
-      <LoyaltySettingsSection />
+    <div className="flex max-w-4xl flex-col gap-6">
+      <PageHeader title="Promotions & Loyalty" description="Discounts the POS applies automatically, coupon codes, and how loyalty points are earned and redeemed." />
+      {/* Jump bar: all three sections stay on the page (nothing hidden behind
+          tabs), so this is navigation, not state. */}
+      <nav aria-label="Sections" className="sticky top-14 z-20 -mx-1 flex gap-1 rounded-lg border bg-card/95 p-1 backdrop-blur">
+        {[
+          ["#promotions", "Promotions"],
+          ["#coupons", "Coupons"],
+          ["#loyalty", "Loyalty"],
+        ].map(([href, label]) => (
+          <a key={href} href={href} className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+            {label}
+          </a>
+        ))}
+      </nav>
+      <section id="promotions" className="scroll-mt-28">
+        <PromotionsSection />
+      </section>
+      <section id="coupons" className="scroll-mt-28">
+        <CouponsSection />
+      </section>
+      <section id="loyalty" className="scroll-mt-28">
+        <LoyaltySettingsSection />
+      </section>
     </div>
   );
 }
@@ -46,7 +67,6 @@ const PROMO_TYPES = [
 
 function PromotionsSection() {
   const [promotions, setPromotions] = useState<Promotion[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   function load() {
@@ -56,16 +76,6 @@ function PromotionsSection() {
       .catch((e) => setError(e.message));
   }
   useEffect(load, []);
-  useEffect(() => {
-    api
-      // limit=200 (the backend's own cap), not the default 50 — see
-      // inventory-reconciliation/page.tsx's matching comment: a product
-      // picker sourced from the unbounded default page can lose a seed
-      // product off the end as the catalog grows.
-      .get<{ products: Product[] }>("/api/v1/products?limit=200")
-      .then((d) => setProducts(d.products))
-      .catch(() => {}); // best-effort — only used to populate the product picker below
-  }, []);
 
   async function toggleActive(p: Promotion) {
     try {
@@ -83,7 +93,7 @@ function PromotionsSection() {
         <CardTitle className="text-base">Promotions</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        <NewPromotionForm products={products} onCreated={load} />
+        <NewPromotionForm onCreated={load} />
 
         {error && <p className="text-sm text-destructive">{error}</p>}
         <Table>
@@ -108,7 +118,7 @@ function PromotionsSection() {
                 </TableCell>
                 <TableCell className="text-xs">{p.stacking}</TableCell>
                 <TableCell>
-                  <Badge variant={p.active ? "default" : "secondary"}>{p.active ? "active" : "inactive"}</Badge>
+                  <StatusChip status={p.active ? "active" : "inactive"} />
                 </TableCell>
                 <TableCell>
                   <Button size="sm" variant="outline" onClick={() => toggleActive(p)}>
@@ -131,12 +141,20 @@ function PromotionsSection() {
   );
 }
 
-function NewPromotionForm({ products, onCreated }: { products: Product[]; onCreated: () => void }) {
+function NewPromotionForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [promoType, setPromoType] = useState<(typeof PROMO_TYPES)[number]["value"]>("percent");
   const [applicationLevel, setApplicationLevel] = useState<"order" | "product" | "category">("order");
-  const [productId, setProductId] = useState("");
+  const [product, setProduct] = useState<VariantOption | null>(null);
+  const productId = product?.productId ?? "";
   const [categoryId, setCategoryId] = useState("");
+  const [categories, setCategories] = useState<{ category_id: string; path: string }[]>([]);
+  useEffect(() => {
+    api
+      .get<{ categories: { category_id: string; path: string }[] }>("/api/v1/categories?status=active&sort=path")
+      .then((d) => setCategories(d.categories))
+      .catch(() => setCategories([]));
+  }, []);
   const [targetSegment, setTargetSegment] = useState<string>("");
   const [stacking, setStacking] = useState<"exclusive" | "stackable">("exclusive");
   const [error, setError] = useState<string | null>(null);
@@ -270,29 +288,27 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
         {applicationLevel === "product" && (
           <div className="flex flex-col gap-2">
             <Label>Product</Label>
-            <Select
-              value={productId}
-              onValueChange={(v) => setProductId(v ?? "")}
-              items={Object.fromEntries(products.map((p) => [p.product_id, p.name]))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select a product" />
-              </SelectTrigger>
-              <SelectContent>
-                {products.map((p) => (
-                  <SelectItem key={p.product_id} value={p.product_id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <ProductPicker value={product} onChange={setProduct} />
           </div>
         )}
         {applicationLevel === "category" && (
           <div className="flex flex-col gap-2">
-            <Label htmlFor="categoryId">Category ID</Label>
-            <Input id="categoryId" required value={categoryId} onChange={(e) => setCategoryId(e.target.value)} placeholder="UUID" />
-            <p className="text-xs text-muted-foreground">No category picker yet — same gap as Party Ledger&apos;s customer field.</p>
+            <Label htmlFor="categoryId">Category</Label>
+            <select
+              id="categoryId"
+              required
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+              className="h-9 rounded-lg border bg-card px-2 text-sm"
+            >
+              <option value="">Select a category</option>
+              {categories.map((c) => (
+                <option key={c.category_id} value={c.category_id}>
+                  {c.path.replace(/^\//, "").replace(/\//g, " › ")}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">Applies to every product in this category and its sub-categories.</p>
           </div>
         )}
         <div className="flex flex-col gap-2">
@@ -620,7 +636,7 @@ function CouponsSection() {
                   {c.usage_limit_total ? ` / ${c.usage_limit_total}` : ""}
                 </TableCell>
                 <TableCell>
-                  <Badge variant={c.active ? "default" : "secondary"}>{c.active ? "active" : "inactive"}</Badge>
+                  <StatusChip status={c.active ? "active" : "inactive"} />
                 </TableCell>
                 <TableCell>
                   <Button size="sm" variant="outline" onClick={() => toggleActive(c)}>

@@ -18,6 +18,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AlertModal } from "@/components/ui/dialog";
+import { PageHeader } from "@/components/data/page-header";
+
+// Permission codes are "<module>.<action>"; grouping by module turns a
+// flat list of 25+ codes into something an admin can scan.
+function groupPermissions(perms: RBACPermission[]) {
+  const groups = new Map<string, RBACPermission[]>();
+  for (const p of perms) {
+    const mod = p.code.split(".")[0];
+    groups.set(mod, [...(groups.get(mod) ?? []), p]);
+  }
+  return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+}
+
+function moduleLabel(mod: string) {
+  const s = mod.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
 export default function RBACPage() {
   const [roles, setRoles] = useState<RBACRole[]>([]);
@@ -28,6 +46,8 @@ export default function RBACPage() {
   const [newRoleName, setNewRoleName] = useState("");
   const [selectedRole, setSelectedRole] = useState<RBACRole | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [deletingRole, setDeletingRole] = useState<RBACRole | null>(null);
+  const [pendingRole, setPendingRole] = useState<RBACRole | null>(null);
 
   const [assignEmployeeId, setAssignEmployeeId] = useState("");
   const [assignRoleId, setAssignRoleId] = useState("");
@@ -53,6 +73,39 @@ export default function RBACPage() {
       load();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not create role");
+    }
+  }
+
+  const savedIds = new Set(selectedRole ? permissions.filter((p) => selectedRole.permission_codes.includes(p.code)).map((p) => p.id) : []);
+  const changedCount =
+    Array.from(checkedIds).filter((id) => !savedIds.has(id)).length + Array.from(savedIds).filter((id) => !checkedIds.has(id)).length;
+
+  // Switching to another role with unsaved ticks would silently drop them.
+  function requestRole(role: RBACRole) {
+    if (selectedRole && role.id !== selectedRole.id && changedCount > 0) setPendingRole(role);
+    else selectRole(role);
+  }
+
+  function toggleGroup(ids: string[], on: boolean) {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  async function deleteRole(role: RBACRole) {
+    setDeletingRole(null);
+    try {
+      await api.delete(`/api/v1/rbac/roles/${role.id}`);
+      toast.success(`Deleted role “${role.name}”`);
+      if (selectedRole?.id === role.id) setSelectedRole(null);
+      load();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not delete role");
     }
   }
 
@@ -99,7 +152,22 @@ export default function RBACPage() {
   async function revokeRole(employeeId: string, roleId: string) {
     try {
       await api.delete(`/api/v1/rbac/users/${employeeId}/roles/${roleId}`);
-      toast.success("Role revoked");
+      const roleName = roles.find((r) => r.id === roleId)?.name ?? "Role";
+      // Revoking is one click, so make it one click to put back.
+      toast.success(`${roleName} revoked`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            api
+              .post(`/api/v1/rbac/users/${employeeId}/roles`, { role_id: roleId })
+              .then(() => {
+                toast.success(`${roleName} restored`);
+                load();
+              })
+              .catch((e) => toast.error(e instanceof ApiError ? e.message : "Could not restore role"));
+          },
+        },
+      });
       load();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not revoke role");
@@ -112,7 +180,10 @@ export default function RBACPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
-      <h1 className="text-2xl font-semibold">User Access Control (Roles &amp; Permissions)</h1>
+      <PageHeader
+        title="Roles & Permissions"
+        description="Who can do what. Every permission is enforced by the server; this screen changes what each role is granted."
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
@@ -138,7 +209,11 @@ export default function RBACPage() {
             </TableHeader>
             <TableBody>
               {roles.map((role) => (
-                <TableRow key={role.id} className="cursor-pointer" onClick={() => selectRole(role)}>
+                <TableRow
+                  key={role.id}
+                  className={`cursor-pointer ${selectedRole?.id === role.id ? "bg-primary-soft" : ""}`}
+                  onClick={() => requestRole(role)}
+                >
                   <TableCell>{role.name}</TableCell>
                   <TableCell className="text-xs">{role.permission_codes.length} permission(s)</TableCell>
                   <TableCell>{role.user_count}</TableCell>
@@ -147,16 +222,14 @@ export default function RBACPage() {
                       size="sm"
                       variant="destructive"
                       disabled={role.user_count > 0}
-                      onClick={async (e) => {
+                      title={
+                        role.user_count > 0
+                          ? `Assigned to ${role.user_count} user${role.user_count === 1 ? "" : "s"} — revoke it from them first`
+                          : "Delete role"
+                      }
+                      onClick={(e) => {
                         e.stopPropagation();
-                        try {
-                          await api.delete(`/api/v1/rbac/roles/${role.id}`);
-                          toast.success("Role deleted");
-                          if (selectedRole?.id === role.id) setSelectedRole(null);
-                          load();
-                        } catch (err) {
-                          toast.error(err instanceof ApiError ? err.message : "Could not delete role");
-                        }
+                        setDeletingRole(role);
                       }}
                     >
                       Delete
@@ -175,24 +248,49 @@ export default function RBACPage() {
             <CardTitle className="text-base">Permissions for &quot;{selectedRole.name}&quot;</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-2 max-h-96 overflow-auto">
-              {permissions.map((p) => (
-                <label key={p.id} className="flex items-start gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={checkedIds.has(p.id)}
-                    onChange={() => togglePermission(p.id)}
-                  />
-                  <span>
-                    <span className="font-mono text-xs">{p.code}</span>
-                    <br />
-                    <span className="text-muted-foreground text-xs">{p.description}</span>
-                  </span>
-                </label>
-              ))}
+            <div className="flex max-h-[28rem] flex-col gap-4 overflow-auto pr-1">
+              {groupPermissions(permissions).map(([mod, perms]) => {
+                const ids = perms.map((p) => p.id);
+                const allOn = ids.every((id) => checkedIds.has(id));
+                return (
+                  <fieldset key={mod} className="rounded-lg border p-3">
+                    <legend className="px-1 text-sm font-semibold">{moduleLabel(mod)}</legend>
+                    <div className="mb-2 flex justify-end">
+                      <button type="button" className="text-xs text-primary hover:underline" onClick={() => toggleGroup(ids, !allOn)}>
+                        {allOn ? "Clear all" : "Select all"}
+                      </button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {perms.map((p) => (
+                        <label key={p.id} className="flex items-start gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            className="mt-1 accent-[var(--primary)]"
+                            checked={checkedIds.has(p.id)}
+                            onChange={() => togglePermission(p.id)}
+                          />
+                          <span>
+                            <span className="font-mono text-xs">{p.code}</span>
+                            <br />
+                            <span className="text-xs text-muted-foreground">{p.description}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                );
+              })}
             </div>
-            <Button onClick={savePermissions} className="w-fit">Save permissions</Button>
+            <div className="flex items-center gap-3">
+              <Button onClick={savePermissions} disabled={changedCount === 0}>
+                Save permissions
+              </Button>
+              {changedCount > 0 && (
+                <span className="text-sm text-warn">
+                  {changedCount} unsaved change{changedCount === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -266,6 +364,46 @@ export default function RBACPage() {
           </Table>
         </CardContent>
       </Card>
+      <AlertModal
+        open={!!deletingRole}
+        onOpenChange={(o) => !o && setDeletingRole(null)}
+        title={`Delete role “${deletingRole?.name ?? ""}”?`}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setDeletingRole(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => deletingRole && deleteRole(deletingRole)}>
+              Delete role
+            </Button>
+          </>
+        }
+      >
+        No one holds this role, so no one loses access. Its permission set is removed and can&rsquo;t be recovered.
+      </AlertModal>
+      <AlertModal
+        open={!!pendingRole}
+        onOpenChange={(o) => !o && setPendingRole(null)}
+        title="Discard unsaved permission changes?"
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setPendingRole(null)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingRole) selectRole(pendingRole);
+                setPendingRole(null);
+              }}
+            >
+              Discard
+            </Button>
+          </>
+        }
+      >
+        You have {changedCount} unsaved change{changedCount === 1 ? "" : "s"} to &ldquo;{selectedRole?.name}&rdquo;.
+      </AlertModal>
     </div>
   );
 }

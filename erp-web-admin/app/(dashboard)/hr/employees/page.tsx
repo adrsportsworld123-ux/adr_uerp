@@ -7,7 +7,7 @@
 // migrations/023_hr_payroll.sql's header comment); this page is
 // therefore also, incidentally, the first UI anywhere in this app that
 // can add a staff login.
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Employee, Shift, Branch, SalaryStructure } from "@/lib/types";
@@ -16,7 +16,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { AlertModal } from "@/components/ui/dialog";
+import { Column, DataTable } from "@/components/data/data-table";
+import { PageHeader } from "@/components/data/page-header";
+import { StatusChip } from "@/components/data/status-chip";
+import { useListState } from "@/components/data/use-list-state";
+import { useServerList } from "@/components/data/use-server-list";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface Role {
@@ -24,12 +29,28 @@ interface Role {
   name: string;
 }
 
-export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
+const columns: Column<Employee>[] = [
+  { key: "name", header: "Name", sort: "name", cell: (e) => <span className="font-medium">{e.name}</span> },
+  { key: "code", header: "Code", sort: "code", cell: (e) => <span className="font-mono text-xs">{e.employee_code}</span> },
+  { key: "designation", header: "Designation", cell: (e) => e.designation || "—" },
+  { key: "department", header: "Department", cell: (e) => e.department || "—" },
+  { key: "roles", header: "Roles", cell: (e) => e.roles.join(", ") || "—" },
+  { key: "joined", header: "Joined", sort: "joined", cell: (e) => e.date_of_joining || "—" },
+  {
+    key: "status",
+    header: "Status",
+    cell: (e) => (e.date_of_exit ? <StatusChip status="exited" tone="muted" label={`Exited ${e.date_of_exit}`} /> : <StatusChip status="active" />),
+  },
+];
+
+function EmployeesView() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  // Newest first by default, so someone you just added is at the top.
+  const { state, update, apiQuery, activeFilterCount } = useListState({ sort: "created", dir: "desc", status: "all" });
+  const list = useServerList<Employee>("/api/v1/hr/employees", "employees", apiQuery);
+  const [confirmExit, setConfirmExit] = useState(false);
 
   const [name, setName] = useState("");
   const [employeeCode, setEmployeeCode] = useState("");
@@ -49,19 +70,15 @@ export default function EmployeesPage() {
   const [newSpecial, setNewSpecial] = useState("");
   const [newEffectiveFrom, setNewEffectiveFrom] = useState("");
 
+  const reloadList = list.reload;
   const load = useCallback(() => {
-    api
-      .get<{ employees: Employee[] }>("/api/v1/hr/employees")
-      .then((d) => {
-        setEmployees(d.employees);
-        setError(null);
-      })
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load employees"));
+    reloadList();
+  }, [reloadList]);
+  useEffect(() => {
     api.get<{ roles: Role[] }>("/api/v1/hr/roles").then((d) => setRoles(d.roles)).catch(() => {});
     api.get<{ shifts: Shift[] }>("/api/v1/hr/shifts").then((d) => setShifts(d.shifts)).catch(() => {});
     api.get<{ branches: Branch[] }>("/api/v1/branches").then((d) => setBranches(d.branches)).catch(() => {});
   }, []);
-  useEffect(load, [load]);
 
   async function createEmployee() {
     try {
@@ -113,6 +130,7 @@ export default function EmployeesPage() {
 
   async function markExited() {
     if (!selected) return;
+    setConfirmExit(false);
     try {
       const today = new Date().toISOString().slice(0, 10);
       const updated = await api.patch<Employee>(`/api/v1/hr/employees/${selected.id}`, { date_of_exit: today });
@@ -146,9 +164,8 @@ export default function EmployeesPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl">
-      <h1 className="text-2xl font-semibold">Employees</h1>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+    <div className="flex flex-col gap-6">
+      <PageHeader title="Employees" description="Staff records and logins. Click a row to manage shift, salary structure and exit." />
 
       <Card>
         <CardHeader>
@@ -213,36 +230,33 @@ export default function EmployeesPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="pt-6">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Designation</TableHead>
-                <TableHead>Department</TableHead>
-                <TableHead>Roles</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {employees.map((e) => (
-                <TableRow key={e.id} className="cursor-pointer" onClick={() => selectEmployee(e)}>
-                  <TableCell>{e.name}</TableCell>
-                  <TableCell className="font-mono text-xs">{e.employee_code}</TableCell>
-                  <TableCell>{e.designation || "—"}</TableCell>
-                  <TableCell>{e.department || "—"}</TableCell>
-                  <TableCell>{e.roles.join(", ") || "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant={e.date_of_exit ? "outline" : "default"}>{e.date_of_exit ? "exited" : "active"}</Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <DataTable<Employee>
+        columns={columns}
+        rows={list.rows}
+        total={list.total}
+        loading={list.loading}
+        error={list.error}
+        onRetry={list.reload}
+        state={state}
+        update={(p) => {
+          list.setLoading(true);
+          update(p);
+        }}
+        rowKey={(e) => e.id}
+        searchPlaceholder="Name, code, email, phone, designation"
+        searchLabel="Search employees"
+        activeFilterCount={activeFilterCount}
+        onClearFilters={() => update({ q: "", status: "all" })}
+        filters={
+          <select aria-label="Status" value={state.status || "all"} onChange={(e) => update({ status: e.target.value })} className="h-9 rounded-lg border bg-card px-2 text-sm">
+            <option value="all">All employees</option>
+            <option value="active">Active</option>
+            <option value="exited">Exited</option>
+          </select>
+        }
+        empty={{ title: "No employees yet", body: "Add staff above to give them a login and include them in payroll." }}
+        onRowClick={selectEmployee}
+      />
 
       {selected && (
         <Card>
@@ -263,7 +277,7 @@ export default function EmployeesPage() {
                 </Select>
               </div>
               {!selected.date_of_exit && (
-                <Button variant="destructive" onClick={markExited}>Mark as exited</Button>
+                <Button variant="destructive" onClick={() => setConfirmExit(true)}>Mark as exited</Button>
               )}
             </div>
 
@@ -320,6 +334,32 @@ export default function EmployeesPage() {
           </CardContent>
         </Card>
       )}
+      <AlertModal
+        open={confirmExit}
+        onOpenChange={setConfirmExit}
+        title={`Mark ${selected?.name ?? "this employee"} as exited today?`}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setConfirmExit(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={markExited}>
+              Mark as exited
+            </Button>
+          </>
+        }
+      >
+        Their login is disabled immediately. Payroll still covers days up to today, and their records stay. This can&rsquo;t be
+        undone from this screen.
+      </AlertModal>
     </div>
+  );
+}
+
+export default function EmployeesPage() {
+  return (
+    <Suspense>
+      <EmployeesView />
+    </Suspense>
   );
 }
