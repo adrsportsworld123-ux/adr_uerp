@@ -40,6 +40,35 @@ class PendingOrderForSync {
       this.deviceCreatedAt, this.lines, this.payments);
 }
 
+/// One row of the POS sync queue screen.
+class SyncQueueItem {
+  final String id;
+  final String orderNumber;
+  final String createdAt;
+  final double grandTotal;
+  final double itemCount;
+  final bool synced;
+  final String? syncError;
+  final String? syncedAt;
+  final bool needsReview;
+  final String? serverOrderId;
+
+  SyncQueueItem({
+    required this.id,
+    required this.orderNumber,
+    required this.createdAt,
+    required this.grandTotal,
+    required this.itemCount,
+    required this.synced,
+    this.syncError,
+    this.syncedAt,
+    this.needsReview = false,
+    this.serverOrderId,
+  });
+
+  String get state => synced ? (needsReview ? 'needs_review' : 'synced') : (syncError != null ? 'failed' : 'queued');
+}
+
 class QueuedSale {
   final String id;
   final String orderNumber;
@@ -273,10 +302,48 @@ class OfflineStore {
     return result;
   }
 
-  Future<void> markSynced(String pendingOrderId, String serverOrderId) async {
+  /// [needsReview]: the server accepted the sale but it oversold stock
+  /// (NEGATIVE_STOCK), so it waits in the back office's Stock Review.
+  Future<void> markSynced(String pendingOrderId, String serverOrderId, {bool needsReview = false}) async {
     final db = await LocalDb.instance.db;
-    await db.update('pending_orders', {'status': 'synced', 'synced_order_id': serverOrderId},
-        where: 'id = ?', whereArgs: [pendingOrderId]);
+    await db.update(
+        'pending_orders',
+        {
+          'status': 'synced',
+          'synced_order_id': serverOrderId,
+          'sync_error': null,
+          'synced_at': DateTime.now().toUtc().toIso8601String(),
+          'needs_review': needsReview ? 1 : 0,
+        },
+        where: 'id = ?',
+        whereArgs: [pendingOrderId]);
+  }
+
+  /// Phase 13 sync queue: everything waiting to sync (failed ones carry
+  /// their error), then the most recent synced sales, newest first.
+  Future<List<SyncQueueItem>> listSyncQueue({int syncedLimit = 30}) async {
+    final db = await LocalDb.instance.db;
+    const cols = '''
+      o.id, o.device_created_at, o.grand_total, o.sync_error, o.status, o.synced_at, o.needs_review, o.synced_order_id,
+      (SELECT COALESCE(SUM(quantity), 0) FROM pending_order_lines l WHERE l.pending_order_id = o.id) AS items''';
+    final pending = await db.rawQuery("SELECT $cols FROM pending_orders o WHERE o.status = 'pending_sync' ORDER BY o.device_created_at DESC");
+    final synced = await db.rawQuery(
+        "SELECT $cols FROM pending_orders o WHERE o.status = 'synced' ORDER BY COALESCE(o.synced_at, o.device_created_at) DESC LIMIT ?",
+        [syncedLimit]);
+    return [...pending, ...synced]
+        .map((r) => SyncQueueItem(
+              id: r['id'] as String,
+              orderNumber: 'OFFLINE-${(r['id'] as String).substring(0, 8)}',
+              createdAt: r['device_created_at'] as String,
+              grandTotal: ((r['grand_total'] as num?) ?? 0).toDouble(),
+              itemCount: ((r['items'] as num?) ?? 0).toDouble(),
+              synced: r['status'] == 'synced',
+              syncError: r['sync_error'] as String?,
+              syncedAt: r['synced_at'] as String?,
+              needsReview: (r['needs_review'] as int? ?? 0) == 1,
+              serverOrderId: r['synced_order_id'] as String?,
+            ))
+        .toList();
   }
 
   Future<void> markSyncFailed(String pendingOrderId, String error) async {

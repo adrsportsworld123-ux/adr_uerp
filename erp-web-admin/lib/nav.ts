@@ -77,6 +77,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/inventory/expiring-batches", label: "Expiring Batches" },
       { href: "/transfers", label: "Branch Transfers", match: ["/transfers/"] },
       { href: "/inventory-reconciliation", label: "Inventory Reconciliation" },
+      { href: "/inventory/review", label: "Stock Review" },
     ],
   },
   {

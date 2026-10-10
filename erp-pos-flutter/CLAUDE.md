@@ -134,6 +134,16 @@ It also reopens the keypad after a failed approval PIN. Offline, the device enfo
 
 The status bar's shift chip opens it. `AppSession.refreshShift()` loads the open shift and `shifts_required`. When shifts are required and none is open, `PosScreen` starts on the shift screen. Shifts are online-only; offline selling is never blocked.
 
+**Sync queue (Phase 13).** `lib/screens/sync_queue_screen.dart` (menu → Sync queue) shows the device's offline sales:
+- waiting to sync
+- failed, with the server's reason
+- synced
+- needs review, for sales the server accepted but that oversold stock (`negative_stock`)
+
+It also lists the server's open review items for this till. Local DB v4 records `synced_at` and `needs_review`.
+
+Live tests need seed stock and seed credentials. After a full admin e2e run, restore the dev passwords, and if needed Arjun's PIN `1234`, and top up the seed bat (`99999999-…`) with an inventory adjustment.
+
 **Known gap, still real:** `GET /sales/orders/{id}` doesn't yet return
 line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second

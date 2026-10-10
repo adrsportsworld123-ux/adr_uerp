@@ -27,7 +27,9 @@ class LocalDb {
       // a GST-inclusive product exactly like the server would.
       // v3 (erp-core-go migrations/039): open-price range on the cached
       // catalog, and pending_order_lines.open_price for a typed price.
-      version: 3,
+      // v4 (Phase 13 sync queue): when each sale synced, and whether the
+      // server flagged it for review (NEGATIVE_STOCK).
+      version: 4,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
@@ -45,6 +47,10 @@ class LocalDb {
           await db.execute('ALTER TABLE pending_order_lines ADD COLUMN open_price INTEGER NOT NULL DEFAULT 0');
           // Same reason as v2: re-pull once so cached rows get the range.
           await db.delete('sync_meta', where: 'key = ?', whereArgs: ['last_pull_at']);
+        }
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE pending_orders ADD COLUMN synced_at TEXT');
+          await db.execute('ALTER TABLE pending_orders ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0');
         }
       },
       onCreate: (db, version) async {
@@ -95,7 +101,9 @@ class LocalDb {
             tax_total REAL NOT NULL DEFAULT 0,
             grand_total REAL NOT NULL DEFAULT 0,
             synced_order_id TEXT,
-            sync_error TEXT
+            sync_error TEXT,
+            synced_at TEXT,
+            needs_review INTEGER NOT NULL DEFAULT 0
           )
         ''');
         await db.execute('''

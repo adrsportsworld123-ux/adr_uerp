@@ -17,6 +17,7 @@ const SCREENS = [
   "/catalog/tax-slabs",
   "/terminals",
   "/sales-settings",
+  "/inventory/review",
 ];
 
 async function login(page: Page) {

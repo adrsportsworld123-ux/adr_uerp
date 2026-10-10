@@ -280,7 +280,7 @@ class AppSession extends ChangeNotifier {
         final r = results[i] as Map<String, dynamic>;
         final local = pending[i];
         if (r['status'] == 'ok' || r['status'] == 'duplicate') {
-          await _offline.markSynced(local.id, r['order_id'] as String);
+          await _offline.markSynced(local.id, r['order_id'] as String, needsReview: r['negative_stock'] == true);
         } else {
           await _offline.markSyncFailed(local.id, r['error'] as String? ?? 'unknown error');
         }
@@ -877,6 +877,23 @@ class AppSession extends ChangeNotifier {
   // ---------------------------------------------------------------------
 
   Future<List<QueuedSale>> queuedSales() => _offline.listQueuedSales();
+
+  Future<List<SyncQueueItem>> syncQueue() => _offline.listSyncQueue();
+
+  /// The server's open review items for this till (oversold offline
+  /// sales); empty offline.
+  Future<List<StockReviewItem>> openReviewItems() async {
+    if (offlineMode) return [];
+    try {
+      return await api.listStockReview(terminalId: posTerminalId);
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        offlineMode = true;
+        notifyListeners();
+      }
+      return [];
+    }
+  }
 
   /// Runs a live-only call; a network failure flips the terminal into
   /// offline mode (as every other live call does) and rethrows.

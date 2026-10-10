@@ -16,6 +16,7 @@ import 'printer_settings_screen.dart';
 import 'product_search_screen.dart';
 import 'receipt_screen.dart';
 import 'shift_screen.dart';
+import 'sync_queue_screen.dart';
 
 part 'pos/cart_panel.dart';
 part 'pos/dialogs.dart';
@@ -344,6 +345,9 @@ class _PosScreenState extends State<PosScreen> {
         _refocusScan();
       case _MenuAction.syncNow:
         await _sync();
+      case _MenuAction.syncQueue:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const SyncQueueScreen())));
+        _refocusScan();
       case _MenuAction.printer:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrinterSettingsScreen()));
         _refocusScan();

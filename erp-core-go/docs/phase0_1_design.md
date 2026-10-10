@@ -177,6 +177,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `SHIFTS_IN_USE` | 409 | `POST /cash-reconciliation` | The branch ran shifts on that date; each drawer was counted at shift close (§3.36) |
 | `INSUFFICIENT_CASH` | 409 | `POST /pos-shifts/{id}/cash-movements` | A drop or paid-out larger than the drawer's expected cash (§3.36) |
 | `CASH_MOVEMENT_NOT_APPROVED` | 403 | `POST /pos-shifts/{id}/cash-movements` | A paid-out without a valid Branch Manager/Merchant Admin code + PIN (§3.36) |
+| `ALREADY_RESOLVED` | 409 | `POST /inventory/review/{id}/resolve` | The review item was already resolved (§3.37) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -1146,6 +1147,40 @@ The Z report also has the count, the variance, the reason and the approver. It i
 The returns (32) and open-price (28) checks were re-run green.
 
 New error codes: `SHIFT_ALREADY_OPEN`, `SHIFT_CLOSED`, `SHIFT_NOT_OPEN`, `DAY_ALREADY_RECONCILED`, `SHIFTS_IN_USE`, `INSUFFICIENT_CASH` (409), `CASH_MOVEMENT_NOT_APPROVED` (403); `TERMINAL_UNAVAILABLE` widened.
+
+### 3.37 Phase 13: sync queue and Stock Review (`internal/inventory/stock_review.go`, `internal/sync/handlers.go`, `migrations/041_stock_review.sql`, 2026-10-10)
+
+§3.5's rule stands: an offline sale already happened, so `POST /sync/push` never rejects it, and stock may go negative. Until now the only trace was an `audit_logs` line. Now each oversold line opens a `stock_review_items` row recording:
+- the branch, variant, order and till
+- the quantity sold
+- `on_hand_after` (negative)
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /inventory/review?status=open\|resolved\|all&q=&branch_id=&terminal_id=&page=&limit=` | Newest first, paged. `q` matches product name, SKU or order number. Each item carries stock now beside stock after the sale. `open_count` gives the open total for the same branch/till, for a badge. Any signed-in user, so a till can list its own items |
+| `POST /inventory/review/{id}/resolve` `{resolution}` | `inventory.adjust`. Records what was done (a count, an adjustment, a mis-scan) and is audited. It deliberately doesn't change stock: fixing the quantity is a normal adjustment or inventory count. `409 ALREADY_RESOLVED` |
+
+**Sync push result fix.** A push that failed and rolled back used to still report the `order_id` of the rolled-back order, and `negative_stock: true` when its lines had gone negative before the failure. A failed result now carries neither.
+
+**POS.** The Sync queue (menu → Sync queue) shows:
+- sales waiting to sync, and failed ones with the server's reason (they retry on every sync)
+- recently synced sales
+- the server's open review items for this till
+
+The local DB is now v4, adding `synced_at` and `needs_review` on `pending_orders`, set from the push result's `negative_stock`.
+
+**Admin.** Inventory → Stock Review lists the items (open by default; search; status filter) and resolves them with a note.
+
+**Verified live** (14 checks, using a throwaway product with no stock, so seed stock is untouched):
+- **Opening an item:** a cashier can read the list; an oversold push is accepted and flagged; the item opens with product, order, till, and stock after and now.
+- **Resolving:**
+  - a cashier is refused (403), and a blank note is refused (400)
+  - an adjustment fixes the stock, then the admin resolves, with `on_hand_now` back at 0
+  - resolving twice gives 409, the item appears in the resolved list, and the open count drops back
+- **Later pushes:** another oversell opens a new item; an in-stock push isn't flagged.
+- **Validation:** a bad status gives 400.
+
+`e2e/phase13-stock-review.spec.ts` covers the admin flow and a POS user's read-only view.
 
 ---
 

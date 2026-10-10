@@ -720,6 +720,37 @@ class ReturnResult {
       );
 }
 
+/// An oversold offline sale line waiting for review (GET /inventory/review).
+class StockReviewItem {
+  final String itemId;
+  final String productName;
+  final String sku;
+  final String orderNumber;
+  final String quantity;
+  final String onHandNow;
+  final String createdAt;
+
+  StockReviewItem({
+    required this.itemId,
+    required this.productName,
+    required this.sku,
+    required this.orderNumber,
+    required this.quantity,
+    required this.onHandNow,
+    required this.createdAt,
+  });
+
+  factory StockReviewItem.fromJson(Map<String, dynamic> j) => StockReviewItem(
+        itemId: j['item_id'] as String,
+        productName: j['product_name'] as String,
+        sku: j['sku'] as String,
+        orderNumber: j['order_number'] as String,
+        quantity: j['quantity'] as String,
+        onHandNow: j['on_hand_now'] as String,
+        createdAt: j['created_at'] as String,
+      );
+}
+
 /// One cash movement within a shift (float in, drop, paid in, paid out).
 class CashMovement {
   final String kind;
@@ -1397,6 +1428,17 @@ class ApiClient {
       }),
     );
     return ReturnResult.fromJson(_decode(resp));
+  }
+
+  /// GET /inventory/review — open oversold-offline items (Phase 13).
+  Future<List<StockReviewItem>> listStockReview({String? terminalId, String status = 'open'}) async {
+    final uri = Uri.parse('$baseUrl/api/v1/inventory/review').replace(queryParameters: {
+      'status': status,
+      if (terminalId != null) 'terminal_id': terminalId,
+      'limit': '100',
+    });
+    final body = _decode(await _http.get(uri, headers: _authHeaders));
+    return (body['items'] as List<dynamic>).map((e) => StockReviewItem.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   // ------------------------------------------------------- Phase 13 shifts

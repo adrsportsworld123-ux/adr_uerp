@@ -152,9 +152,19 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 				return err
 			}
 
-			went, err := applySyncSale(ctx, tx, o.BranchID, l.VariantID, l.Quantity, orderID, claims.UserID)
+			went, onHand, err := applySyncSale(ctx, tx, o.BranchID, l.VariantID, l.Quantity, orderID, claims.UserID)
 			if err != nil {
 				return err
+			}
+			if went {
+				// Phase 13 (migrations/041): the oversell becomes a review
+				// item someone resolves, not just an audit line.
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO stock_review_items (merchant_id, branch_id, variant_id, sales_order_id, pos_terminal_id, quantity, on_hand_after)
+					VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, NULLIF($4, '')::uuid, $5, $6)`,
+					o.BranchID, l.VariantID, orderID, o.POSTerminalID, l.Quantity, onHand); err != nil {
+					return err
+				}
 			}
 			if err := applySyncSaleBatches(ctx, tx, o.BranchID, l.VariantID, lineID, l.Quantity, claims.UserID); err != nil {
 				return err
@@ -222,11 +232,15 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 		return err
 	})
 
-	res.NegativeStock = negativeStock
 	if err != nil && res.Status == "" {
+		// The transaction rolled back: no order, no stock change, so no
+		// order id or oversell to report.
 		res.Status = "error"
 		res.Error = err.Error()
+		res.OrderID = ""
+		return res
 	}
+	res.NegativeStock = negativeStock
 	return res
 }
 
@@ -238,13 +252,12 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 // already happened in the real world — accept it, let on_hand go
 // negative if it must, and flag it (the caller writes the NEGATIVE_STOCK
 // audit_logs entry) for manual reconciliation instead.
-func applySyncSale(ctx context.Context, tx pgx.Tx, branchID, variantID string, quantity float64, orderID, performedBy string) (wentNegative bool, err error) {
+func applySyncSale(ctx context.Context, tx pgx.Tx, branchID, variantID string, quantity float64, orderID, performedBy string) (wentNegative bool, onHand float64, err error) {
 	// INSERT ... ON CONFLICT rather than a plain UPDATE: a device that
 	// pulled its catalog before any stock_levels row existed for this
 	// branch/variant would otherwise hit zero affected rows and fail the
 	// whole sync entry for a reason that isn't the device's fault — the
 	// sale already happened either way.
-	var onHand float64
 	err = tx.QueryRow(ctx, `
 		INSERT INTO stock_levels (id, merchant_id, branch_id, variant_id, on_hand, reserved, version)
 		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, -$3::numeric, 0, 0)
@@ -253,17 +266,17 @@ func applySyncSale(ctx context.Context, tx pgx.Tx, branchID, variantID string, q
 		RETURNING on_hand`, branchID, variantID, quantity,
 	).Scan(&onHand)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, performed_by)
 		VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'sale', $3, 'sales_order', $4, $5)`,
 		branchID, variantID, -quantity, orderID, performedBy); err != nil {
-		return false, err
+		return false, 0, err
 	}
 
-	return onHand < 0, nil
+	return onHand < 0, onHand, nil
 }
 
 // applySyncSaleBatches is applySyncSale's Phase 8 counterpart for a

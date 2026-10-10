@@ -50,7 +50,7 @@ class _ShiftChip extends StatelessWidget {
   }
 }
 
-enum _MenuAction { heldOrders, salesHistory, productSearch, syncNow, printer, signOut }
+enum _MenuAction { heldOrders, salesHistory, productSearch, syncNow, syncQueue, printer, signOut }
 
 class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
   final bool busy;
@@ -155,6 +155,14 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                     child: const ListTile(leading: Icon(Icons.manage_search), title: Text('Full product search')),
                   ),
                   const PopupMenuItem(value: _MenuAction.syncNow, child: ListTile(leading: Icon(Icons.sync), title: Text('Sync now'))),
+                  PopupMenuItem(
+                    value: _MenuAction.syncQueue,
+                    child: ListTile(
+                      leading: const Icon(Icons.pending_actions_outlined),
+                      title: const Text('Sync queue'),
+                      trailing: pending > 0 ? Text('$pending') : null,
+                    ),
+                  ),
                   const PopupMenuItem(value: _MenuAction.printer, child: ListTile(leading: Icon(Icons.print_outlined), title: Text('Printer settings'))),
                   const PopupMenuDivider(),
                   const PopupMenuItem(value: _MenuAction.signOut, child: ListTile(leading: Icon(Icons.logout), title: Text('Sign out'))),

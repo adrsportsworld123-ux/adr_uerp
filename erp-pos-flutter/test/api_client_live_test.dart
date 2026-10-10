@@ -285,15 +285,31 @@ void main() {
 
     const branchId = '22222222-2222-2222-2222-222222222222';
     const terminalId = '33333333-3333-3333-3333-333333333333';
-    const barcode = '2000000000039'; // an accumulated E2E grocery variant with stock
-    final variantId = (await api.lookupBarcode(barcode)).variantId;
-
     final login = await http.post(
       Uri.parse('$_baseUrl/api/v1/auth/login'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'merchant_code': 'acme-sports', 'email': 'arjun@acme-sports.test', 'password': 'Passw0rd!'}),
     );
     final token = (jsonDecode(login.body) as Map<String, dynamic>)['access_token'] as String;
+    final authHeaders = {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'};
+    // Its own product (with a generated barcode and a little stock), so
+    // the test never depends on data other suites change.
+    final sku = 'FLT-OP-${DateTime.now().microsecondsSinceEpoch}';
+    final created = jsonDecode((await http.post(Uri.parse('$_baseUrl/api/v1/products'),
+            headers: authHeaders,
+            body: jsonEncode({
+              'name': 'Flutter open price $sku',
+              'tax_slab_id': '66666666-6666-6666-6666-666666666666',
+              'variants': [
+                {'sku': sku, 'cost_price': 50, 'mrp': 500, 'selling_price': 120, 'generate_barcode': true}
+              ],
+            })))
+        .body) as Map<String, dynamic>;
+    final variant = (created['variants'] as List).first as Map<String, dynamic>;
+    final variantId = variant['variant_id'] as String;
+    final barcode = variant['generated_barcode'] as String;
+    await http.post(Uri.parse('$_baseUrl/api/v1/inventory/adjustments'),
+        headers: authHeaders, body: jsonEncode({'variant_id': variantId, 'branch_id': branchId, 'quantity_delta': 5, 'reason': 'flutter test stock'}));
     Future<int> setOpenPrice(Map<String, dynamic> op) async => (await http.patch(
           Uri.parse('$_baseUrl/api/v1/products/variants/$variantId'),
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
@@ -321,6 +337,7 @@ void main() {
       await api.deleteLine(orderId: order.orderId, lineId: order.lines.single.lineId);
     } finally {
       expect(await setOpenPrice({'enabled': false}), 200);
+      await http.patch(Uri.parse('$_baseUrl/api/v1/products/variants/$variantId'), headers: authHeaders, body: jsonEncode({'status': 'discontinued'}));
     }
   });
 

@@ -730,6 +730,11 @@ Done so far:
   - POS: a shift chip in the status bar, the shift screen, a denomination count with live variance, sync before closing, and the till starting on the shift screen when shifts are required
   - fixed on the way: negative rounding truncated toward zero, so a ₹10 shortage posted as ₹9.99, in all seven `round2` copies
   - the daily expected cash now counts later-returned sales and subtracts cash refunds
+- **Sync queue and Stock Review** (`migrations/041`, §3.37):
+  - each `NEGATIVE_STOCK` oversell from an offline sale opens a review item (it was only an audit line before)
+  - the POS Sync queue shows waiting, failed (with the reason, and retry), synced and needs-review sales
+  - the admin Inventory → Stock Review resolves items with a note (`inventory.adjust`)
+  - a failed push no longer reports a rolled-back order id or an oversell
 - **Tests:**
   - 32 live API checks
   - Flutter widget tests for history plus an approval-retry return and for offline queued sales, and a live client test
@@ -740,7 +745,9 @@ Open-price tests: 28 live API checks, Go unit tests, 2 Flutter widget tests plus
 
 Shift tests: 37 live API checks, Go unit tests (rounding, cash flow), 3 Flutter widget tests plus a live client test, `e2e/phase13-shifts.spec.ts`, and the Sales Policy spec. Billing goldens were updated for the shift chip.
 
-Still to do in this phase: the sync queue screen, and product lookup and labels from the POS. **Migrations `038`, `039` and `040` must be applied to the host database.**
+Sync-queue tests: 14 live API checks, a Flutter widget test (real SQLite, retry, server flag), and `e2e/phase13-stock-review.spec.ts`. The open-price live client test now creates its own product instead of relying on accumulated E2E data.
+
+Still to do in this phase: product lookup and labels from the POS. **Migrations `038` to `041` must be applied to the host database.**
 
 **Size: XL | Goal: The POS covers the counter's whole day, from open shift to close, not just a single sale.**
 
