@@ -809,7 +809,17 @@ Part 1 done: **admin sales** (`migrations/042`, `phase0_1_design.md` §3.39):
 
 **Decision for later: GST place of supply.** A slab names its components; choosing CGST+SGST vs IGST per sale by place of supply (inter-state B2B) would be a broader change to the cart, offline POS, GSTR-1/3B and e-invoicing.
 
-Still to do: label studio (part 2), JV workflow (part 3).
+Part 2 done: **label studio** (§3.40):
+- **What and how:** products or a whole GRN; presets or a custom size; field toggles; 203/300 dpi.
+- **Preview:** live, with a per-label scannability check.
+- **Three print paths:**
+  - ZPL, TSPL or ESC/POS print files
+  - the system print dialog at the exact label size
+  - an A4 sticker sheet saved as PDF
+- **Fixed on the way:** CORS now exposes `Content-Disposition`, so a download keeps its file name.
+- **Definition of Done, labels:** scanning on a real 203-dpi printer is **environment-blocked** (no hardware), recorded the same way as Phase 1's hardware item. The scan check and the decoded printer bytes are what this environment can verify.
+
+Still to do: JV workflow (part 3).
 
 **Size: L | Goal: The back office can sell, refund and print labels with exactly the same rules as the till.**
 

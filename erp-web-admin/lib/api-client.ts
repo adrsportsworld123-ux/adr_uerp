@@ -270,7 +270,33 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
   return body as T;
 }
 
+// POST that returns a file (e.g. a label printer job): same session rules as
+// request() (fresh token first, one refresh-and-retry on a rejected token),
+// but the success body is a Blob, with the server's suggested file name.
+async function download(path: string, body: unknown, retried = false): Promise<{ blob: Blob; filename: string }> {
+  if (!retried) await ensureFreshSession();
+  const token = getToken();
+  const resp = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+  if (resp.ok) {
+    const filename = /filename="([^"]+)"/.exec(resp.headers.get("Content-Disposition") ?? "")?.[1] ?? "download";
+    return { blob: await resp.blob(), filename };
+  }
+  const text = await resp.text();
+  const err = (text ? JSON.parse(text) : {})?.error ?? {};
+  if (resp.status === 401 && ["INVALID_TOKEN", "MISSING_TOKEN"].includes(err.code) && token && !retried) {
+    if ((await refreshSession()) === "ok") return download(path, body, true);
+    expireSession("revoked");
+    throw sessionExpiredError("revoked");
+  }
+  throw new ApiError(resp.status, err.code ?? "UNKNOWN_ERROR", err.message ?? `request failed with status ${resp.status}`, err.details);
+}
+
 export const api = {
+  download,
   get: <T>(path: string) => request<T>(path, { method: "GET" }),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),

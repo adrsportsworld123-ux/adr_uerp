@@ -1254,6 +1254,43 @@ Choosing intra- vs inter-state components by place of supply is a broader GST ch
 - finds it under the Back office channel
 - checks a POS user is refused
 
+### 3.40 Phase 14: label studio (`internal/printing/labelspec.go`, `internal/catalog/label_studio.go`, 2026-10-10)
+
+| Method & Path | Purpose |
+|---|---|
+| `POST /labels/preview` `{preset \| custom spec, branch_id?, items: [{variant_id, copies, batch_no?, expiry_date?}]}` | The resolved spec, each item's label data (name, SKU, MRP, price, primary barcode and symbology, and the batch: as given, e.g. from a GRN line, or the one that sells next at `branch_id`) and a per-label scannability verdict, plus `worst_scan`. Any signed-in user |
+| `POST /labels/print` (same body plus `language: zpl\|tspl\|escpos`) | One print file for the whole job, as a download (`Content-Disposition`, now exposed by CORS). The server never connects to a printer. When the label shows a code, an item without a barcode refuses the job (`409 NO_BARCODE`, naming the SKUs) |
+
+**Specs.**
+- Presets are §12's four sizes: standard 50×30, compact 40×20, detailed 100×50, and QR 50×50.
+- `custom` is 20–120 mm wide by 15–150 mm tall, at 203 or 300 dpi.
+- Fields can be toggled: name, SKU, price, MRP, batch and expiry, and the code (barcode, QR or none).
+- A job is at most 200 items, 500 copies each and 2,000 labels.
+
+**One layout, three languages.** `printing.Layout` places the fields in printer dots inside a 2 mm margin: name on top, the code taking the room the text leaves, then price, SKU and batch. ZPL (`^PW/^LL`, `^FB` text, `^BE`/`^BC` linear, `^BQ` QR, `^PQ` copies) and TSPL (`SIZE`, `TEXT`, `BARCODE`, `QRCODE`, `PRINT`) draw from that layout. ESC/POS is line-based and honours the field choices. Field text is sanitised, so a product name can't inject ZPL (`^`, `~`) or end a TSPL string (`"`).
+
+**Scannability.** For a linear code, the module count is computed for EAN-13 (113 including quiet zones) or Code 128 (set C packs two digits per symbol). The narrowest bar is then `usable width ÷ modules`, in whole printer dots.
+- Under 2 dots (0.25 mm at 203 dpi) a thermal head can't print it reliably: **fail**.
+- For QR, the smallest version at error correction M sets the module count: under 2 dots fails, and 2 dots is **small** (good scanners only).
+- A missing barcode, or text that leaves no room for the code, also fails.
+
+**Admin (Catalog → Label Studio):**
+- **What to print:** products with copies, or a completed GRN's lines (received quantity, with batch and expiry).
+- **Size:** preset or custom size and fields, and dpi.
+- **Preview:** drawn at actual size from the preview data, with the code rendered by `bwip-js` in the same symbology, plus each label's scan verdict.
+- **Three print paths:**
+  1. a ZPL, TSPL or ESC/POS file for the printer's raw port or driver (disabled while any label fails the scan check);
+  2. the system print dialog with `@page` set to the exact label size, one label per page;
+  3. an A4 sticker sheet, fitted columns × rows, saved as PDF from the dialog.
+
+The FRD's drag-and-drop designer remains a follow-up, as the roadmap scoped it.
+
+**Verified:**
+- Go unit tests cover ZPL size at 203/300 dpi (50 mm → 400 dots / 591 dots), fields, EAN-13 with ZPL's own check digit, TSPL size/batch/copies, QR layout, the scan verdicts (a dense Code 128 on 30 mm fails; EAN-13 on 50 mm passes; set C is denser), cramped labels, printer-command injection, spec validation and ESC/POS fields and copies.
+- 15 live checks cover presets, the next-selling batch, a GRN batch passed through, a tiny custom label flagged, 400s for impossible sizes / zero copies / too many labels, 404 for an unknown variant, a missing barcode flagged in preview and refused (409) in print, ZPL/TSPL/ESC-POS output, and `code: none` at 300 dpi.
+- `e2e/phase14-label-studio.spec.ts` covers the preview with a drawn barcode, the unscannable custom size, a downloaded TSPL file read back, and both browser print layouts (exact-size `@page`, A4 grid 3 across). It caught the CORS `Content-Disposition` exposure.
+- **Not verified:** printing on a real 203-dpi printer at every preset is recorded as environment-blocked (no printer here), as Phase 14's Definition of Done allows.
+
 ---
 
 ## 4. What Phase 0 concretely delivers against this design

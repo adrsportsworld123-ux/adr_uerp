@@ -130,6 +130,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
 			protected.Post("/products/variants/{id}/barcodes", barcodeAssign.AssignBarcode)
 			protected.Get("/products/variants/{id}/label", label.PrintLabel)
+			// Phase 14 label studio: any size and fields, ZPL / TSPL / ESC/POS.
+			protected.Post("/labels/preview", label.PreviewLabels)
+			protected.Post("/labels/print", label.PrintLabels)
 			protected.Get("/products", productList.ListProducts)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Post("/products", productList.CreateProduct)

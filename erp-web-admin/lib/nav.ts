@@ -55,6 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/catalog/tax-slabs", label: "Tax Slabs" },
       { href: "/attributes", label: "Product Attributes" },
       { href: "/search", label: "Product Search" },
+      { href: "/labels", label: "Label Studio" },
     ],
   },
   {
