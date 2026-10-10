@@ -19,7 +19,9 @@ import {
 // e2e `goto`s and any text a spec matches on are unchanged. Only the
 // grouping is new. `match` lists extra path prefixes that should highlight
 // an item (e.g. /products/[id]/edit highlights Products).
-export type NavItem = { href: string; label: string; match?: string[] };
+// `feature` (Phase 16): the plan feature the screen needs; the sidebar shows
+// a lock and the screen shows a plan-locked preview when the plan lacks it.
+export type NavItem = { href: string; label: string; match?: string[]; feature?: string };
 export type NavGroup = { id: string; label: string; icon: LucideIcon; items: NavItem[] };
 
 export const NAV_GROUPS: NavGroup[] = [
@@ -29,8 +31,8 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: LayoutDashboard,
     items: [
       { href: "/dashboard", label: "Dashboard" },
-      { href: "/ai-insights", label: "AI Insights" },
-      { href: "/ai-assistant", label: "Ask AI / Copilot" },
+      { href: "/ai-insights", label: "AI Insights", feature: "advanced_reports" },
+      { href: "/ai-assistant", label: "Ask AI / Copilot", feature: "advanced_reports" },
     ],
   },
   {
@@ -113,8 +115,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/accounting/party-ledger", label: "Party Ledger" },
       { href: "/accounting/day-book", label: "Day Book" },
       { href: "/accounting/cash-book", label: "Cash Book" },
-      { href: "/gst", label: "GST Returns" },
-      { href: "/e-invoicing", label: "E-Invoicing & E-Way Bill" },
+      { href: "/gst", label: "GST Returns", feature: "gst_compliance" },
+      { href: "/e-invoicing", label: "E-Invoicing & E-Way Bill", feature: "gst_compliance" },
       { href: "/bank-reconciliation", label: "Bank Reconciliation" },
       { href: "/cash-reconciliation", label: "Cash Reconciliation" },
       { href: "/payment-gateway-reconciliation", label: "Payment Gateway Reconciliation" },
@@ -136,8 +138,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/terminals", label: "POS Terminals" },
       { href: "/hr/employees", label: "Employees" },
       { href: "/hr/shifts", label: "Shifts" },
-      { href: "/hr/statutory-config", label: "Statutory Config" },
-      { href: "/payroll", label: "Payroll" },
+      { href: "/hr/statutory-config", label: "Statutory Config", feature: "payroll" },
+      { href: "/payroll", label: "Payroll", feature: "payroll" },
     ],
   },
   {
@@ -148,6 +150,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/rbac", label: "Roles & Permissions" },
       { href: "/rbac/data-access", label: "Data Access" },
       { href: "/rbac/approval-policies", label: "Approval Policies" },
+      { href: "/subscription", label: "Subscription & Billing" },
       { href: "/audit-logs", label: "Audit Log" },
     ],
   },

@@ -4,11 +4,13 @@ import { ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { ChevronDown, ChevronRight, LogOut, Menu, Monitor, Moon, Search, Sun, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Lock, LogOut, Menu, Monitor, Moon, Search, Sun, X } from "lucide-react";
 import { NAV_GROUPS, findActive } from "@/lib/nav";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { usePermissions } from "@/lib/permissions";
 import { CommandPalette } from "./command-palette";
+import { PlanLocked, SubscriptionBanner } from "./plan";
 
 const COLLAPSED_KEY = "nav.collapsed";
 
@@ -23,6 +25,7 @@ function readCollapsed(): string[] {
 function Sidebar({ onNavigate, onOpenPalette }: { onNavigate?: () => void; onOpenPalette: () => void }) {
   const pathname = usePathname();
   const active = findActive(pathname);
+  const { has } = usePermissions();
   // Every group starts expanded: the sidebar shows exactly the same links
   // the old flat list did until someone chooses to collapse a group.
   const [collapsed, setCollapsed] = useState<string[]>([]);
@@ -83,19 +86,26 @@ function Sidebar({ onNavigate, onOpenPalette }: { onNavigate?: () => void; onOpe
                 <div className="flex flex-col gap-px pb-1">
                   {group.items.map((item) => {
                     const isActive = active?.item.href === item.href;
+                    const locked = item.feature != null && !has(item.feature);
                     return (
                       <Link
                         key={item.href}
                         href={item.href}
                         onClick={onNavigate}
                         aria-current={isActive ? "page" : undefined}
-                        className={`rounded-md py-1.5 pl-7 pr-2 text-sm transition-colors ${
+                        className={`flex items-center gap-1.5 rounded-md py-1.5 pl-7 pr-2 text-sm transition-colors ${
                           isActive
                             ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
                             : "text-sidebar-foreground hover:bg-muted hover:text-foreground"
                         }`}
                       >
-                        {item.label}
+                        <span className="flex-1">{item.label}</span>
+                        {locked && (
+                          <>
+                            <Lock className="size-3 text-muted-foreground" aria-hidden />
+                            <span className="sr-only">(not in your plan)</span>
+                          </>
+                        )}
                       </Link>
                     );
                   })}
@@ -143,6 +153,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const active = findActive(pathname);
+  const { has } = usePermissions();
+  const lockedFeature = active?.item.feature != null && !has(active.item.feature) ? active.item.feature : null;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -217,8 +229,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             Log out
           </Button>
         </header>
+        <SubscriptionBanner />
         <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 p-4 outline-none md:p-6">
-          {children}
+          {lockedFeature && active ? <PlanLocked feature={lockedFeature} title={active.item.label} /> : children}
         </main>
       </div>
 

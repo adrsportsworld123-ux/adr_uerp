@@ -9,17 +9,58 @@ import { useAuth } from "@/lib/auth";
 // instead of only toasting a 403 afterwards. A hint for the interface:
 // the backend still enforces every gate on its own, so a stale or missing
 // list can make a button look available, never make an action succeed.
+// Phase 16: what the merchant's plan includes (GET /me/entitlements), for
+// lock icons, the plan-locked preview and the expiry banner. Also only a
+// hint: the server refuses what the plan doesn't include.
+export type Entitlements = {
+  plan: { code: string; name: string };
+  status: "trial" | "active" | "grace" | "expired" | "cancelled";
+  read_only: boolean;
+  read_only_since: string | null;
+  trial_ends_at: string | null;
+  current_period_end: string | null;
+  grace_ends_at: string | null;
+  features: string[];
+  limits: Record<string, number | null>;
+  retention_days: number | null;
+};
+
 type PermissionsState = {
   loaded: boolean;
   permissions: string[];
   can: (code: string) => boolean;
+  entitlements: Entitlements | null;
+  has: (feature: string) => boolean;
+  refreshEntitlements: () => void;
 };
 
-const PermissionsContext = createContext<PermissionsState>({ loaded: false, permissions: [], can: () => true });
+const PermissionsContext = createContext<PermissionsState>({
+  loaded: false,
+  permissions: [],
+  can: () => true,
+  entitlements: null,
+  has: () => true,
+  refreshEntitlements: () => {},
+});
 
 export function PermissionsProvider({ children }: { children: ReactNode }) {
   const { userId } = useAuth();
   const [state, setState] = useState<{ loaded: boolean; permissions: string[] }>({ loaded: false, permissions: [] });
+  const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
+  const [entTick, setEntTick] = useState(0);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    api
+      .get<Entitlements>("/api/v1/me/entitlements")
+      .then((e) => !cancelled && setEntitlements(e))
+      // Unknown (an older backend): nothing looks locked.
+      .catch(() => !cancelled && setEntitlements(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, entTick]);
 
   useEffect(() => {
     if (!userId) return;
@@ -41,7 +82,12 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     [state],
   );
 
-  return <PermissionsContext.Provider value={{ ...state, can }}>{children}</PermissionsContext.Provider>;
+  const has = useCallback((feature: string) => !entitlements || entitlements.features.includes(feature), [entitlements]);
+  const refreshEntitlements = useCallback(() => setEntTick((t) => t + 1), []);
+
+  return (
+    <PermissionsContext.Provider value={{ ...state, can, entitlements, has, refreshEntitlements }}>{children}</PermissionsContext.Provider>
+  );
 }
 
 export function usePermissions() {
