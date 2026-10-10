@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -174,9 +175,12 @@ func (h *Handler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------
-// GET /customers?q=&customer_type=&segment=&page=&limit= — search/list
-// with auto-segmentation, filterable by the exact segment values
-// segmentedCustomersCTE computes (vip/regular/new/dormant).
+// GET /customers?q=&customer_type=&segment=&status=&sort=&dir=&page=&limit=
+// — search/list with auto-segmentation, filterable by the exact segment
+// values segmentedCustomersCTE computes (vip/regular/new/dormant).
+// Phase 11 (additive): `status` (active/inactive; default all), `sort`
+// (name | spend | last_purchase | orders | created; default name, as
+// before) and `total` in the response, counted over the same filters.
 // ---------------------------------------------------------------------
 
 func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +193,24 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 	search := q.Get("q")
 	customerType := q.Get("customer_type")
 	segment := q.Get("segment")
+	status := q.Get("status")
+	if status == "all" {
+		status = ""
+	}
+	if status != "" && status != "active" && status != "inactive" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be all, active, or inactive")
+		return
+	}
+	orderBy := map[string]string{
+		"name": "name", "spend": "total_spend", "last_purchase": "last_purchase_at",
+		"orders": "transaction_count", "created": "created_at",
+	}[q.Get("sort")]
+	if orderBy == "" {
+		orderBy = "name"
+	}
+	if strings.EqualFold(q.Get("dir"), "desc") {
+		orderBy += " DESC"
+	}
 
 	limit := 50
 	if l, err := strconv.Atoi(q.Get("limit")); err == nil && l > 0 && l <= 200 {
@@ -201,16 +223,23 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 	offset := (page - 1) * limit
 
 	customerList := []customerResponse{}
+	total := 0
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, segmentedCustomersCTE+`
-			SELECT `+customerColumns+`
+		where := `
 			FROM segmented
-			WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR phone ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%')
+			WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR phone ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%'
+			       OR gstin ILIKE '%' || $1 || '%' OR company_name ILIKE '%' || $1 || '%')
 			  AND ($2 = '' OR customer_type = $2)
 			  AND ($3 = '' OR segment = $3)
-			ORDER BY name NULLS LAST
-			LIMIT $4 OFFSET $5`,
-			search, customerType, segment, limit, offset)
+			  AND ($4 = '' OR status = $4)`
+		if err := tx.QueryRow(ctx, segmentedCustomersCTE+`SELECT count(*)`+where, search, customerType, segment, status).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, segmentedCustomersCTE+`
+			SELECT `+customerColumns+where+`
+			ORDER BY `+orderBy+` NULLS LAST, id
+			LIMIT $5 OFFSET $6`,
+			search, customerType, segment, status, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -228,7 +257,7 @@ func (h *Handler) ListCustomers(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not list customers")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"customers": customerList, "page": page, "limit": limit})
+	httpx.JSON(w, http.StatusOK, map[string]any{"customers": customerList, "page": page, "limit": limit, "total": total})
 }
 
 // ---------------------------------------------------------------------

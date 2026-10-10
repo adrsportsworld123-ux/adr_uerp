@@ -137,3 +137,86 @@ test("Phase 11: shell — grouped nav, breadcrumb, command palette, theme", asyn
     await expect(page.locator("html")).not.toHaveClass(/dark/);
   });
 });
+
+async function adminToken(request: import("@playwright/test").APIRequestContext) {
+  const resp = await request.post(`${API}/auth/login`, {
+    data: { merchant_code: "acme-sports", email: "admin@adrsw.com", password: "Idontsay3#" },
+  });
+  return (await resp.json()).access_token as string;
+}
+
+test("Phase 11: supplier edit clears a field and sets the credit limit to zero", async ({ page, request }) => {
+  const name = `E2E Edit Supplier ${unique}`;
+  const token = await adminToken(request);
+  const created = await request.post(`${API}/suppliers`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { name, gstin: "29AAAAA0000A1Z5", credit_limit: 50000, payment_terms: "Net 30" },
+  });
+  expect(created.status()).toBe(201);
+
+  await login(page, "admin@adrsw.com", "Idontsay3#");
+  await page.goto(`/suppliers?q=${encodeURIComponent(name)}`);
+  const row = page.getByRole("row", { name: new RegExp(name) });
+  await expect(row).toContainText("₹50,000.00");
+  await row.getByRole("button", { name: `Edit ${name}` }).click();
+
+  await page.fill("#edit-gstin", "");
+  await page.fill("#edit-credit_limit", "0");
+  await page.fill("#edit-contact_name", "Ramesh");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText(`Saved supplier “${name}”`)).toBeVisible();
+
+  await expect(row).toContainText("₹0.00");
+  await expect(row).toContainText("Ramesh");
+  await expect(row).not.toContainText("29AAAAA0000A1Z5");
+  await expect(row).toContainText("Net 30"); // untouched fields are kept
+});
+
+test("Phase 11: branch edit rejects an unknown timezone, then saves", async ({ page }) => {
+  const code = `P11${unique % 100000}`;
+  await login(page, "admin@adrsw.com", "Idontsay3#");
+  await page.goto("/branches");
+  await page.fill("#name", `E2E P11 Branch ${code}`);
+  await page.fill("#code", code);
+  await page.click('button[type="submit"]');
+  await expect(page.getByText(`Created branch “E2E P11 Branch ${code}”`)).toBeVisible();
+
+  await page.getByRole("button", { name: `Edit E2E P11 Branch ${code}` }).click();
+  await page.fill("#edit-timezone", "Mars/Olympus");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("alert")).toContainText("unknown timezone");
+
+  await page.fill("#edit-timezone", "Asia/Dubai");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("row", { name: new RegExp(code) })).toContainText("Asia/Dubai");
+});
+
+test("Phase 11: products list searches by SKU and keeps filters in the URL", async ({ page, request }) => {
+  const token = await adminToken(request);
+  const sku = `E2E-P11-SKU-${unique}`;
+  const resp = await request.post(`${API}/products`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { name: `E2E SKU Search ${unique}`, variants: [{ sku, mrp: 300, selling_price: 250, cost_price: 100 }] },
+  });
+  expect(resp.status()).toBe(201);
+
+  await login(page, "admin@adrsw.com", "Idontsay3#");
+  await page.goto("/products");
+  await page.getByLabel("Search products").fill(sku);
+  await expect(page).toHaveURL(new RegExp(`q=${sku}`));
+  await expect(page.getByRole("row", { name: new RegExp(`E2E SKU Search ${unique}`) })).toBeVisible();
+  await expect(page.getByText(/Showing 1–1 of 1/)).toBeVisible();
+
+  await page.reload(); // state survives a reload because it lives in the URL
+  await expect(page.getByLabel("Search products")).toHaveValue(sku);
+  await expect(page.getByRole("row", { name: new RegExp(`E2E SKU Search ${unique}`) })).toBeVisible();
+});
+
+test("Phase 11: customers list filters by type", async ({ page }) => {
+  await login(page, "admin@adrsw.com", "Idontsay3#");
+  await page.goto("/customers");
+  await page.getByLabel("Customer type").selectOption("b2b");
+  await expect(page).toHaveURL(/customer_type=b2b/);
+  const cells = page.getByRole("cell", { name: "B2C", exact: true });
+  await expect(cells).toHaveCount(0);
+});

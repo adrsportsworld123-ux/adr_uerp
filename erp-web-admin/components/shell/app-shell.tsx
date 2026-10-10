@@ -159,6 +159,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-0 flex-1">
+      {/* First tab stop on every page: jump past ~75 sidebar links. */}
+      <a
+        href="#main-content"
+        className="sr-only z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+      >
+        Skip to main content
+      </a>
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 border-r bg-sidebar p-3 lg:block">
         <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
       </aside>
@@ -210,7 +217,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             Log out
           </Button>
         </header>
-        <main className="min-w-0 flex-1 p-4 md:p-6">{children}</main>
+        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 p-4 outline-none md:p-6">
+          {children}
+        </main>
       </div>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />

@@ -27,6 +27,10 @@ export type DataTableProps<T> = {
   update: (patch: Partial<Omit<ListState, "filters">> & { filters?: Record<string, string> }) => void;
   rowKey: (row: T) => string;
   searchPlaceholder: string;
+  /** Accessible name for the search box (defaults to "Search"). */
+  searchLabel?: string;
+  /** DOM id for the search box, for pages whose tests address it directly. */
+  searchId?: string;
   /** Extra filter controls rendered after the search box. */
   filters?: ReactNode;
   activeFilterCount: number;
@@ -154,10 +158,11 @@ export function DataTable<T>(props: DataTableProps<T>) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <label className="relative w-full sm:w-72">
-          <span className="sr-only">Search</span>
+          <span className="sr-only">{props.searchLabel ?? "Search"}</span>
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
           <input
             type="search"
+            id={props.searchId}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={props.searchPlaceholder}

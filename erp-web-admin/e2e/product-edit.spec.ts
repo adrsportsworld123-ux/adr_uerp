@@ -44,7 +44,7 @@ test("product edit: rename, variant SKU, guarded price change, add variant, disc
     await page.goto("/products");
     await page.getByLabel("Search products").fill(name);
     const row = page.getByRole("row", { name: new RegExp(name) });
-    await expect(row).toContainText("active");
+    await expect(row).toContainText(/active/i);
     await row.getByRole("button", { name: "Edit" }).click();
     await page.waitForURL(`/products/${productId}/edit`);
     await expect(page.locator("#name")).toHaveValue(name);
@@ -101,7 +101,7 @@ test("product edit: rename, variant SKU, guarded price change, add variant, disc
     await page.goto("/products");
     await page.getByLabel("Search products").fill(renamed);
     const row = page.getByRole("row", { name: new RegExp(renamed) });
-    await expect(row).toContainText("discontinued");
+    await expect(row).toContainText(/discontinued/i);
     await row.getByRole("button", { name: "Edit" }).click();
     await page.getByLabel("Product status").click();
     await page.getByRole("option", { name: /Active/ }).click();

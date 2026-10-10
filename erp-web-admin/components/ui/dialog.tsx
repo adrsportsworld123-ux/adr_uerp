@@ -6,6 +6,22 @@ import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog
 import { X } from "lucide-react";
 import { cn } from "cn";
 
+// Our dialogs are opened from code (a row action, a page button), not a
+// Base UI <Trigger>, so Base UI has nothing to return focus to on close and
+// focus would fall back to the top of the page — a keyboard user would
+// have to Tab through the whole sidebar again. Track the last element
+// focused outside any dialog and hand it back as finalFocus.
+let lastFocusedOutside: HTMLElement | null = null;
+if (typeof document !== "undefined") {
+  document.addEventListener("focusin", (e) => {
+    const t = e.target as HTMLElement | null;
+    if (t && !t.closest('[role="dialog"],[role="alertdialog"]')) lastFocusedOutside = t;
+  });
+}
+function restoreFocus(): HTMLElement | boolean {
+  return lastFocusedOutside?.isConnected ? lastFocusedOutside : true;
+}
+
 const backdrop =
   "fixed inset-0 z-50 bg-black/35 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0";
 const popup =
@@ -34,7 +50,7 @@ export function Modal({
     <DialogPrimitive.Root open={open} onOpenChange={(next) => onOpenChange(next)}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Backdrop className={backdrop} />
-        <DialogPrimitive.Popup className={popup} style={{ ["--dialog-width" as string]: `${width}px` }}>
+        <DialogPrimitive.Popup finalFocus={restoreFocus} className={popup} style={{ ["--dialog-width" as string]: `${width}px` }}>
           <div className="flex items-start justify-between gap-4 border-b px-5 py-4">
             <div className="min-w-0">
               <DialogPrimitive.Title className="text-base font-semibold">{title}</DialogPrimitive.Title>
@@ -79,7 +95,7 @@ export function AlertModal({
     <AlertDialogPrimitive.Root open={open} onOpenChange={(next) => onOpenChange(next)}>
       <AlertDialogPrimitive.Portal>
         <AlertDialogPrimitive.Backdrop className={backdrop} />
-        <AlertDialogPrimitive.Popup className={cn(popup, "gap-3 p-5", className)}>
+        <AlertDialogPrimitive.Popup finalFocus={restoreFocus} className={cn(popup, "gap-3 p-5", className)}>
           <AlertDialogPrimitive.Title className="text-base font-semibold">{title}</AlertDialogPrimitive.Title>
           {children && <div className="text-sm text-muted-foreground">{children}</div>}
           <div className="mt-1 flex flex-wrap justify-end gap-2">{actions}</div>

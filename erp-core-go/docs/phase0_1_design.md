@@ -921,6 +921,17 @@ The backend half of Phase 11's design-system work (`phased_roadmap.md` Phase 11)
 
 New error codes: `DUPLICATE_NAME`, `IN_USE`, `INACTIVE_REFERENCE` (409).
 
+**Part 2 (same day):**
+
+| Method & Path | Change |
+|---|---|
+| `GET /customers` | Adds `status` (active/inactive), `sort` (`name` default as before, `spend`, `last_purchase`, `orders`, `created`), `dir`, and `total`. `q` now also matches GSTIN and company name. Still paged by default (50), as before |
+| `GET /branches` | List convention (`q` on name/code/GSTIN, `status`, `sort` = name/code/created, paging, `total`). Unpaged by default, so every branch picker is unchanged |
+| `PATCH /suppliers/{id}` | Pointer semantics: omitted = keep, `""` clears an optional field, `credit_limit` may be 0 (previously `CASE WHEN $8 > 0`, so a limit could never be removed). Blank name or negative limit → 400 |
+| `PATCH /branches/{id}` | Same semantics; name/code/timezone can't be blanked, GSTIN can be cleared, `status` accepted. Timezone checked against `pg_timezone_names` (unknown zone → 400) |
+
+Verified live: customers sorted by spend with the correct total; invalid status 400; branches unpaged vs paged; branch GSTIN cleared; blank name and `Mars/Olympus` both 400, `Asia/Dubai` accepted; supplier credit limit set to 0 with GSTIN cleared and payment terms untouched; negative limit and blank name both 400. The same flows are driven through the browser by `e2e/phase11-masters.spec.ts`.
+
 ---
 
 ## 4. What Phase 0 concretely delivers against this design

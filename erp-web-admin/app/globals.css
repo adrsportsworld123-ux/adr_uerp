@@ -64,6 +64,8 @@
  * The same values back the Flutter POS theme (erp-pos-flutter/lib/ui/theme.dart),
  * so a status reads the same on the till and in the back office. Variable
  * names are shadcn's own, so every existing component picks these up unchanged.
+ * Light-theme pay/warn/destructive are tuned to at least 4.7:1 on their own
+ * soft backgrounds (status chips) — e2e/phase11-a11y.spec.ts enforces it.
  * Status colors: pay = completed/active/in stock, warn = pending/offline/low,
  * destructive = failed/void, plum = returned/needs approval, teal = refunded/posted.
  */
@@ -83,12 +85,12 @@
   --muted-foreground: #5d6879;
   --accent: #e2ebf7;
   --accent-foreground: #1e56a0;
-  --destructive: #c0392b;
+  --destructive: #b83729;
   --destructive-soft: #fbe3e0;
-  --pay: #0b7f57;
+  --pay: #0a7752;
   --pay-foreground: #ffffff;
   --pay-soft: #dcf2e8;
-  --warn: #a86300;
+  --warn: #9b5b00;
   --warn-soft: #faefd8;
   --plum: #7445a8;
   --plum-soft: #efe6f8;
@@ -98,8 +100,8 @@
   --input: #dce1e9;
   --ring: #1e56a0;
   --chart-1: #1e56a0;
-  --chart-2: #0b7f57;
-  --chart-3: #a86300;
+  --chart-2: #0a7752;
+  --chart-3: #9b5b00;
   --chart-4: #7445a8;
   --chart-5: #0c7486;
   --radius: 0.625rem;

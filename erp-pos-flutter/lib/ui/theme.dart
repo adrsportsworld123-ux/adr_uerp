@@ -48,10 +48,10 @@ class PosColors extends ThemeExtension<PosColors> {
   });
 
   static const light = PosColors(
-    pay: Color(0xFF0B7F57),
+    pay: Color(0xFF0A7752),
     onPay: Color(0xFFFFFFFF),
     paySoft: Color(0xFFDCF2E8),
-    warn: Color(0xFFA86300),
+    warn: Color(0xFF9B5B00),
     warnSoft: Color(0xFFFAEFD8),
     plum: Color(0xFF7445A8),
     plumSoft: Color(0xFFEFE6F8),
@@ -128,7 +128,7 @@ ThemeData posTheme(Brightness brightness) {
   ).copyWith(
     primary: isLight ? AdrPalette.primaryLight : AdrPalette.primaryDark,
     onPrimary: isLight ? Colors.white : const Color(0xFF0A1220),
-    error: isLight ? const Color(0xFFC0392B) : const Color(0xFFEF7262),
+    error: isLight ? const Color(0xFFB83729) : const Color(0xFFEF7262),
     surface: isLight ? Colors.white : const Color(0xFF151B24),
     onSurface: isLight ? const Color(0xFF131922) : const Color(0xFFE6EBF2),
     onSurfaceVariant: isLight ? const Color(0xFF5D6879) : const Color(0xFF97A3B5),

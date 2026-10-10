@@ -135,9 +135,16 @@ test("Barcode: manual-enter and generate both work as a retrofit from the produc
     expect(manualLookup.ok()).toBeTruthy();
     expect((await manualLookup.json()).variant_id).toBe(manualVariantId);
 
-    const listed = await (await request.get(`${API_BASE}/products?q=${encodeURIComponent(generatedProductName)}`, { headers })).json();
-    const generatedCode = listed.products[0].variants[0].generated_barcode;
-    expect(generatedCode).toBeTruthy();
+    // Poll: the step above can see the *manual* step's "Barcode assigned"
+    // toast (still on screen) before Generate's own request has landed.
+    let generatedCode: string | null = null;
+    await expect
+      .poll(async () => {
+        const listed = await (await request.get(`${API_BASE}/products?status=all&q=${encodeURIComponent(generatedProductName)}`, { headers })).json();
+        generatedCode = listed.products[0]?.variants[0]?.generated_barcode ?? null;
+        return generatedCode;
+      })
+      .toBeTruthy();
     const generatedLookup = await request.get(`${API_BASE}/products/barcode/${generatedCode}`, { headers });
     expect(generatedLookup.ok()).toBeTruthy();
     expect((await generatedLookup.json()).variant_id).toBe(generatedVariantId);

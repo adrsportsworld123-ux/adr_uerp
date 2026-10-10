@@ -43,6 +43,11 @@ export interface Product {
   price_includes_tax: boolean;
   tax_rate_pct: number;
   variants: ProductVariant[];
+  // Phase 11 list columns (GET /products) — names for display, ids for links.
+  category_id?: string | null;
+  category_name?: string | null;
+  brand_id?: string | null;
+  brand_name?: string | null;
 }
 
 // GET/PUT /pricing/settings — merchant-wide default for new products.

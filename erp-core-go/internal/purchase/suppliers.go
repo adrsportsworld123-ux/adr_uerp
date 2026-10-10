@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -30,10 +31,6 @@ type supplierRequest struct {
 	Phone        string  `json:"phone"`
 	PaymentTerms string  `json:"payment_terms"`
 	CreditLimit  float64 `json:"credit_limit"`
-	// Status is PATCH-only (Phase 11): "active" or "inactive". Inactive
-	// suppliers stay on every past GRN/bill/return; they're only hidden
-	// from pickers for new documents.
-	Status string `json:"status"`
 }
 
 type supplierResponse struct {
@@ -143,10 +140,32 @@ func (h *Handler) ListSuppliers(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, p.Envelope("suppliers", suppliers, total))
 }
 
-// UpdateSupplier: PATCH /suppliers/{id} — partial update; a field left as
-// its zero value in the request is treated as "no change" (COALESCE
-// against NULLIF), same convention as PATCH .../lines using an explicit
-// field rather than a merge-patch body.
+// UpdateSupplier: PATCH /suppliers/{id} — partial update (Phase 11): a
+// field left out of the body is kept, "" clears an optional text field,
+// and credit_limit may be set to any value >= 0, including 0. (Before
+// Phase 11 an empty value meant "no change", so nothing could be cleared
+// and a credit limit could never be brought back to 0; no client relied
+// on that, since no edit screen existed.) Name can't be blanked.
+type updateSupplierRequest struct {
+	Name         *string  `json:"name"`
+	LegalName    *string  `json:"legal_name"`
+	GSTIN        *string  `json:"gstin"`
+	ContactName  *string  `json:"contact_name"`
+	Email        *string  `json:"email"`
+	Phone        *string  `json:"phone"`
+	PaymentTerms *string  `json:"payment_terms"`
+	CreditLimit  *float64 `json:"credit_limit"`
+	Status       *string  `json:"status"`
+}
+
+func trimmedPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*p)
+	return &t
+}
+
 func (h *Handler) UpdateSupplier(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -155,31 +174,41 @@ func (h *Handler) UpdateSupplier(w http.ResponseWriter, r *http.Request) {
 	}
 	supplierID := chi.URLParam(r, "id")
 
-	var req supplierRequest
+	var req updateSupplierRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
 		return
 	}
-
-	if req.Status != "" && req.Status != "active" && req.Status != "inactive" {
+	req.Name, req.LegalName, req.GSTIN = trimmedPtr(req.Name), trimmedPtr(req.LegalName), trimmedPtr(req.GSTIN)
+	req.ContactName, req.Email, req.Phone, req.PaymentTerms = trimmedPtr(req.ContactName), trimmedPtr(req.Email), trimmedPtr(req.Phone), trimmedPtr(req.PaymentTerms)
+	if req.Name != nil && *req.Name == "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name can't be empty")
+		return
+	}
+	if req.CreditLimit != nil && *req.CreditLimit < 0 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "credit_limit can't be negative")
+		return
+	}
+	if req.Status != nil && *req.Status != "active" && *req.Status != "inactive" {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be active or inactive")
 		return
 	}
 
 	var resp supplierResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// For optional text: NULL param = keep; '' = clear (stored NULL).
 		return tx.QueryRow(ctx, `
 			UPDATE suppliers SET
-			  name = COALESCE(NULLIF($1, ''), name),
-			  legal_name = COALESCE(NULLIF($2, ''), legal_name),
-			  gstin = COALESCE(NULLIF($3, ''), gstin),
-			  contact_name = COALESCE(NULLIF($4, ''), contact_name),
-			  email = COALESCE(NULLIF($5, ''), email),
-			  phone = COALESCE(NULLIF($6, ''), phone),
-			  payment_terms = COALESCE(NULLIF($7, ''), payment_terms),
-			  credit_limit = CASE WHEN $8 > 0 THEN $8 ELSE credit_limit END,
-			  status = COALESCE(NULLIF($10, ''), status),
-			  updated_at = now()
+			  name          = COALESCE($1, name),
+			  legal_name    = CASE WHEN $2::text IS NULL THEN legal_name    ELSE NULLIF($2, '') END,
+			  gstin         = CASE WHEN $3::text IS NULL THEN gstin         ELSE NULLIF($3, '') END,
+			  contact_name  = CASE WHEN $4::text IS NULL THEN contact_name  ELSE NULLIF($4, '') END,
+			  email         = CASE WHEN $5::text IS NULL THEN email         ELSE NULLIF($5, '') END,
+			  phone         = CASE WHEN $6::text IS NULL THEN phone         ELSE NULLIF($6, '') END,
+			  payment_terms = CASE WHEN $7::text IS NULL THEN payment_terms ELSE NULLIF($7, '') END,
+			  credit_limit  = COALESCE($8::numeric, credit_limit),
+			  status        = COALESCE($10, status),
+			  updated_at    = now()
 			WHERE id = $9
 			RETURNING id, name, COALESCE(legal_name,''), COALESCE(gstin,''), COALESCE(contact_name,''),
 			          COALESCE(email,''), COALESCE(phone,''), COALESCE(payment_terms,''), credit_limit::text, status`,
