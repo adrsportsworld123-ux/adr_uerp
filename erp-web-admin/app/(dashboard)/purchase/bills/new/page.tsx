@@ -71,7 +71,7 @@ export default function NewBillPage() {
                   ))}
                 </SelectContent>
               </Select>
-              {grns.length === 0 && <p className="text-xs text-zinc-500">No completed GRNs available to bill yet.</p>}
+              {grns.length === 0 && <p className="text-xs text-muted-foreground">No completed GRNs available to bill yet.</p>}
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="invoiceNumber">Supplier invoice number</Label>
@@ -88,12 +88,12 @@ export default function NewBillPage() {
               </div>
             </div>
             {selectedGrn && (
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 Bill grand total will be ₹{selectedGrn.grand_total} (GRN) + ₹{taxTotal || 0} (GST) = ₹
                 {(Number(selectedGrn.grand_total) + (Number(taxTotal) || 0)).toFixed(2)}
               </p>
             )}
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={submitting || !grnId}>
               {submitting ? "Creating..." : "Create bill"}
             </Button>

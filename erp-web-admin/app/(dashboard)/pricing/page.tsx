@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 function marginClass(pct: number | null) {
   if (pct === null) return "";
-  return pct < 0 ? "text-red-600 font-medium" : "text-zinc-700";
+  return pct < 0 ? "text-destructive font-medium" : "text-foreground";
 }
 
 export default function PricingPage() {
@@ -41,7 +41,7 @@ export default function PricingPage() {
           <Button variant="outline">New product</Button>
         </Link>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <TaxPricingSettings />
 
@@ -126,7 +126,7 @@ function VariantRow({ product, variant, onSaved }: { product: Product; variant: 
           <div className="flex flex-col">
             <span>₹{variant.selling_price}</span>
             {/* Server-computed (internal/taxcalc) — never derived in JS, see lib/api-client.ts's money note */}
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-muted-foreground">
               {product.price_includes_tax ? `net ₹${variant.net_selling_price}` : `customer pays ₹${variant.gross_selling_price}`}
             </span>
           </div>
@@ -145,7 +145,7 @@ function VariantRow({ product, variant, onSaved }: { product: Product; variant: 
           <div className="flex flex-col gap-2 w-56">
             <Input placeholder="Reason" value={reason} onChange={(e) => setReason(e.target.value)} className="h-7 text-xs" />
             {needsOverride && (
-              <label className="flex items-center gap-1 text-xs text-red-600">
+              <label className="flex items-center gap-1 text-xs text-destructive">
                 <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} />
                 This sells below cost — override anyway
               </label>
@@ -211,7 +211,7 @@ function TaxPricingSettings() {
           />
           New products&apos; selling prices include GST
         </label>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted-foreground">
           Inclusive (MRP-style): the customer pays exactly the selling price and GST is extracted from it. Exclusive: GST is added on
           top at billing. Each product can override this below; changing it never affects existing products.
         </p>
@@ -249,7 +249,7 @@ function TaxBasisCell({ product, onChanged }: { product: Product; onChanged: () 
 
   return (
     <div className="flex flex-col items-start gap-1 text-xs">
-      <span className={`rounded px-1.5 py-0.5 ${product.price_includes_tax ? "bg-emerald-50 text-emerald-700" : "bg-zinc-100 text-zinc-700"}`}>
+      <span className={`rounded px-1.5 py-0.5 ${product.price_includes_tax ? "bg-pay-soft text-pay" : "bg-muted text-foreground"}`}>
         {product.price_includes_tax ? "Incl." : "Excl."} GST {product.tax_rate_pct}%
       </span>
       <Button size="sm" variant="ghost" className="h-6 px-1 text-xs" disabled={busy} onClick={flip}>
@@ -287,7 +287,7 @@ function BarcodeCell({ variant, onAssigned }: { variant: ProductVariant; onAssig
   return (
     <div className="flex flex-col gap-1.5 text-xs">
       <div className="flex items-center gap-1">
-        <span className="text-zinc-400 w-14 shrink-0">Original</span>
+        <span className="text-muted-foreground w-14 shrink-0">Original</span>
         {variant.original_barcode ? (
           <span className="font-mono">{variant.original_barcode}</span>
         ) : (
@@ -305,7 +305,7 @@ function BarcodeCell({ variant, onAssigned }: { variant: ProductVariant; onAssig
         )}
       </div>
       <div className="flex items-center gap-1">
-        <span className="text-zinc-400 w-14 shrink-0">System</span>
+        <span className="text-muted-foreground w-14 shrink-0">System</span>
         {variant.generated_barcode ? (
           <span className="font-mono">{variant.generated_barcode}</span>
         ) : (
@@ -403,7 +403,7 @@ function Calculator() {
           </label>
           <Button type="submit">Calculate</Button>
         </form>
-        {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
+        {error && <p className="text-sm text-destructive mt-2">{error}</p>}
         {result && (
           <p className="text-sm mt-3">
             Selling price: <span className="font-semibold">₹{result.selling_price}</span>
@@ -481,7 +481,7 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
         <CardTitle className="text-base">Bulk price update</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-zinc-500">Applies to every product (no category/brand filter in this UI yet). Preview before applying.</p>
+        <p className="text-xs text-muted-foreground">Applies to every product (no category/brand filter in this UI yet). Preview before applying.</p>
         <form onSubmit={preview} className="flex gap-2 items-end flex-wrap">
           <div className="flex flex-col gap-2">
             <Label>Method</Label>
@@ -521,7 +521,7 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
           </Button>
         </form>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         {items && (
           <>
@@ -538,17 +538,17 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
                 {items.map((it) => (
                   <TableRow key={it.variant_id}>
                     <TableCell>
-                      {it.product_name} <span className="text-zinc-400">({it.sku})</span>
+                      {it.product_name} <span className="text-muted-foreground">({it.sku})</span>
                     </TableCell>
                     <TableCell>₹{it.old_price}</TableCell>
                     <TableCell>₹{it.new_price}</TableCell>
-                    <TableCell className={it.status === "skipped_negative_margin" ? "text-red-600" : ""}>{it.status}</TableCell>
+                    <TableCell className={it.status === "skipped_negative_margin" ? "text-destructive" : ""}>{it.status}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
             {items.some((it) => it.status === "skipped_negative_margin") && (
-              <label className="flex items-center gap-2 text-sm text-red-600">
+              <label className="flex items-center gap-2 text-sm text-destructive">
                 <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} />
                 Some items sell below cost — check to override and apply anyway
               </label>

@@ -58,7 +58,7 @@ export default function GSTReturnsPage() {
         </div>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       {gstr3b && (
         <Card>
@@ -67,14 +67,14 @@ export default function GSTReturnsPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <dl className="grid grid-cols-3 gap-3 text-sm">
-              <dt className="text-zinc-500">Outward taxable value</dt>
-              <dt className="text-zinc-500">Total outward tax</dt>
-              <dt className="text-zinc-500">Net tax payable</dt>
+              <dt className="text-muted-foreground">Outward taxable value</dt>
+              <dt className="text-muted-foreground">Total outward tax</dt>
+              <dt className="text-muted-foreground">Net tax payable</dt>
               <dd>₹{gstr3b.summary.outward_taxable_value}</dd>
               <dd>₹{gstr3b.summary.total_outward_tax}</dd>
               <dd className="font-semibold">₹{gstr3b.summary.net_tax_payable}</dd>
-              <dt className="text-zinc-500">CGST / SGST / IGST</dt>
-              <dt className="text-zinc-500">ITC available</dt>
+              <dt className="text-muted-foreground">CGST / SGST / IGST</dt>
+              <dt className="text-muted-foreground">ITC available</dt>
               <dt></dt>
               <dd>
                 ₹{gstr3b.summary.cgst} / ₹{gstr3b.summary.sgst} / ₹{gstr3b.summary.igst}
@@ -95,16 +95,16 @@ export default function GSTReturnsPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <dl className="grid grid-cols-3 gap-3 text-sm">
-              <dt className="text-zinc-500">B2B parties / invoices</dt>
-              <dt className="text-zinc-500">B2B taxable value</dt>
-              <dt className="text-zinc-500">B2C taxable value</dt>
+              <dt className="text-muted-foreground">B2B parties / invoices</dt>
+              <dt className="text-muted-foreground">B2B taxable value</dt>
+              <dt className="text-muted-foreground">B2C taxable value</dt>
               <dd>
                 {gstr1.summary.b2b_party_count} / {gstr1.summary.b2b_invoice_count}
               </dd>
               <dd>₹{gstr1.summary.b2b_taxable_value}</dd>
               <dd>₹{gstr1.summary.b2c_taxable_value}</dd>
-              <dt className="text-zinc-500">Total taxable value</dt>
-              <dt className="text-zinc-500">Total tax</dt>
+              <dt className="text-muted-foreground">Total taxable value</dt>
+              <dt className="text-muted-foreground">Total tax</dt>
               <dt></dt>
               <dd className="font-semibold">₹{gstr1.summary.total_taxable_value}</dd>
               <dd>₹{gstr1.summary.total_tax}</dd>
@@ -113,8 +113,8 @@ export default function GSTReturnsPage() {
             <ReconciliationRow reconciliation={gstr1.reconciliation} />
             {gstr1.notes.length > 0 && (
               <div className="flex flex-col gap-1">
-                <p className="text-xs font-medium text-zinc-600">Known gaps in this export:</p>
-                <ul className="list-disc list-inside text-xs text-zinc-500">
+                <p className="text-xs font-medium text-muted-foreground">Known gaps in this export:</p>
+                <ul className="list-disc list-inside text-xs text-muted-foreground">
                   {gstr1.notes.map((n, i) => (
                     <li key={i}>{n}</li>
                   ))}
@@ -127,7 +127,7 @@ export default function GSTReturnsPage() {
       )}
 
       {(gstr1 || gstr3b) && (
-        <p className="text-xs text-zinc-500">{gstr1?.disclaimer ?? gstr3b?.disclaimer}</p>
+        <p className="text-xs text-muted-foreground">{gstr1?.disclaimer ?? gstr3b?.disclaimer}</p>
       )}
     </div>
   );
@@ -137,7 +137,7 @@ function ReconciliationRow({ reconciliation }: { reconciliation: { computed_gst_
   return (
     <div className="flex items-center gap-3 text-sm border-t pt-3">
       <Badge variant={reconciliation.matches ? "default" : "destructive"}>{reconciliation.matches ? "Reconciled" : "Mismatch"}</Badge>
-      <span className="text-zinc-600">
+      <span className="text-muted-foreground">
         Computed ₹{reconciliation.computed_gst_output} vs. ledger ₹{reconciliation.ledger_gst_payable}
       </span>
     </div>
@@ -167,7 +167,7 @@ function JsonPanel({ label, value }: { label: string; value: unknown }) {
           {copied ? "Copied" : "Copy"}
         </Button>
       </summary>
-      <pre className="text-xs bg-zinc-50 rounded p-2 mt-2 overflow-x-auto max-h-96">{json}</pre>
+      <pre className="text-xs bg-muted/50 rounded p-2 mt-2 overflow-x-auto max-h-96">{json}</pre>
     </details>
   );
 }

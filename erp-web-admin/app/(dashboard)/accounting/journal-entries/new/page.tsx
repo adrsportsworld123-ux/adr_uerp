@@ -130,11 +130,11 @@ export default function NewJournalEntryPage() {
               </Button>
             </div>
 
-            <p className={`text-sm ${balanced ? "text-green-600" : "text-zinc-500"}`}>
+            <p className={`text-sm ${balanced ? "text-pay" : "text-muted-foreground"}`}>
               Total debit ₹{totalDebit.toFixed(2)} · Total credit ₹{totalCredit.toFixed(2)} {balanced ? "— balanced" : "— must balance before posting"}
             </p>
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={submitting || !balanced}>
               {submitting ? "Posting..." : "Post entry"}
             </Button>

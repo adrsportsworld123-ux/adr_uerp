@@ -41,8 +41,8 @@ export default function CashBookPage() {
           <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-40" />
         </div>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <p className="text-sm text-zinc-500">Cash, Bank, Card Clearing, and UPI Clearing movements only.</p>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <p className="text-sm text-muted-foreground">Cash, Bank, Card Clearing, and UPI Clearing movements only.</p>
 
       {lines && (
         <Card>
@@ -51,7 +51,7 @@ export default function CashBookPage() {
           </CardHeader>
           <CardContent>
             {lines.length === 0 ? (
-              <p className="text-sm text-zinc-500">No cash/bank movement on this date.</p>
+              <p className="text-sm text-muted-foreground">No cash/bank movement on this date.</p>
             ) : (
               <Table>
                 <TableHeader>

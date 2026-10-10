@@ -68,7 +68,7 @@ export default function AuditLogsPage() {
         <Card>
           <CardContent className="pt-6 flex items-center gap-4">
             <Badge variant={verifyResult.valid ? "default" : "destructive"}>{verifyResult.valid ? "Valid" : "Broken"}</Badge>
-            <span className="text-sm text-zinc-600">
+            <span className="text-sm text-muted-foreground">
               {verifyResult.rows_checked} row(s) checked, {verifyResult.legacy_rows_skipped} pre-hardening row(s) skipped
               {!verifyResult.valid && (
                 <>
@@ -97,7 +97,7 @@ export default function AuditLogsPage() {
         </CardContent>
       </Card>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardContent className="pt-6">
@@ -117,7 +117,7 @@ export default function AuditLogsPage() {
                 <TableRow key={e.id}>
                   <TableCell className="text-xs">{e.created_at}</TableCell>
                   <TableCell className="text-xs">
-                    {e.entity_type} <span className="font-mono text-zinc-500">{e.entity_id.slice(0, 8)}…</span>
+                    {e.entity_type} <span className="font-mono text-muted-foreground">{e.entity_id.slice(0, 8)}…</span>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">{e.action}</Badge>
@@ -128,14 +128,14 @@ export default function AuditLogsPage() {
                     {e.checksum ? (
                       <span className="font-mono">{e.checksum.slice(0, 10)}…</span>
                     ) : (
-                      <span className="text-zinc-400">pre-hardening</span>
+                      <span className="text-muted-foreground">pre-hardening</span>
                     )}
                   </TableCell>
                 </TableRow>
               ))}
               {entries.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                     No audit log entries match this filter
                   </TableCell>
                 </TableRow>

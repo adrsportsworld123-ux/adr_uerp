@@ -103,12 +103,12 @@ export default function NewCustomerPage() {
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="gstin">GSTIN *</Label>
                   <Input id="gstin" required value={gstin} onChange={(e) => setGstin(e.target.value)} />
-                  <p className="text-xs text-zinc-500">Mandatory for B2B registration.</p>
+                  <p className="text-xs text-muted-foreground">Mandatory for B2B registration.</p>
                 </div>
               </>
             )}
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={submitting}>
               {submitting ? "Creating..." : "Register customer"}
             </Button>

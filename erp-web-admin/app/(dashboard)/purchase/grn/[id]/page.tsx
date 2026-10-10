@@ -99,8 +99,8 @@ export default function GRNDetailPage() {
     }
   }
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!grn) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (!grn) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   const isDraft = grn.status === "draft";
 
@@ -124,7 +124,7 @@ export default function GRNDetailPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {grn.lines.length === 0 ? (
-            <p className="text-sm text-zinc-500">No lines yet.</p>
+            <p className="text-sm text-muted-foreground">No lines yet.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -141,7 +141,7 @@ export default function GRNDetailPage() {
                 {grn.lines.map((l) => (
                   <TableRow key={l.line_id}>
                     <TableCell>
-                      {l.product_name} <span className="text-zinc-400">({l.sku})</span>
+                      {l.product_name} <span className="text-muted-foreground">({l.sku})</span>
                     </TableCell>
                     <TableCell>{l.quantity}</TableCell>
                     <TableCell>₹{l.unit_cost}</TableCell>
@@ -158,15 +158,15 @@ export default function GRNDetailPage() {
 
           <div className="flex flex-col gap-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-zinc-500">Subtotal</span>
+              <span className="text-muted-foreground">Subtotal</span>
               <span>₹{grn.subtotal}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-zinc-500">Freight</span>
+              <span className="text-muted-foreground">Freight</span>
               <span>₹{grn.freight_amount}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-zinc-500">Other charges</span>
+              <span className="text-muted-foreground">Other charges</span>
               <span>₹{grn.other_charges}</span>
             </div>
             <div className="flex justify-between font-semibold">
@@ -192,11 +192,11 @@ export default function GRNDetailPage() {
                 Look up
               </Button>
             </form>
-            {lookupError && <p className="text-sm text-red-600">{lookupError}</p>}
+            {lookupError && <p className="text-sm text-destructive">{lookupError}</p>}
             {resolved && (
-              <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-zinc-50">
+              <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-muted/50">
                 <p className="text-sm font-medium">
-                  {resolved.product_name} <span className="text-zinc-400">({resolved.sku})</span>
+                  {resolved.product_name} <span className="text-muted-foreground">({resolved.sku})</span>
                 </p>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">

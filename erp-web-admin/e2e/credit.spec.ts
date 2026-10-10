@@ -102,6 +102,7 @@ test("credit limit configuration, a credit sale's outstanding/aging, and recordi
     await page.goto("/dashboard");
     await page.click("text=Log out");
     await page.waitForURL("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

@@ -97,6 +97,7 @@ test("import a bank statement CSV, auto-match, manual match, and the reconciliat
     await page.goto("/dashboard");
     await page.click("text=Log out");
     await page.waitForURL("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

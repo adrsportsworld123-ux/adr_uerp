@@ -19,12 +19,12 @@ export default function DashboardHome() {
     <div className="flex flex-col gap-6 max-w-3xl">
       <div>
         <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-zinc-500">Purchase Management, Ledger & Accounting, Multi-Branch, and Pricing for the ERP backend.</p>
+        <p className="text-sm text-muted-foreground">Purchase Management, Ledger & Accounting, Multi-Branch, and Pricing for the ERP backend.</p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {SHORTCUTS.map((s) => (
           <Link key={s.href} href={s.href}>
-            <Card className="hover:border-zinc-400 transition-colors h-full">
+            <Card className="hover:border-primary/40 transition-colors h-full">
               <CardHeader>
                 <CardTitle className="text-base">{s.title}</CardTitle>
                 <CardDescription>{s.description}</CardDescription>

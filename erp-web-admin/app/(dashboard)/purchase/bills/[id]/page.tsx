@@ -66,8 +66,8 @@ export default function BillDetailPage() {
     }
   }
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!bill) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (!bill) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   const balance = Number(bill.grand_total) - Number(bill.amount_paid);
 
@@ -81,13 +81,13 @@ export default function BillDetailPage() {
       <Card>
         <CardContent className="flex flex-col gap-2 text-sm pt-6">
           <div className="flex justify-between">
-            <span className="text-zinc-500">Subtotal (landed cost)</span>
+            <span className="text-muted-foreground">Subtotal (landed cost)</span>
             <span>
               ₹{bill.subtotal} + freight ₹{bill.freight_amount} + other ₹{bill.other_charges}
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-zinc-500">GST</span>
+            <span className="text-muted-foreground">GST</span>
             <span>₹{bill.tax_total}</span>
           </div>
           <div className="flex justify-between font-semibold">
@@ -95,7 +95,7 @@ export default function BillDetailPage() {
             <span>₹{bill.grand_total}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-zinc-500">Paid</span>
+            <span className="text-muted-foreground">Paid</span>
             <span>₹{bill.amount_paid}</span>
           </div>
           <div className="flex justify-between font-semibold">
@@ -141,7 +141,7 @@ export default function BillDetailPage() {
                 <Label htmlFor="reference">Reference number</Label>
                 <Input id="reference" value={referenceNo} onChange={(e) => setReferenceNo(e.target.value)} />
               </div>
-              {payError && <p className="text-sm text-red-600">{payError}</p>}
+              {payError && <p className="text-sm text-destructive">{payError}</p>}
               <Button type="submit" disabled={submitting}>
                 {submitting ? "Recording..." : "Record payment"}
               </Button>

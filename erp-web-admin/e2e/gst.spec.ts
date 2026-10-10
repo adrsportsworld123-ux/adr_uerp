@@ -12,6 +12,7 @@ import { test, expect } from "@playwright/test";
 test("GST Returns screen loads a real period's summary and reconciliation", async ({ page }) => {
   await test.step("login", async () => {
     await page.goto("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

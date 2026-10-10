@@ -238,7 +238,7 @@ export default function NewProductPage() {
 
             {categoryAttributes.length > 0 && (
               <div className="flex flex-col gap-3 border rounded p-3">
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-muted-foreground">
                   This category has a configured attribute set (Product Attributes screen) — fill in what applies.
                 </p>
                 {categoryAttributes.map((a) => (
@@ -330,7 +330,7 @@ export default function NewProductPage() {
                 />
                 Selling price includes GST
               </label>
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 {priceIncludesTax
                   ? "The customer pays exactly the selling price; GST is extracted from it on the bill."
                   : "GST is added on top of the selling price on the bill."}
@@ -371,7 +371,7 @@ export default function NewProductPage() {
             <CardTitle className="text-base">Initial variant</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-muted-foreground">
               A product needs at least one sellable variant to exist — this creates the first one. Add further size/color
               variants afterward from Pricing; barcodes can be entered/generated right here, or later from Pricing too.
             </p>
@@ -403,7 +403,7 @@ export default function NewProductPage() {
             </div>
 
             <div className="flex flex-col gap-3 border rounded p-3">
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted-foreground">
                 Barcode — enter the real one already on the product, generate one of our own, or both (they&apos;re kept
                 separately, not one replacing the other).
               </p>
@@ -423,7 +423,7 @@ export default function NewProductPage() {
             </div>
 
             <div className="flex flex-col gap-3 border rounded p-3">
-              <p className="text-xs text-zinc-500">Phase 8: Vertical Expansion — Grocery/FMCG</p>
+              <p className="text-xs text-muted-foreground">Phase 8: Vertical Expansion — Grocery/FMCG</p>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={trackBatch} onChange={(e) => setTrackBatch(e.target.checked)} />
                 Track batch/lot number and expiry (perishables)
@@ -434,7 +434,7 @@ export default function NewProductPage() {
               </div>
             </div>
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={busy} className="w-fit">
               {busy ? "Creating..." : "Create product"}
             </Button>

@@ -113,7 +113,7 @@ export default function PayrollPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">Payroll</h1>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardHeader>
@@ -177,7 +177,7 @@ export default function PayrollPage() {
             <Button variant="outline" onClick={computeCommission}>Compute commission first</Button>
             <Button onClick={runPayroll}>Run / recompute payroll</Button>
           </div>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted-foreground">
             Compute commission after the return window on this period&apos;s sales has closed, not right at period-end —
             computing early can pay commission on a sale that&apos;s later returned or voided.
           </p>
@@ -224,7 +224,7 @@ export default function PayrollPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             {selectedRun.skipped_employees && selectedRun.skipped_employees.length > 0 && (
-              <p className="text-xs text-zinc-500">Skipped: {selectedRun.skipped_employees.join("; ")}</p>
+              <p className="text-xs text-muted-foreground">Skipped: {selectedRun.skipped_employees.join("; ")}</p>
             )}
             {challan && (
               <div className="text-sm border rounded-lg p-3 flex flex-col gap-1">
@@ -235,7 +235,7 @@ export default function PayrollPage() {
                   <span>TDS payable: <strong>₹{challan.tds_total}</strong></span>
                   <span>LWF payable: <strong>₹{challan.lwf_total}</strong></span>
                 </div>
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-muted-foreground">
                   PF employer split for the EPFO challan: EPS ₹{challan.pf_employer_eps} + EPF ₹{challan.pf_employer_epf}
                 </p>
               </div>

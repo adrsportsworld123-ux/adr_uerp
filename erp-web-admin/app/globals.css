@@ -7,7 +7,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -39,6 +39,17 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-primary-soft: var(--primary-soft);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-pay: var(--pay);
+  --color-pay-foreground: var(--pay-foreground);
+  --color-pay-soft: var(--pay-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-plum: var(--plum);
+  --color-plum-soft: var(--plum-soft);
+  --color-teal: var(--teal);
+  --color-teal-soft: var(--teal-soft);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -48,73 +59,103 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * ADR ERP design tokens (Phase 11, see erp-core-go/docs/phased_roadmap.md).
+ * The same values back the Flutter POS theme (erp-pos-flutter/lib/ui/theme.dart),
+ * so a status reads the same on the till and in the back office. Variable
+ * names are shadcn's own, so every existing component picks these up unchanged.
+ * Status colors: pay = completed/active/in stock, warn = pending/offline/low,
+ * destructive = failed/void, plum = returned/needs approval, teal = refunded/posted.
+ */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --background: #f5f7fa;
+  --foreground: #131922;
+  --card: #ffffff;
+  --card-foreground: #131922;
+  --popover: #ffffff;
+  --popover-foreground: #131922;
+  --primary: #1e56a0;
+  --primary-foreground: #ffffff;
+  --primary-soft: #e2ebf7;
+  --secondary: #eef1f5;
+  --secondary-foreground: #131922;
+  --muted: #eef1f5;
+  --muted-foreground: #5d6879;
+  --accent: #e2ebf7;
+  --accent-foreground: #1e56a0;
+  --destructive: #c0392b;
+  --destructive-soft: #fbe3e0;
+  --pay: #0b7f57;
+  --pay-foreground: #ffffff;
+  --pay-soft: #dcf2e8;
+  --warn: #a86300;
+  --warn-soft: #faefd8;
+  --plum: #7445a8;
+  --plum-soft: #efe6f8;
+  --teal: #0c7486;
+  --teal-soft: #ddf1f4;
+  --border: #dce1e9;
+  --input: #dce1e9;
+  --ring: #1e56a0;
+  --chart-1: #1e56a0;
+  --chart-2: #0b7f57;
+  --chart-3: #a86300;
+  --chart-4: #7445a8;
+  --chart-5: #0c7486;
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #ffffff;
+  --sidebar-foreground: #4a5567;
+  --sidebar-primary: #1e56a0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e2ebf7;
+  --sidebar-accent-foreground: #1e56a0;
+  --sidebar-border: #dce1e9;
+  --sidebar-ring: #1e56a0;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #0d1117;
+  --foreground: #e6ebf2;
+  --card: #151b24;
+  --card-foreground: #e6ebf2;
+  --popover: #1c2430;
+  --popover-foreground: #e6ebf2;
+  --primary: #6e9ee6;
+  --primary-foreground: #0a1220;
+  --primary-soft: #1a2941;
+  --secondary: #1c2430;
+  --secondary-foreground: #e6ebf2;
+  --muted: #1c2430;
+  --muted-foreground: #97a3b5;
+  --accent: #1a2941;
+  --accent-foreground: #9dbdf0;
+  --destructive: #ef7262;
+  --destructive-soft: #3a1c19;
+  --pay: #39c08b;
+  --pay-foreground: #062016;
+  --pay-soft: #11302a;
+  --warn: #e5a63a;
+  --warn-soft: #33270f;
+  --plum: #b693e6;
+  --plum-soft: #2a2140;
+  --teal: #4ec1d0;
+  --teal-soft: #10303a;
+  --border: #2a3443;
+  --input: #2a3443;
+  --ring: #6e9ee6;
+  --chart-1: #6e9ee6;
+  --chart-2: #39c08b;
+  --chart-3: #e5a63a;
+  --chart-4: #b693e6;
+  --chart-5: #4ec1d0;
+  --sidebar: #151b24;
+  --sidebar-foreground: #a8b3c3;
+  --sidebar-primary: #6e9ee6;
+  --sidebar-primary-foreground: #0a1220;
+  --sidebar-accent: #1a2941;
+  --sidebar-accent-foreground: #9dbdf0;
+  --sidebar-border: #2a3443;
+  --sidebar-ring: #6e9ee6;
 }
 
 @layer base {
@@ -126,5 +167,9 @@
   }
   html {
     @apply font-sans;
+  }
+  /* money, quantities and codes line up in columns everywhere */
+  td, th, .tabular {
+    font-variant-numeric: tabular-nums;
   }
 }

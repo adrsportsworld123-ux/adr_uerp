@@ -110,7 +110,7 @@ export default function EInvoicingPage() {
   return (
     <div className="flex flex-col gap-6 max-w-3xl">
       <h1 className="text-2xl font-semibold">E-Invoicing & E-Way Bill</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Uses a vendor-agnostic stub GSP client (no real GST Suvidha Provider is wired in yet — see
         migrations/022_einvoice.sql). IRNs and e-way-bill numbers generated here are realistic in shape but not
         genuine government-issued documents.
@@ -149,7 +149,7 @@ export default function EInvoicingPage() {
                   <div>GSP: {einvoice.gsp_provider}</div>
                 </div>
               ) : (
-                <p className="text-sm text-zinc-500">No e-invoice generated for this order yet.</p>
+                <p className="text-sm text-muted-foreground">No e-invoice generated for this order yet.</p>
               )}
               <Separator />
               <div className="flex items-end gap-4 flex-wrap">
@@ -171,7 +171,7 @@ export default function EInvoicingPage() {
                 )}
               </div>
               {einvoice?.status === "cancelled" && (
-                <p className="text-xs text-zinc-500">Cancelled — a cancelled IRN can never be reused (real NIC rule); this order cannot get a new e-invoice.</p>
+                <p className="text-xs text-muted-foreground">Cancelled — a cancelled IRN can never be reused (real NIC rule); this order cannot get a new e-invoice.</p>
               )}
             </CardContent>
           </Card>
@@ -197,7 +197,7 @@ export default function EInvoicingPage() {
                   </div>
                 </div>
               ) : (
-                <p className="text-sm text-zinc-500">No e-way bill generated for this order yet.</p>
+                <p className="text-sm text-muted-foreground">No e-way bill generated for this order yet.</p>
               )}
               <Separator />
               {!ewayBillActive && ewayBill?.status !== "cancelled" && (
@@ -228,7 +228,7 @@ export default function EInvoicingPage() {
                   </Button>
                 </div>
               )}
-              {ewayBill?.status === "cancelled" && <p className="text-xs text-zinc-500">Cancelled.</p>}
+              {ewayBill?.status === "cancelled" && <p className="text-xs text-muted-foreground">Cancelled.</p>}
             </CardContent>
           </Card>
         </>

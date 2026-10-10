@@ -145,7 +145,7 @@ function NewCountSection() {
             </div>
           </div>
 
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted-foreground">
             System cash sales for this date: {cashSales !== null ? `₹${cashSales}` : "—"}. System expected (opening + sales): ₹
             {systemExpected.toFixed(2)}
           </p>
@@ -170,14 +170,14 @@ function NewCountSection() {
             <span>
               Counted total: <span className="font-semibold">₹{countedTotal.toFixed(2)}</span>
             </span>
-            <span className={variance === 0 ? "text-green-700" : "text-red-600 font-semibold"}>
+            <span className={variance === 0 ? "text-pay" : "text-destructive font-semibold"}>
               Variance: ₹{variance.toFixed(2)} {variance > 0 ? "(overage)" : variance < 0 ? "(shortage)" : ""}
             </span>
           </div>
 
           {needsApproval && (
-            <div className="flex flex-col gap-3 border rounded-lg p-3 bg-amber-50">
-              <p className="text-xs text-amber-800">
+            <div className="flex flex-col gap-3 border rounded-lg p-3 bg-warn-soft">
+              <p className="text-xs text-warn">
                 A non-zero variance needs a reason and a Branch Manager or Merchant Admin&apos;s PIN before this can be closed.
               </p>
               <div className="flex flex-col gap-2">
@@ -197,7 +197,7 @@ function NewCountSection() {
             </div>
           )}
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" disabled={busy} className="w-fit">
             {busy ? "Submitting..." : "Submit reconciliation"}
           </Button>
@@ -254,7 +254,7 @@ function HistorySection() {
           <Input id="histEnd" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-40" />
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         <Table>
           <TableHeader>
@@ -274,13 +274,13 @@ function HistorySection() {
                 <TableCell>₹{h.opening_float}</TableCell>
                 <TableCell>₹{h.system_expected}</TableCell>
                 <TableCell>₹{h.counted_total}</TableCell>
-                <TableCell className={Number(h.variance) !== 0 ? "text-red-600" : ""}>₹{h.variance}</TableCell>
-                <TableCell>{h.authorized ? <Badge variant="default">Yes</Badge> : <span className="text-zinc-400">—</span>}</TableCell>
+                <TableCell className={Number(h.variance) !== 0 ? "text-destructive" : ""}>₹{h.variance}</TableCell>
+                <TableCell>{h.authorized ? <Badge variant="default">Yes</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
               </TableRow>
             ))}
             {history.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                   No reconciliations in range
                 </TableCell>
               </TableRow>

@@ -130,7 +130,7 @@ function ImportSection({ refreshToken, onMatchChanged }: { refreshToken: number;
         <CardTitle className="text-base">Import a payment gateway settlement</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted-foreground">
           CSV only, columns in order: settlement_date (YYYY-MM-DD), reference (the gateway&apos;s UTR/transaction id), amount
           (net of the gateway&apos;s own fee). Auto-matches against captured card/UPI payments by exact reference on import;
           unmatched or duplicate lines are left for manual review below.
@@ -141,13 +141,13 @@ function ImportSection({ refreshToken, onMatchChanged }: { refreshToken: number;
           </Label>
           <Input id="gateway" value={gateway} onChange={(e) => setGateway(e.target.value)} disabled={busy} className="w-40" />
           <Input ref={fileInput} type="file" accept=".csv,text/csv" onChange={handleFile} disabled={busy} className="max-w-xs" />
-          {busy && <span className="text-sm text-zinc-500">Importing...</span>}
+          {busy && <span className="text-sm text-muted-foreground">Importing...</span>}
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         {imports.length > 0 && (
           <div className="flex flex-col gap-2 border-t pt-4">
-            <p className="text-xs font-medium text-zinc-600">Past imports</p>
+            <p className="text-xs font-medium text-muted-foreground">Past imports</p>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -168,7 +168,7 @@ function ImportSection({ refreshToken, onMatchChanged }: { refreshToken: number;
                     <TableCell>
                       {imp.matched_count} / {imp.line_count}
                     </TableCell>
-                    <TableCell className="text-xs text-zinc-500">{imp.imported_at}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{imp.imported_at}</TableCell>
                     <TableCell>
                       <Button size="sm" variant="outline" onClick={() => loadLines(imp.import_id)}>
                         View
@@ -269,13 +269,13 @@ function SettlementLinesTable({ lines, onChanged }: { lines: SettlementLine[]; o
             </TableRow>
             {pickingFor === l.line_id && (
               <TableRow>
-                <TableCell colSpan={5} className="bg-zinc-50">
+                <TableCell colSpan={5} className="bg-muted/50">
                   <div className="flex flex-col gap-2 py-2">
-                    <p className="text-xs text-zinc-500">Unclaimed captured card/UPI payments within a week of this line&apos;s date:</p>
-                    {candidates.length === 0 && <p className="text-sm text-zinc-500">No candidates found.</p>}
+                    <p className="text-xs text-muted-foreground">Unclaimed captured card/UPI payments within a week of this line&apos;s date:</p>
+                    {candidates.length === 0 && <p className="text-sm text-muted-foreground">No candidates found.</p>}
                     {candidates.map((c) => (
                       <div key={c.payment_id} className="flex items-center gap-3 text-sm">
-                        <span className="text-xs text-zinc-500">{c.created_at}</span>
+                        <span className="text-xs text-muted-foreground">{c.created_at}</span>
                         <Badge variant="outline">{c.method}</Badge>
                         <span className="font-mono text-xs">{c.reference_no || "—"}</span>
                         <span>₹{c.amount}</span>
@@ -295,7 +295,7 @@ function SettlementLinesTable({ lines, onChanged }: { lines: SettlementLine[]; o
         ))}
         {lines.length === 0 && (
           <TableRow>
-            <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-6">
+            <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">
               No lines
             </TableCell>
           </TableRow>
@@ -343,7 +343,7 @@ function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refresh
           <Input id="end" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-40" />
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         {report && (
           <>
@@ -352,9 +352,9 @@ function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refresh
             </p>
 
             <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium text-zinc-600">Unmatched settlement lines ({report.unmatched_settlement_lines.length})</p>
+              <p className="text-xs font-medium text-muted-foreground">Unmatched settlement lines ({report.unmatched_settlement_lines.length})</p>
               {report.unmatched_settlement_lines.length === 0 ? (
-                <p className="text-sm text-zinc-500">None — every imported line in range is matched.</p>
+                <p className="text-sm text-muted-foreground">None — every imported line in range is matched.</p>
               ) : (
                 <SettlementLinesTable
                   lines={report.unmatched_settlement_lines}
@@ -367,9 +367,9 @@ function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refresh
             </div>
 
             <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium text-zinc-600">Duplicate settlement lines ({report.duplicate_settlement_lines.length})</p>
+              <p className="text-xs font-medium text-muted-foreground">Duplicate settlement lines ({report.duplicate_settlement_lines.length})</p>
               {report.duplicate_settlement_lines.length === 0 ? (
-                <p className="text-sm text-zinc-500">None.</p>
+                <p className="text-sm text-muted-foreground">None.</p>
               ) : (
                 <SettlementLinesTable
                   lines={report.duplicate_settlement_lines}
@@ -382,10 +382,10 @@ function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refresh
             </div>
 
             <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium text-zinc-600">Missing payments ({report.missing_payments.length})</p>
-              <p className="text-xs text-zinc-500">Captured card/UPI payments in range with no matching settlement — money collected that hasn&apos;t shown up in the bank yet.</p>
+              <p className="text-xs font-medium text-muted-foreground">Missing payments ({report.missing_payments.length})</p>
+              <p className="text-xs text-muted-foreground">Captured card/UPI payments in range with no matching settlement — money collected that hasn&apos;t shown up in the bank yet.</p>
               {report.missing_payments.length === 0 ? (
-                <p className="text-sm text-zinc-500">None — every captured card/UPI payment in range has settled.</p>
+                <p className="text-sm text-muted-foreground">None — every captured card/UPI payment in range has settled.</p>
               ) : (
                 <Table>
                   <TableHeader>

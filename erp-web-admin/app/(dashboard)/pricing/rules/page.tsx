@@ -150,7 +150,7 @@ export default function PriceRulesPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">Price Rules</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Happy hours, weekend specials and seasonal prices. A rule sets the item&apos;s price at the till (up or down, never above
         MRP). A customer&apos;s wholesale price list always wins over a rule. Days and hours are each branch&apos;s local time.
         Quotations don&apos;t use rules.
@@ -290,7 +290,7 @@ export default function PriceRulesPage() {
               <Input id="endsAt" type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
             </div>
           </div>
-          <p className="text-xs text-zinc-500">A time window may cross midnight (e.g. 22:00 until 02:00). Leave times and season empty for an always-on rule.</p>
+          <p className="text-xs text-muted-foreground">A time window may cross midnight (e.g. 22:00 until 02:00). Leave times and season empty for an always-on rule.</p>
 
           <div className="flex items-center gap-4">
             <label className="flex items-center gap-2 text-sm">
@@ -327,11 +327,11 @@ export default function PriceRulesPage() {
                   <TableRow key={r.price_rule_id}>
                     <TableCell>
                       {r.name}
-                      {r.priority !== 0 && <span className="text-xs text-zinc-500"> · priority {r.priority}</span>}
+                      {r.priority !== 0 && <span className="text-xs text-muted-foreground"> · priority {r.priority}</span>}
                     </TableCell>
                     <TableCell className="text-sm">
                       {r.variant_id ? `${r.product_name} (${r.sku})` : `Category: ${r.category_name}`}
-                      <div className="text-xs text-zinc-500">{branchName(r.branch_id)}</div>
+                      <div className="text-xs text-muted-foreground">{branchName(r.branch_id)}</div>
                     </TableCell>
                     <TableCell>{d.what}</TableCell>
                     <TableCell className="text-sm">{d.when}</TableCell>
@@ -351,7 +351,7 @@ export default function PriceRulesPage() {
               })}
               {rules.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                     No price rules yet
                   </TableCell>
                 </TableRow>
@@ -366,7 +366,7 @@ export default function PriceRulesPage() {
           <CardTitle className="text-base">Price check</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <p className="text-xs text-zinc-500">What would the till charge for an item at a branch and time? Leave the time empty for right now.</p>
+          <p className="text-xs text-muted-foreground">What would the till charge for an item at a branch and time? Leave the time empty for right now.</p>
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
             <div className="flex flex-col gap-2 sm:col-span-2">
               <Label>Product variant</Label>

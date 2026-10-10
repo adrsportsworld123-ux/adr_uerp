@@ -101,6 +101,7 @@ test("reorder-point configuration, permission gate, and the sent-notification lo
     await page.goto("/dashboard");
     await page.click("text=Log out");
     await page.waitForURL("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

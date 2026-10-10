@@ -77,14 +77,14 @@ export default function ProductEditPage() {
 
   const onSaved = useCallback((p: ProductDetail) => setProduct(p), []);
 
-  if (loadError) return <p className="text-sm text-red-600">{loadError}</p>;
-  if (!product) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (loadError) return <p className="text-sm text-destructive">{loadError}</p>;
+  if (!product) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl">
       <div className="flex items-center justify-between">
         <div>
-          <Link href="/products" className="text-sm text-zinc-500 hover:underline">
+          <Link href="/products" className="text-sm text-muted-foreground hover:underline">
             ← Products
           </Link>
           <h1 className="text-2xl font-semibold flex items-center gap-3">
@@ -207,7 +207,7 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
             <LinkSelect label="Collection" value={collectionId} onChange={setCollectionId} options={lookups.collections.map((c) => ({ id: c.collection_id, name: c.name }))} />
           </div>
           {categoryId !== (product.category_id ?? "") && (
-            <p className="text-xs text-amber-700">
+            <p className="text-xs text-warn">
               Changing the category re-checks every variant against the new category&apos;s required attributes — the save is refused, naming the
               variant, if one doesn&apos;t fit. Set its attributes first.
             </p>
@@ -236,12 +236,12 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
             </label>
           </div>
           {priceIncludesTax !== product.price_includes_tax && (
-            <p className="text-xs text-amber-700">
+            <p className="text-xs text-warn">
               This re-reads every variant&apos;s current selling price {priceIncludesTax ? "as GST-inclusive" : "as GST-exclusive"} — the shelf price
               {priceIncludesTax ? " becomes the bill total" : " gets GST added on top"}. Past sales are unaffected.
             </p>
           )}
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" disabled={busy || !dirty || !name.trim()} className="w-fit">
             {busy ? "Saving..." : "Save product"}
           </Button>
@@ -379,7 +379,7 @@ function VariantSection({
         <CardTitle className="text-base flex items-center gap-3">
           {variant.sku}
           <Badge variant={STATUS_BADGE[variant.status] ?? "outline"}>{variant.status}</Badge>
-          <span className="text-xs font-normal text-zinc-500">stock across branches: {variant.on_hand_total}</span>
+          <span className="text-xs font-normal text-muted-foreground">stock across branches: {variant.on_hand_total}</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -415,9 +415,9 @@ function VariantSection({
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={trackBatch} disabled={hasStock} onChange={(e) => setTrackBatch(e.target.checked)} />
           Batch / expiry tracking
-          {hasStock && <span className="text-xs text-zinc-500">— can only be switched while this variant holds no stock</span>}
+          {hasStock && <span className="text-xs text-muted-foreground">— can only be switched while this variant holds no stock</span>}
         </label>
-        <div className="text-xs text-zinc-500">
+        <div className="text-xs text-muted-foreground">
           Barcodes: {variant.original_barcode ?? "no original"} · {variant.generated_barcode ?? "no system barcode"}
         </div>
         <Button variant="outline" className="w-fit" disabled={busy || !variantDirty || !sku.trim()} onClick={saveVariant}>
@@ -444,7 +444,7 @@ function VariantSection({
             </div>
           </div>
           {needsOverride && (
-            <label className="flex items-center gap-2 text-sm text-red-600">
+            <label className="flex items-center gap-2 text-sm text-destructive">
               <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} />
               This sells below cost — save anyway
             </label>
@@ -453,7 +453,7 @@ function VariantSection({
             Save prices
           </Button>
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
   );
@@ -521,7 +521,7 @@ function AddVariantSection({ productId, attrs, onSaved }: { productId: string; a
             <input type="checkbox" checked={generateBarcode} onChange={(e) => setGenerateBarcode(e.target.checked)} />
             Generate a system barcode
           </label>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" variant="outline" className="w-fit" disabled={busy}>
             {busy ? "Adding..." : "Add variant"}
           </Button>

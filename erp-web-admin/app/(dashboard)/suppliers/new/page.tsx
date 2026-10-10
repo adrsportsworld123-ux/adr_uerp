@@ -90,7 +90,7 @@ export default function NewSupplierPage() {
                 <Input id="credit_limit" type="number" min="0" step="0.01" value={form.credit_limit} onChange={(e) => set("credit_limit", e.target.value)} />
               </div>
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={submitting}>
               {submitting ? "Saving..." : "Create supplier"}
             </Button>

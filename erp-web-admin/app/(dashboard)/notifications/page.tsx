@@ -116,7 +116,7 @@ function NotificationLogSection() {
           </Select>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         <Table>
           <TableHeader>
@@ -141,12 +141,12 @@ function NotificationLogSection() {
                 <TableCell>
                   <Badge variant={n.status === "sent" ? "default" : "destructive"}>{n.status}</Badge>
                 </TableCell>
-                <TableCell className="text-xs text-zinc-500">{n.created_at}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">{n.created_at}</TableCell>
               </TableRow>
             ))}
             {notifications.length === 0 && !error && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                   No notifications yet
                 </TableCell>
               </TableRow>
@@ -245,7 +245,7 @@ function ReorderPointSection() {
         <CardTitle className="text-base">Low-stock alert thresholds</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted-foreground">
           When a variant&apos;s on-hand stock at a branch drops to or below its reorder point, every Branch Manager/Merchant
           Admin gets a low-stock email — checked periodically, not instantly.
         </p>
@@ -292,14 +292,14 @@ function ReorderPointSection() {
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         {stock && (
           <div className="flex gap-4 items-end flex-wrap border-t pt-4">
             <dl className="grid grid-cols-3 gap-x-6 text-sm">
-              <dt className="text-zinc-500">On hand</dt>
-              <dt className="text-zinc-500">Reserved</dt>
-              <dt className="text-zinc-500">Available</dt>
+              <dt className="text-muted-foreground">On hand</dt>
+              <dt className="text-muted-foreground">Reserved</dt>
+              <dt className="text-muted-foreground">Available</dt>
               <dd>{stock.on_hand}</dd>
               <dd>{stock.reserved}</dd>
               <dd>{stock.available}</dd>

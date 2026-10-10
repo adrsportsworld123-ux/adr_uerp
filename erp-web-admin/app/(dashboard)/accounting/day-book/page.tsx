@@ -38,8 +38,8 @@ export default function DayBookPage() {
           <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-40" />
         </div>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {entries && entries.length === 0 && <p className="text-sm text-zinc-500">No journal entries posted for this date.</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {entries && entries.length === 0 && <p className="text-sm text-muted-foreground">No journal entries posted for this date.</p>}
       <div className="flex flex-col gap-4">
         {entries?.map((entry) => (
           <Card key={entry.entry_number}>
@@ -48,7 +48,7 @@ export default function DayBookPage() {
                 <CardTitle className="text-sm font-mono">{entry.entry_number}</CardTitle>
                 <Badge variant="outline">{entry.source_type}</Badge>
               </div>
-              <p className="text-sm text-zinc-500">{entry.description}</p>
+              <p className="text-sm text-muted-foreground">{entry.description}</p>
             </CardHeader>
             <CardContent>
               <Table>

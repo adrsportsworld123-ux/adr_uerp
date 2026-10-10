@@ -113,7 +113,7 @@ export default function PartyLedgerPage() {
         </CardContent>
       </Card>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       {lines && (
         <Card>
@@ -122,7 +122,7 @@ export default function PartyLedgerPage() {
           </CardHeader>
           <CardContent>
             {lines.length === 0 ? (
-              <p className="text-sm text-zinc-500">No ledger entries for this party.</p>
+              <p className="text-sm text-muted-foreground">No ledger entries for this party.</p>
             ) : (
               <Table>
                 <TableHeader>

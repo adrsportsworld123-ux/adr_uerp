@@ -52,11 +52,11 @@ export default function ExpiringBatchesPage() {
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
       <h1 className="text-2xl font-semibold">Expiring Batches</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Every batch-tracked variant&apos;s remaining stock, soonest-to-expire first. A sale already refuses to draw
         from an expired batch — this is the visibility to act before it gets there.
       </p>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardContent className="flex items-end gap-4 flex-wrap pt-6">
@@ -96,7 +96,7 @@ export default function ExpiringBatchesPage() {
             <TableBody>
               {batches.map((b) => (
                 <TableRow key={b.batch_id}>
-                  <TableCell>{b.product_name} <span className="text-xs text-zinc-500">({b.sku})</span></TableCell>
+                  <TableCell>{b.product_name} <span className="text-xs text-muted-foreground">({b.sku})</span></TableCell>
                   <TableCell>{b.batch_no}</TableCell>
                   <TableCell>{b.expiry_date}</TableCell>
                   <TableCell>{b.quantity_remaining}</TableCell>
@@ -111,7 +111,7 @@ export default function ExpiringBatchesPage() {
               ))}
               {batches.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">
                     Nothing expiring in this window
                   </TableCell>
                 </TableRow>

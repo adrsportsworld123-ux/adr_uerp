@@ -53,13 +53,13 @@ export default function ChartOfAccountsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-3xl">
       <h1 className="text-2xl font-semibold">Chart of Accounts</h1>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       {grouped.map(
         (g) =>
           g.items.length > 0 && (
             <div key={g.type}>
-              <h2 className="text-sm font-semibold uppercase text-zinc-500 mb-2">{g.type}</h2>
+              <h2 className="text-sm font-semibold uppercase text-muted-foreground mb-2">{g.type}</h2>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -77,7 +77,7 @@ export default function ChartOfAccountsPage() {
                       <TableCell>
                         <Badge variant={a.status === "active" ? "default" : "secondary"}>{a.status}</Badge>
                       </TableCell>
-                      <TableCell>{a.is_system && <span className="text-xs text-zinc-400">system</span>}</TableCell>
+                      <TableCell>{a.is_system && <span className="text-xs text-muted-foreground">system</span>}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

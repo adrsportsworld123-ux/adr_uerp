@@ -89,18 +89,18 @@ export default function AIInsightsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">AI Insights</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Both sections below compute real numbers from this merchant&apos;s own sales history — no trained model,
         just SQL over what&apos;s already been sold.
       </p>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Reorder suggestions</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted-foreground">
             Lead time isn&apos;t stored anywhere yet (no product↔supplier link exists in Purchase Management) — enter
             what you know about your supplier&apos;s typical delivery time.
           </p>
@@ -144,7 +144,7 @@ export default function AIInsightsPage() {
             <TableBody>
               {suggestions.map((s) => (
                 <TableRow key={`${s.branch_id}-${s.variant_id}`}>
-                  <TableCell>{s.product_name} <span className="text-xs text-zinc-500">({s.sku})</span></TableCell>
+                  <TableCell>{s.product_name} <span className="text-xs text-muted-foreground">({s.sku})</span></TableCell>
                   <TableCell>{s.available}</TableCell>
                   <TableCell>{s.reorder_point}</TableCell>
                   <TableCell>{s.daily_velocity}</TableCell>
@@ -155,7 +155,7 @@ export default function AIInsightsPage() {
               ))}
               {suggestions.length === 0 && !loadingSuggestions && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">
                     Nothing is at risk of stocking out right now
                   </TableCell>
                 </TableRow>
@@ -188,7 +188,7 @@ export default function AIInsightsPage() {
           </div>
 
           {sourceOrderCount !== null && (
-            <p className="text-xs text-zinc-500">Based on {sourceOrderCount} finalized order(s) containing this product.</p>
+            <p className="text-xs text-muted-foreground">Based on {sourceOrderCount} finalized order(s) containing this product.</p>
           )}
 
           <Table>
@@ -203,7 +203,7 @@ export default function AIInsightsPage() {
             <TableBody>
               {recommendations.map((r) => (
                 <TableRow key={r.variant_id}>
-                  <TableCell>{r.product_name} <span className="text-xs text-zinc-500">({r.sku})</span></TableCell>
+                  <TableCell>{r.product_name} <span className="text-xs text-muted-foreground">({r.sku})</span></TableCell>
                   <TableCell>₹{r.selling_price}</TableCell>
                   <TableCell>{r.co_occurrence_count}x</TableCell>
                   <TableCell>{(Number(r.confidence) * 100).toFixed(0)}%</TableCell>
@@ -211,7 +211,7 @@ export default function AIInsightsPage() {
               ))}
               {recommendations.length === 0 && sourceOrderCount !== null && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-6">
                     No other product has ever been bought alongside this one yet
                   </TableCell>
                 </TableRow>

@@ -11,6 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  DEFAULT_MERCHANT_CODE,
   takePostLoginRedirect,
   takeSessionExpiredReason,
 } from "@/lib/api-client";
@@ -29,7 +30,7 @@ export default function LoginPage() {
   const { userId, ready, login } = useAuth();
   const router = useRouter();
 
-  const [merchantCode, setMerchantCode] = useState("adr_sports_world");
+  const [merchantCode, setMerchantCode] = useState(DEFAULT_MERCHANT_CODE);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -45,8 +46,8 @@ export default function LoginPage() {
   useEffect(() => {
     const reason = takeSessionExpiredReason();
     const back = takePostLoginRedirect();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (reason)
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sessionStorage is client-only; see comment above
       setNotice(
         reason === "idle"
           ? "Your session expired due to inactivity. Please sign in again."
@@ -87,7 +88,7 @@ export default function LoginPage() {
               <p
                 role="status"
                 data-testid="session-expired-notice"
-                className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+                className="rounded border border-warn/40 bg-warn-soft px-3 py-2 text-sm text-warn"
               >
                 {notice}
               </p>
@@ -121,13 +122,13 @@ export default function LoginPage() {
                 required
               />
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={submitting}>
               {submitting ? "Signing in..." : "Sign in"}
             </Button>
             <Link
               href="/forgot-password"
-              className="text-sm text-zinc-500 text-center hover:underline"
+              className="text-sm text-muted-foreground text-center hover:underline"
             >
               Forgot password?
             </Link>

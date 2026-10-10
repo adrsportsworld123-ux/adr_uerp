@@ -50,12 +50,12 @@ export default function StatutoryConfigPage() {
     setNewSlabAmount("");
   }
 
-  if (!cfg) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (!cfg) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl">
       <h1 className="text-2xl font-semibold">Statutory Configuration</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Editable defaults for this merchant. Verify against the current EPFO/ESIC/state PT notification before relying
         on these for a real filing — rates change over time and PT/LWF vary by state.
       </p>
@@ -146,7 +146,7 @@ export default function StatutoryConfigPage() {
           <CardTitle className="text-base">LWF &amp; TDS</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <p className="text-xs text-amber-700">
+          <p className="text-xs text-warn">
             LWF is due annually or half-yearly, not monthly, and whatever you set here is added to every payroll run
             that follows. Leave both at 0 except for the specific run LWF is actually due — set the real amount right
             before running that one payroll, then reset to 0 afterward.
@@ -167,7 +167,7 @@ export default function StatutoryConfigPage() {
           </div>
         </CardContent>
       </Card>
-      <p className="text-xs text-zinc-500">
+      <p className="text-xs text-muted-foreground">
         TDS here is a flat percentage of gross pay, not a real income-tax slab/regime computation — it defaults to 0
         (disabled) and needs a real TDS tool or a CA for an actual deployment above the exemption threshold.
       </p>

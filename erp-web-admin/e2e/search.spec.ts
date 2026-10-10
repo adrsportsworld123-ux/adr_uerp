@@ -11,6 +11,7 @@ import { test, expect } from "@playwright/test";
 test("free-text search, fuzzy typo tolerance, and price filtering", async ({ page }) => {
   await test.step("login as POS User (Ravi)", async () => {
     await page.goto("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

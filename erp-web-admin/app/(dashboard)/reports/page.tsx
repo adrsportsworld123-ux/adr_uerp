@@ -105,11 +105,11 @@ function BranchDateReports() {
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         {daily && (
           <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-zinc-600">Daily sales</p>
+            <p className="text-xs font-medium text-muted-foreground">Daily sales</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
               <div>
                 Orders: <span className="font-semibold">{daily.order_count}</span>
@@ -155,7 +155,7 @@ function BranchDateReports() {
 
         {stock.length > 0 && (
           <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-zinc-600">Stock summary ({stock.length} variant(s))</p>
+            <p className="text-xs font-medium text-muted-foreground">Stock summary ({stock.length} variant(s))</p>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -257,13 +257,13 @@ function ConsolidatedStockSection() {
         <CardTitle className="text-base">Consolidated stock (all branches)</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
         {entries.map((e) => (
           <div key={e.variant_id} className="border-b pb-3 last:border-b-0">
             <p className="text-sm font-medium">
-              {e.product_name} <span className="font-mono text-xs text-zinc-500">({e.sku})</span> — total {e.total_on_hand}
+              {e.product_name} <span className="font-mono text-xs text-muted-foreground">({e.sku})</span> — total {e.total_on_hand}
             </p>
-            <div className="flex gap-4 text-xs text-zinc-600 mt-1 flex-wrap">
+            <div className="flex gap-4 text-xs text-muted-foreground mt-1 flex-wrap">
               {e.by_branch.map((b) => (
                 <span key={b.branch_id}>
                   {b.branch_id.slice(0, 8)}…: {b.available} available
@@ -272,7 +272,7 @@ function ConsolidatedStockSection() {
             </div>
           </div>
         ))}
-        {entries.length === 0 && !error && <p className="text-sm text-zinc-500">No stock recorded anywhere yet.</p>}
+        {entries.length === 0 && !error && <p className="text-sm text-muted-foreground">No stock recorded anywhere yet.</p>}
       </CardContent>
     </Card>
   );

@@ -30,6 +30,10 @@ type supplierRequest struct {
 	Phone        string  `json:"phone"`
 	PaymentTerms string  `json:"payment_terms"`
 	CreditLimit  float64 `json:"credit_limit"`
+	// Status is PATCH-only (Phase 11): "active" or "inactive". Inactive
+	// suppliers stay on every past GRN/bill/return; they're only hidden
+	// from pickers for new documents.
+	Status string `json:"status"`
 }
 
 type supplierResponse struct {
@@ -80,20 +84,44 @@ func (h *Handler) CreateSupplier(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, resp)
 }
 
-// ListSuppliers: GET /suppliers
+// ListSuppliers: GET /suppliers?q=&status=&sort=name|gstin|credit_limit|updated&dir=&page=&limit=
+// q matches name, legal name, GSTIN, contact, phone or email. Unpaged
+// (every row) unless page/limit is given, which the GRN/bill supplier
+// pickers rely on.
 func (h *Handler) ListSuppliers(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
 		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
 		return
 	}
+	p := httpx.ParseListParams(r, map[string]string{
+		"name": "name", "gstin": "gstin", "credit_limit": "credit_limit", "updated": "updated_at",
+	}, "name")
+	status := p.Status
+	if status == "all" {
+		status = ""
+	}
+	if status != "" && status != "active" && status != "inactive" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be all, active, or inactive")
+		return
+	}
+	limit, offset := p.SQLLimit()
 
 	suppliers := []supplierResponse{}
+	total := 0
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		where := `
+			WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR legal_name ILIKE '%' || $1 || '%'
+			       OR gstin ILIKE '%' || $1 || '%' OR contact_name ILIKE '%' || $1 || '%'
+			       OR phone ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%')
+			  AND ($2 = '' OR status = $2)`
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM suppliers`+where, p.Q, status).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT id, name, COALESCE(legal_name,''), COALESCE(gstin,''), COALESCE(contact_name,''),
 			       COALESCE(email,''), COALESCE(phone,''), COALESCE(payment_terms,''), credit_limit::text, status
-			FROM suppliers ORDER BY name`)
+			FROM suppliers`+where+` ORDER BY `+p.OrderBy+`, id LIMIT $3 OFFSET $4`, p.Q, status, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -112,7 +140,7 @@ func (h *Handler) ListSuppliers(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not list suppliers")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"suppliers": suppliers})
+	httpx.JSON(w, http.StatusOK, p.Envelope("suppliers", suppliers, total))
 }
 
 // UpdateSupplier: PATCH /suppliers/{id} — partial update; a field left as
@@ -133,6 +161,11 @@ func (h *Handler) UpdateSupplier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Status != "" && req.Status != "active" && req.Status != "inactive" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be active or inactive")
+		return
+	}
+
 	var resp supplierResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
@@ -145,11 +178,12 @@ func (h *Handler) UpdateSupplier(w http.ResponseWriter, r *http.Request) {
 			  phone = COALESCE(NULLIF($6, ''), phone),
 			  payment_terms = COALESCE(NULLIF($7, ''), payment_terms),
 			  credit_limit = CASE WHEN $8 > 0 THEN $8 ELSE credit_limit END,
+			  status = COALESCE(NULLIF($10, ''), status),
 			  updated_at = now()
 			WHERE id = $9
 			RETURNING id, name, COALESCE(legal_name,''), COALESCE(gstin,''), COALESCE(contact_name,''),
 			          COALESCE(email,''), COALESCE(phone,''), COALESCE(payment_terms,''), credit_limit::text, status`,
-			req.Name, req.LegalName, req.GSTIN, req.ContactName, req.Email, req.Phone, req.PaymentTerms, req.CreditLimit, supplierID,
+			req.Name, req.LegalName, req.GSTIN, req.ContactName, req.Email, req.Phone, req.PaymentTerms, req.CreditLimit, supplierID, req.Status,
 		).Scan(&resp.SupplierID, &resp.Name, &resp.LegalName, &resp.GSTIN, &resp.ContactName,
 			&resp.Email, &resp.Phone, &resp.PaymentTerms, &resp.CreditLimit, &resp.Status)
 	})

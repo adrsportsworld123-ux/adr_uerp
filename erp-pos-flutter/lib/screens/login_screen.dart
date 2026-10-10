@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/session.dart';
+import '../ui/theme.dart';
 
 /// Login screen — the first half of Phase 0's "walking skeleton" goal
 /// (login screen → barcode scan screen hitting a real endpoint). Talks to
@@ -83,11 +84,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     key: const Key('session-ended-notice'),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.amber.shade50,
-                      border: Border.all(color: Colors.amber.shade300),
+                      color: Theme.of(context).pos.warnSoft,
+                      border: Border.all(color: Theme.of(context).pos.warn.withValues(alpha: 0.4)),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Text(notice, style: TextStyle(color: Colors.amber.shade900)),
+                    child: Text(notice, style: TextStyle(color: Theme.of(context).pos.warn)),
                   ),
                   const SizedBox(height: 16),
                 ],

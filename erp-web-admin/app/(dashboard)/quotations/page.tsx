@@ -152,7 +152,7 @@ export default function QuotationsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">B2B Quotations</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         A quote is a pricing proposal for a customer — it never touches stock until it&apos;s accepted and converted,
         at which point it becomes a real order through the same cart pipeline any walk-in sale uses. Leave a
         line&apos;s price blank to auto-resolve the customer&apos;s wholesale price (if assigned one) or plain retail
@@ -269,7 +269,7 @@ export default function QuotationsPage() {
               ))}
               {quotations.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-6">No quotations yet</TableCell>
+                  <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">No quotations yet</TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -295,7 +295,7 @@ export default function QuotationsPage() {
               />
             ) : (
               <>
-                {selected.notes && <p className="text-sm text-zinc-600">{selected.notes}</p>}
+                {selected.notes && <p className="text-sm text-muted-foreground">{selected.notes}</p>}
                 <Table>
               <TableHeader>
                 <TableRow>
@@ -308,7 +308,7 @@ export default function QuotationsPage() {
               <TableBody>
                 {selected.lines.map((l) => (
                   <TableRow key={l.line_id}>
-                    <TableCell>{l.product_name} <span className="text-xs text-zinc-500">({l.sku})</span></TableCell>
+                    <TableCell>{l.product_name} <span className="text-xs text-muted-foreground">({l.sku})</span></TableCell>
                     <TableCell>{l.quantity}</TableCell>
                     <TableCell>₹{l.unit_price}</TableCell>
                     <TableCell>₹{l.line_total}</TableCell>
@@ -321,7 +321,7 @@ export default function QuotationsPage() {
             )}
 
             {selected.converted_sales_order_id && (
-              <p className="text-sm text-emerald-700">Converted to sales order {selected.converted_sales_order_id}</p>
+              <p className="text-sm text-pay">Converted to sales order {selected.converted_sales_order_id}</p>
             )}
 
             <div className="flex gap-2">
@@ -432,7 +432,7 @@ function DraftEditor({
             return (
               <TableRow key={l.line_id}>
                 <TableCell>
-                  {l.product_name} <span className="text-xs text-zinc-500">({l.sku})</span>
+                  {l.product_name} <span className="text-xs text-muted-foreground">({l.sku})</span>
                 </TableCell>
                 <TableCell>
                   <Input
@@ -485,7 +485,7 @@ function DraftEditor({
       </Table>
       <div className="text-sm text-right font-medium">Grand total: ₹{quotation.grand_total}</div>
 
-      <div className="flex items-end gap-2 flex-wrap border rounded-md p-3 bg-zinc-50">
+      <div className="flex items-end gap-2 flex-wrap border rounded-md p-3 bg-muted/50">
         <div className="flex-1 min-w-56">
           <Label className="mb-2 block">Add a line</Label>
           <Select value={newVariant} onValueChange={(v) => setNewVariant(v ?? "")} items={Object.fromEntries(variantOptions.map((o) => [o.id, o.label]))}>

@@ -6,6 +6,7 @@ import 'api/api_client.dart';
 import 'state/session.dart';
 import 'screens/login_screen.dart';
 import 'screens/pos_screen.dart';
+import 'ui/theme.dart';
 
 /// Points at erp-core-go running via `docker compose up` per that repo's
 /// README. Android emulators reach the host machine at 10.0.2.2, not
@@ -44,7 +45,11 @@ class PosApp extends StatelessWidget {
         child: MaterialApp(
           title: 'ERP POS',
           navigatorKey: kNavigatorKey,
-          theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+          theme: posTheme(Brightness.light),
+          darkTheme: posTheme(Brightness.dark),
+          // Light until Phase 12 adds a per-terminal display setting; the
+          // dark theme exists so that setting is a one-line change.
+          themeMode: ThemeMode.light,
           home: const RootScreen(),
         ),
       ),

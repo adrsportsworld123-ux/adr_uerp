@@ -24,15 +24,15 @@ function SimpleBarChart({ series }: { series: ChartPoint[] }) {
         const pct = Math.max(2, (100 * (Number(s.value) || 0)) / max);
         return (
           <div key={s.label} className="flex items-center gap-2 text-sm">
-            <div className="w-40 truncate text-zinc-600" title={s.label}>{s.label}</div>
-            <div className="flex-1 bg-zinc-100 rounded h-5 overflow-hidden">
-              <div className="bg-blue-500 h-full rounded" style={{ width: `${pct}%` }} />
+            <div className="w-40 truncate text-muted-foreground" title={s.label}>{s.label}</div>
+            <div className="flex-1 bg-muted rounded h-5 overflow-hidden">
+              <div className="bg-primary h-full rounded" style={{ width: `${pct}%` }} />
             </div>
             <div className="w-24 text-right font-medium">{s.value}</div>
           </div>
         );
       })}
-      {series.length === 0 && <p className="text-sm text-zinc-500">No data to chart.</p>}
+      {series.length === 0 && <p className="text-sm text-muted-foreground">No data to chart.</p>}
     </div>
   );
 }
@@ -71,7 +71,7 @@ function AskAIPanel() {
         <CardTitle className="text-base">Ask AI</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted-foreground">
           Ask a question about today&apos;s (or another day&apos;s) sales, stock, or cash — daily sales, stock
           summary, EOD cash, consolidated sales, or consolidated stock. Anything else is politely declined rather
           than guessed at.
@@ -82,7 +82,7 @@ function AskAIPanel() {
               key={ex}
               type="button"
               onClick={() => setQuestion(ex)}
-              className="text-xs text-blue-600 border border-blue-200 rounded-full px-3 py-1 hover:bg-blue-50"
+              className="text-xs text-primary border border-primary/30 rounded-full px-3 py-1 hover:bg-primary-soft"
             >
               {ex}
             </button>
@@ -100,7 +100,7 @@ function AskAIPanel() {
           </Button>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         {result && (
           <div className="flex flex-col gap-3 border-t pt-4">
@@ -110,7 +110,7 @@ function AskAIPanel() {
             ) : (
               <SimpleBarChart series={result.chart.series ?? []} />
             )}
-            <details className="text-xs text-zinc-500">
+            <details className="text-xs text-muted-foreground">
               <summary className="cursor-pointer">Raw data ({result.intent})</summary>
               <pre className="whitespace-pre-wrap break-all mt-2">{JSON.stringify(result.data, null, 2)}</pre>
             </details>
@@ -150,18 +150,18 @@ function CopilotPanel() {
         <CardTitle className="text-base">AI Copilot</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted-foreground">
           Advisory only — the copilot can discuss today&apos;s numbers and give general operations advice, but it
           cannot place orders, change prices, adjust stock, or take any action in this system.
         </p>
-        <div className="flex flex-col gap-3 max-h-80 overflow-y-auto border rounded p-3 bg-zinc-50">
-          {messages.length === 0 && <p className="text-sm text-zinc-400">Ask the copilot something, e.g. &quot;How are we doing today?&quot;</p>}
+        <div className="flex flex-col gap-3 max-h-80 overflow-y-auto border rounded p-3 bg-muted/50">
+          {messages.length === 0 && <p className="text-sm text-muted-foreground">Ask the copilot something, e.g. &quot;How are we doing today?&quot;</p>}
           {messages.map((m, i) => (
             <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
               <span
                 className={
                   "inline-block rounded-lg px-3 py-2 text-sm max-w-[80%] " +
-                  (m.role === "user" ? "bg-blue-600 text-white" : "bg-white border text-zinc-800")
+                  (m.role === "user" ? "bg-primary text-primary-foreground" : "bg-card border text-foreground")
                 }
               >
                 {m.content}
@@ -169,7 +169,7 @@ function CopilotPanel() {
             </div>
           ))}
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex gap-2">
           <Textarea
             value={input}
@@ -196,7 +196,7 @@ export default function AIAssistantPage() {
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
       <h1 className="text-2xl font-semibold">Ask AI / Copilot</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Both panels below go through a configurable LLM backend (a self-hosted Ollama server or the Anthropic API —
         see <code>LLM_PROVIDER</code>). If neither is configured yet, both will show a plain &quot;LLM isn&apos;t
         configured&quot; error rather than failing silently.

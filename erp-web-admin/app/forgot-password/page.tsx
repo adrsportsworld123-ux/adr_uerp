@@ -18,14 +18,14 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, DEFAULT_MERCHANT_CODE } from "@/lib/api-client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export default function ForgotPasswordPage() {
   const router = useRouter();
-  const [merchantCode, setMerchantCode] = useState("adr_sports_world");
+  const [merchantCode, setMerchantCode] = useState(DEFAULT_MERCHANT_CODE);
   const [email, setEmail] = useState("");
   const [requested, setRequested] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -130,13 +130,13 @@ export default function ForgotPasswordPage() {
                   required
                 />
               </div>
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-destructive">{error}</p>}
               <Button type="submit" disabled={busy}>
                 {busy ? "Sending..." : "Send reset code"}
               </Button>
               <Link
                 href="/login"
-                className="text-sm text-zinc-500 text-center hover:underline"
+                className="text-sm text-muted-foreground text-center hover:underline"
               >
                 Back to login
               </Link>
@@ -162,7 +162,7 @@ export default function ForgotPasswordPage() {
                   required
                 />
               </div>
-              {error && <p className="text-sm text-red-600">{error}</p>}
+              {error && <p className="text-sm text-destructive">{error}</p>}
               <Button type="submit" disabled={busy}>
                 {busy ? "Resetting..." : "Reset password"}
               </Button>

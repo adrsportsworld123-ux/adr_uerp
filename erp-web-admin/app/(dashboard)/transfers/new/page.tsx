@@ -140,7 +140,7 @@ export default function NewTransferPage() {
                 {lines.map((l, i) => (
                   <TableRow key={i}>
                     <TableCell>
-                      {l.product_name} <span className="text-zinc-400">({l.sku})</span>
+                      {l.product_name} <span className="text-muted-foreground">({l.sku})</span>
                     </TableCell>
                     <TableCell>{l.quantity}</TableCell>
                   </TableRow>
@@ -148,7 +148,7 @@ export default function NewTransferPage() {
               </TableBody>
             </Table>
           )}
-          <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-zinc-50">
+          <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-muted/50">
             <div className="flex flex-col gap-2">
               <Label htmlFor="barcode">Scan or enter barcode</Label>
               <Input id="barcode" required value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="8901234567890" />
@@ -157,7 +157,7 @@ export default function NewTransferPage() {
               <Label htmlFor="quantity">Quantity *</Label>
               <Input id="quantity" type="number" min="0.001" step="0.001" required value={quantity} onChange={(e) => setQuantity(e.target.value)} />
             </div>
-            {lineError && <p className="text-sm text-red-600">{lineError}</p>}
+            {lineError && <p className="text-sm text-destructive">{lineError}</p>}
             <Button type="submit" variant="outline">
               Add line
             </Button>
@@ -165,7 +165,7 @@ export default function NewTransferPage() {
         </CardContent>
       </Card>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
       <Button onClick={handleSubmit} disabled={submitting || !fromBranchId || !toBranchId || lines.length === 0}>
         {submitting ? "Submitting..." : "Request transfer"}
       </Button>

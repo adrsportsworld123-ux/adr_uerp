@@ -131,7 +131,7 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 			table string
 		}{{categoryID, "categories"}, {brandID, "brands"}, {taxSlabID, "tax_slabs"}, {collectionID, "collections"}} {
 			if l.id != nil {
-				if err := refExists(ctx, tx, l.table, *l.id); err != nil {
+				if err := refUsable(ctx, tx, l.table, *l.id); err != nil {
 					return err
 				}
 			}
@@ -186,6 +186,8 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, errInvalidReference):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REFERENCE", err.Error())
+	case errors.Is(err, errInactiveReference):
+		httpx.Error(w, http.StatusConflict, "INACTIVE_REFERENCE", err.Error()+" — reactivate it or pick another")
 	case uniqueViolationConstraint(err) == "idx_product_variants_plu_code":
 		httpx.Error(w, http.StatusConflict, "PLU_CODE_EXISTS", "this PLU code is already used by another variant")
 	case err != nil:

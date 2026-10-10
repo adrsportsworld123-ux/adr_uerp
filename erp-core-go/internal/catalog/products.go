@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -64,9 +65,18 @@ type productSummary struct {
 	PriceIncludesTax bool             `json:"price_includes_tax"`
 	TaxRatePct       float64          `json:"tax_rate_pct"`
 	Variants         []variantSummary `json:"variants"`
+	// Phase 11 list columns (additive): names for display, ids for links.
+	CategoryID   *string `json:"category_id"`
+	CategoryName *string `json:"category_name"`
+	BrandID      *string `json:"brand_id"`
+	BrandName    *string `json:"brand_name"`
 }
 
-// ListProducts: GET /products?category_id=&brand_id=&q=&min_price=&max_price=&page=&limit=&status=
+// ListProducts: GET /products?category_id=&brand_id=&q=&min_price=&max_price=&page=&limit=&status=&sort=&dir=
+// q matches the product name, any variant's SKU, or any of its barcodes.
+// sort: name (default) | status | created | updated. The response carries
+// `total` (Phase 11 list convention, httpx.ListParams) so tables can page
+// on the server; it counts the same filtered set the page is cut from.
 // status defaults to "active" — every picker (POS, quotations, pricing)
 // only offers sellable products — and takes "all" or a specific status
 // for the product admin screen, which must be able to find an inactive
@@ -109,21 +119,48 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 		page = p
 	}
 	offset := (page - 1) * limit
+	orderBy := map[string]string{"name": "p.name", "status": "p.status", "created": "p.created_at", "updated": "p.updated_at"}[q.Get("sort")]
+	if orderBy == "" {
+		orderBy = "p.name"
+	}
+	if strings.EqualFold(q.Get("dir"), "desc") {
+		orderBy += " DESC"
+	}
 
 	products := []productSummary{}
+	total := 0
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT p.id, p.name, COALESCE(p.hsn_code,''), p.status, p.price_includes_tax,
-			       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
+		// One WHERE for both the count and the page, so "of N" matches what
+		// paging walks through. The price filter lives here too (a product
+		// matches when any variant is in range); filtering after LIMIT, as
+		// this did before Phase 11, made pages come back short.
+		where := `
 			FROM products p
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+			LEFT JOIN categories c ON c.id = p.category_id
+			LEFT JOIN brands b ON b.id = p.brand_id
 			WHERE ($1 = '' OR p.category_id::text = $1)
 			  AND ($2 = '' OR p.brand_id::text = $2)
-			  AND ($3 = '' OR p.name ILIKE '%' || $3 || '%')
-			  AND ($6 = '' OR p.collection_id::text = $6)
-			  AND ($7 = 'all' OR p.status = $7)
-			ORDER BY p.name
-			LIMIT $4 OFFSET $5`, categoryID, brandID, search, limit, offset, collectionID, status)
+			  AND ($3 = '' OR p.name ILIKE '%' || $3 || '%'
+			       OR EXISTS (SELECT 1 FROM product_variants sv WHERE sv.product_id = p.id AND sv.sku ILIKE '%' || $3 || '%')
+			       OR EXISTS (SELECT 1 FROM barcodes bc JOIN product_variants bv ON bv.id = bc.variant_id
+			                  WHERE bv.product_id = p.id AND bc.code = $3))
+			  AND ($4 = '' OR p.collection_id::text = $4)
+			  AND ($5 = 'all' OR p.status = $5)
+			  AND ($6 = '' AND $7 = '' OR EXISTS (
+			        SELECT 1 FROM product_variants pv WHERE pv.product_id = p.id
+			          AND ($6 = '' OR pv.selling_price >= $6::numeric)
+			          AND ($7 = '' OR pv.selling_price <= $7::numeric)))`
+		args := []any{categoryID, brandID, search, collectionID, status, minPrice, maxPrice}
+		if err := tx.QueryRow(ctx, `SELECT count(*)`+where, args...).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `
+			SELECT p.id, p.name, COALESCE(p.hsn_code,''), p.status, p.price_includes_tax,
+			       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0),
+			       p.category_id::text, c.name, p.brand_id::text, b.name`+where+`
+			ORDER BY `+orderBy+`, p.id
+			LIMIT $8 OFFSET $9`, append(args, limit, offset)...)
 		if err != nil {
 			return err
 		}
@@ -132,11 +169,16 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			status           string
 			priceIncludesTax bool
 			taxRatePct       float64
+			categoryID       *string
+			categoryName     *string
+			brandID          *string
+			brandName        *string
 		}
 		var productRows []row
 		for rows.Next() {
 			var rrow row
-			if err := rows.Scan(&rrow.id, &rrow.name, &rrow.hsn, &rrow.status, &rrow.priceIncludesTax, &rrow.taxRatePct); err != nil {
+			if err := rows.Scan(&rrow.id, &rrow.name, &rrow.hsn, &rrow.status, &rrow.priceIncludesTax, &rrow.taxRatePct,
+				&rrow.categoryID, &rrow.categoryName, &rrow.brandID, &rrow.brandName); err != nil {
 				rows.Close()
 				return err
 			}
@@ -194,6 +236,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			products = append(products, productSummary{
 				ProductID: pr.id, Name: pr.name, HSNCode: pr.hsn, Status: pr.status,
 				PriceIncludesTax: pr.priceIncludesTax, TaxRatePct: pr.taxRatePct, Variants: variants,
+				CategoryID: pr.categoryID, CategoryName: pr.categoryName, BrandID: pr.brandID, BrandName: pr.brandName,
 			})
 		}
 		return nil
@@ -202,7 +245,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not list products")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"products": products, "page": page, "limit": limit})
+	httpx.JSON(w, http.StatusOK, map[string]any{"products": products, "page": page, "limit": limit, "total": total})
 }
 
 func round2(v float64) float64 {

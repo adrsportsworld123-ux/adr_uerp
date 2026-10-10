@@ -69,7 +69,7 @@ export default function NewGRNPage() {
                 </SelectContent>
               </Select>
               {suppliers.length === 0 && (
-                <p className="text-xs text-zinc-500">
+                <p className="text-xs text-muted-foreground">
                   No suppliers yet —{" "}
                   <a href="/suppliers/new" className="underline">
                     create one first
@@ -88,8 +88,8 @@ export default function NewGRNPage() {
                 <Input id="other" type="number" min="0" step="0.01" value={otherCharges} onChange={(e) => setOtherCharges(e.target.value)} />
               </div>
             </div>
-            <p className="text-xs text-zinc-500">Add line items on the next screen, then complete the GRN to update stock and cost.</p>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            <p className="text-xs text-muted-foreground">Add line items on the next screen, then complete the GRN to update stock and cost.</p>
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={submitting || !supplierId}>
               {submitting ? "Creating..." : "Create draft GRN"}
             </Button>

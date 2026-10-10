@@ -33,8 +33,8 @@ export default function BillsListPage() {
           New bill
         </Link>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {bills && bills.length === 0 && <p className="text-sm text-zinc-500">No bills yet.</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {bills && bills.length === 0 && <p className="text-sm text-muted-foreground">No bills yet.</p>}
       {bills && bills.length > 0 && (
         <Table>
           <TableHeader>

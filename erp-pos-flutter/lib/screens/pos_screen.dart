@@ -300,10 +300,10 @@ class _PosScreenState extends State<PosScreen> {
         actions: [
           TextButton.icon(
             onPressed: _busy || session.isCurrentOrderLocal || session.offlineMode || order == null ? null : _pickCustomer,
-            icon: const Icon(Icons.person, color: Colors.white),
+            icon: Icon(Icons.person, color: Theme.of(context).colorScheme.onPrimary),
             label: Text(
               session.attachedCustomerName ?? 'Customer',
-              style: const TextStyle(color: Colors.white),
+              style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
             ),
           ),
           IconButton(
@@ -340,13 +340,13 @@ class _PosScreenState extends State<PosScreen> {
                         },
                   icon: Icon(
                     session.offlineMode ? Icons.cloud_off : Icons.sync,
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.onPrimary,
                   ),
                   label: Text(
                     session.pendingSyncCount > 0
                         ? '${session.pendingSyncCount} pending'
                         : 'Offline',
-                    style: const TextStyle(color: Colors.white),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onPrimary),
                   ),
                 ),
               ),
@@ -576,7 +576,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                         dense: true,
                         title: Text(c.name),
                         subtitle: Text(c.phone),
-                        trailing: c.creditHold ? const Icon(Icons.block, color: Colors.red, size: 18) : null,
+                        trailing: c.creditHold ? Icon(Icons.block, color: Theme.of(context).colorScheme.error, size: 18) : null,
                         onTap: () => Navigator.pop(context, _CustomerPickResult.existing(c)),
                       ),
                   ],

@@ -49,7 +49,7 @@ export default function BranchesPage() {
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
       <h1 className="text-2xl font-semibold">Branches</h1>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Table>
         <TableHeader>

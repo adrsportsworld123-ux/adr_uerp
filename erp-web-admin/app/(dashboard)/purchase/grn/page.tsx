@@ -33,8 +33,8 @@ export default function GRNListPage() {
           New GRN
         </Link>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {grns && grns.length === 0 && <p className="text-sm text-zinc-500">No GRNs yet.</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {grns && grns.length === 0 && <p className="text-sm text-muted-foreground">No GRNs yet.</p>}
       {grns && grns.length > 0 && (
         <Table>
           <TableHeader>

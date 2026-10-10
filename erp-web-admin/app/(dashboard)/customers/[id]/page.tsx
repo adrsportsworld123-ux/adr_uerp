@@ -75,8 +75,8 @@ export default function CustomerDetailPage() {
     }
   }
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!customer) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (!customer) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
@@ -138,27 +138,27 @@ export default function CustomerDetailPage() {
             </>
           ) : (
             <dl className="grid grid-cols-2 gap-3 text-sm">
-              <dt className="text-zinc-500">Type</dt>
+              <dt className="text-muted-foreground">Type</dt>
               <dd className="uppercase">{customer.customer_type}</dd>
-              <dt className="text-zinc-500">Phone</dt>
+              <dt className="text-muted-foreground">Phone</dt>
               <dd>{customer.phone || "—"}</dd>
-              <dt className="text-zinc-500">Email</dt>
+              <dt className="text-muted-foreground">Email</dt>
               <dd>{customer.email || "—"}</dd>
-              <dt className="text-zinc-500">Address</dt>
+              <dt className="text-muted-foreground">Address</dt>
               <dd>{customer.address || "—"}</dd>
               {customer.customer_type === "b2b" && (
                 <>
-                  <dt className="text-zinc-500">Company</dt>
+                  <dt className="text-muted-foreground">Company</dt>
                   <dd>{customer.company_name || "—"}</dd>
-                  <dt className="text-zinc-500">GSTIN</dt>
+                  <dt className="text-muted-foreground">GSTIN</dt>
                   <dd>{customer.gstin || "—"}</dd>
                 </>
               )}
-              <dt className="text-zinc-500">Total spend</dt>
+              <dt className="text-muted-foreground">Total spend</dt>
               <dd>₹{customer.total_spend}</dd>
-              <dt className="text-zinc-500">Transactions</dt>
+              <dt className="text-muted-foreground">Transactions</dt>
               <dd>{customer.transaction_count}</dd>
-              <dt className="text-zinc-500">Last purchase</dt>
+              <dt className="text-muted-foreground">Last purchase</dt>
               <dd>{customer.last_purchase_at ?? "Never"}</dd>
             </dl>
           )}
@@ -180,7 +180,7 @@ export default function CustomerDetailPage() {
             <p className="text-sm">
               Available balance: <span className="font-semibold">{loyalty.available_points} points</span>
             </p>
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-muted-foreground">
               Redeeming or earning happens at the POS terminal, not here — this is a read-only view of the ledger
               erp-core-go already keeps.
             </p>
@@ -197,7 +197,7 @@ export default function CustomerDetailPage() {
                 {loyalty.ledger.map((entry, i) => (
                   <TableRow key={i}>
                     <TableCell className="capitalize">{entry.entry_type}</TableCell>
-                    <TableCell className={entry.points < 0 ? "text-red-600" : "text-green-700"}>
+                    <TableCell className={entry.points < 0 ? "text-destructive" : "text-pay"}>
                       {entry.points > 0 ? `+${entry.points}` : entry.points}
                     </TableCell>
                     <TableCell>{entry.balance_after}</TableCell>
@@ -206,7 +206,7 @@ export default function CustomerDetailPage() {
                 ))}
                 {loyalty.ledger.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center text-sm text-zinc-500 py-6">
+                    <TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-6">
                       No loyalty activity yet
                     </TableCell>
                   </TableRow>
@@ -242,14 +242,14 @@ export default function CustomerDetailPage() {
               ))}
               {customer.recent_orders.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-6">
                     No purchases yet
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
-          <p className="text-xs text-zinc-500 mt-2">
+          <p className="text-xs text-muted-foreground mt-2">
             Purchase history is consolidated across every branch — a customer&apos;s profile isn&apos;t tied to where they first registered.
           </p>
         </CardContent>
@@ -380,35 +380,35 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
           </div>
         ) : (
           <dl className="grid grid-cols-2 gap-3 text-sm">
-            <dt className="text-zinc-500">Credit limit</dt>
+            <dt className="text-muted-foreground">Credit limit</dt>
             <dd>₹{credit.credit_limit}</dd>
-            <dt className="text-zinc-500">Payment terms</dt>
+            <dt className="text-muted-foreground">Payment terms</dt>
             <dd>{PAYMENT_TERMS_LABEL[credit.payment_terms] ?? credit.payment_terms}</dd>
-            <dt className="text-zinc-500">Outstanding</dt>
+            <dt className="text-muted-foreground">Outstanding</dt>
             <dd className="font-semibold">₹{credit.outstanding_total}</dd>
           </dl>
         )}
 
         <div className="grid grid-cols-5 gap-2 text-xs border-t pt-3">
           <div className="flex flex-col gap-1">
-            <span className="text-zinc-500">Current</span>
+            <span className="text-muted-foreground">Current</span>
             <span>₹{credit.aging.current}</span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-zinc-500">0-30 days</span>
+            <span className="text-muted-foreground">0-30 days</span>
             <span>₹{credit.aging.days_0_30}</span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-zinc-500">30-60 days</span>
+            <span className="text-muted-foreground">30-60 days</span>
             <span>₹{credit.aging.days_30_60}</span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-zinc-500">60-90 days</span>
+            <span className="text-muted-foreground">60-90 days</span>
             <span>₹{credit.aging.days_60_90}</span>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-red-600">90+ days</span>
-            <span className="text-red-600">₹{credit.aging.days_90_plus}</span>
+            <span className="text-destructive">90+ days</span>
+            <span className="text-destructive">₹{credit.aging.days_90_plus}</span>
           </div>
         </div>
 
@@ -476,7 +476,7 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
             ))}
             {credit.open_invoices.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                   No outstanding credit sales
                 </TableCell>
               </TableRow>

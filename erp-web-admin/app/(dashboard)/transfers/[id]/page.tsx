@@ -57,8 +57,8 @@ export default function TransferDetailPage() {
     await act("/complete", { lines }, "Transfer completed");
   }
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!transfer) return <p className="text-sm text-zinc-500">Loading…</p>;
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (!transfer) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   const s = transfer.status;
 
@@ -67,15 +67,15 @@ export default function TransferDetailPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">{transfer.transfer_number}</h1>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-muted-foreground">
             {branches[transfer.from_branch_id] ?? transfer.from_branch_id} → {branches[transfer.to_branch_id] ?? transfer.to_branch_id}
           </p>
         </div>
         <Badge>{s}</Badge>
       </div>
 
-      {transfer.notes && <p className="text-sm text-zinc-600">Notes: {transfer.notes}</p>}
-      {transfer.rejection_reason && <p className="text-sm text-red-600">Rejected: {transfer.rejection_reason}</p>}
+      {transfer.notes && <p className="text-sm text-muted-foreground">Notes: {transfer.notes}</p>}
+      {transfer.rejection_reason && <p className="text-sm text-destructive">Rejected: {transfer.rejection_reason}</p>}
 
       <Card>
         <CardHeader>
@@ -96,7 +96,7 @@ export default function TransferDetailPage() {
               {transfer.lines.map((l) => (
                 <TableRow key={l.line_id}>
                   <TableCell>
-                    {l.product_name} <span className="text-zinc-400">({l.sku})</span>
+                    {l.product_name} <span className="text-muted-foreground">({l.sku})</span>
                   </TableCell>
                   <TableCell>{l.requested_quantity}</TableCell>
                   <TableCell>{l.sent_quantity ?? "—"}</TableCell>

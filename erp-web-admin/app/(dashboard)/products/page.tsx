@@ -93,11 +93,11 @@ export default function ProductsPage() {
                 return (
                   <TableRow key={p.product_id}>
                     <TableCell className="font-medium">{p.name}</TableCell>
-                    <TableCell className="text-sm text-zinc-600">
+                    <TableCell className="text-sm text-muted-foreground">
                       {p.variants.map((v) => (
                         <div key={v.variant_id}>
                           {v.sku}
-                          {v.status !== "active" && <span className="text-xs text-red-600"> · {v.status}</span>}
+                          {v.status !== "active" && <span className="text-xs text-destructive"> · {v.status}</span>}
                         </div>
                       ))}
                     </TableCell>
@@ -117,7 +117,7 @@ export default function ProductsPage() {
               })}
               {products.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">
                     No products match
                   </TableCell>
                 </TableRow>

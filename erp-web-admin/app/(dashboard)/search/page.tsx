@@ -88,7 +88,7 @@ export default function SearchPage() {
               <Input id="maxPrice" type="number" step="0.01" className="w-32" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} />
             </div>
           </div>
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted-foreground">
             No category/brand filter here yet — there&apos;s no category/brand list endpoint to populate a picker from (same gap as the Pricing screen&apos;s bulk-update filter).
           </p>
         </CardContent>
@@ -96,19 +96,19 @@ export default function SearchPage() {
 
       {unavailable && (
         <Card>
-          <CardContent className="pt-6 text-sm text-amber-700">
+          <CardContent className="pt-6 text-sm text-warn">
             Product search is temporarily unavailable. The rest of the app is unaffected — try again shortly, or use the Pricing screen&apos;s catalog browse instead.
           </CardContent>
         </Card>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       {!unavailable && results && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
               {total} result{total === 1 ? "" : "s"}
-              {loading && <span className="text-zinc-400 font-normal"> · searching…</span>}
+              {loading && <span className="text-muted-foreground font-normal"> · searching…</span>}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -136,7 +136,7 @@ export default function SearchPage() {
                       <TableCell>{hit.brand_name || "—"}</TableCell>
                       <TableCell>₹{hit.cost_price}</TableCell>
                       <TableCell>₹{hit.selling_price}</TableCell>
-                      <TableCell className={margin !== null && margin < 0 ? "text-red-600 font-medium" : ""}>{margin ?? "—"}%</TableCell>
+                      <TableCell className={margin !== null && margin < 0 ? "text-destructive font-medium" : ""}>{margin ?? "—"}%</TableCell>
                       <TableCell>
                         <Link href="/pricing" className={buttonVariants({ variant: "outline", size: "sm" })}>
                           Edit price
@@ -147,7 +147,7 @@ export default function SearchPage() {
                 })}
                 {results.length === 0 && !loading && (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-sm text-zinc-500 py-6">
+                    <TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-6">
                       No matching products
                     </TableCell>
                   </TableRow>

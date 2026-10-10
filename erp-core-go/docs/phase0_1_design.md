@@ -155,6 +155,9 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `AI_BRANCH_REQUIRED` | 422 | `POST /ai/ask` | The matched intent needs a specific branch (`daily_sales`, `stock_summary`, `eod_cash`) but none was named in the question or resolved against this tenant's real branch list |
 | `PRICE_LIST_NAME_EXISTS` | 409 | `POST /pricing/price-lists` | A price list with this name already exists for this merchant |
 | `PRICE_LIST_IN_USE` | 409 | `DELETE /pricing/price-lists/{id}` | One or more customers are currently assigned to this price list — reassign them first |
+| `DUPLICATE_NAME` | 409 | `POST`/`PATCH` `/categories`, `/brands`, `/tax-slabs` | Another record of that kind already uses the name (case-insensitive; per parent for categories) — enforced by unique indexes, `migrations/036` (§3.32) |
+| `IN_USE` | 409 | `DELETE /categories/{id}`, `/brands/{id}`, `/tax-slabs/{id}` | Something still references the record; `details.dependencies` lists what and how many (the same list `GET /dependencies/{entity}/{id}` returns) — deactivate instead (§3.32) |
+| `INACTIVE_REFERENCE` | 409 | `POST /products`, `PATCH /products/{id}` | A category/brand/tax slab being newly linked was deactivated. An existing link to a since-deactivated record is left alone (§3.32) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -887,6 +890,36 @@ Also closed in passing: `CreateProduct` now checks link ids against the tenant t
 **Verified:** 42 live API/DB checks (detail load, trim/blank name, clearing links, nonexistent and **other-tenant** category refused on update and create, category move refused then allowed once the variant fits, attribute/SKU/PLU validation and conflicts, price fields refused, add-variant validation and stock rows, batch-toggle lock, scan/cart/quote refusals for a discontinued product and for one discontinued variant while its sibling stays sellable, reactivation, an accepted quote whose product was deactivated refusing to convert, and audit rows with before/after); `e2e/product-edit.spec.ts` drives the whole flow in a browser.
 
 New error codes: `INVALID_REFERENCE` (400), `PLU_CODE_EXISTS`, `VARIANT_HAS_STOCK`, `PRODUCT_INACTIVE` (409); `SKU_EXISTS` and `ATTRIBUTE_*` extended to the edit endpoints.
+
+### 3.32 Phase 11: master-data lifecycle, list convention, dependencies, `/me/permissions` (`internal/httpx/list.go`, `internal/dependencies`, `internal/authn/me.go`, `migrations/036_master_data_lifecycle.sql`, 2026-10-10)
+
+The backend half of Phase 11's design-system work (`phased_roadmap.md` Phase 11): what the new admin list/form kit needs from the API.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /me/permissions` | The caller's permission codes (+ user, branch, roles), resolved by the same `FetchPermissions` the router gates use. A UI hint only — every gate still enforces itself |
+| `GET /dependencies/{entity}/{id}` | What references a master record and how many (capped at 1,000 per table), with `blocking` per reference and an overall `deletable`. Entities: `category`, `brand`, `tax_slab`, `supplier`, `customer`, `branch`, `product` (a product counts everything that uses any of its variants). References are read from `pg_constraint`, so a table added by a later migration is covered without a code change |
+| `PATCH /categories/{id}`, `/brands/{id}`, `/tax-slabs/{id}` | `name`, `status` (`active`/`inactive`), gated by `catalog.manage`. A category rename rewrites its path and every descendant's in one transaction. Tax-slab **rates are not editable**: create a new slab and deactivate the old one, so what "GST 12%" means never changes silently under existing products |
+| `DELETE /categories/{id}`, `/brands/{id}`, `/tax-slabs/{id}` | `204`, or `409 IN_USE` with the same dependency list (the dialog and the refusal can't disagree). Foreign keys remain the backstop |
+| `GET /categories`, `/brands`, `/tax-slabs`, `/suppliers`, `/products` (extended) | List convention: `q`, `status`, `sort`, `dir`, `page`, `limit`; the response keeps its collection key and adds `total`/`page`/`limit`. Unpaged (all rows) unless `page`/`limit` is passed, except `/products`, which was always paged. Categories/brands/tax slabs also return `status` and `product_count`; products add category/brand names and match `q` against SKU and barcode as well as name |
+| `PATCH /suppliers/{id}` (extended) | Accepts `status` to deactivate/reactivate a supplier |
+
+**Rules.** Names are unique per merchant, case-insensitively (categories: per parent), via unique indexes. Both the seed DB and the host development DB were checked for existing duplicates first (none). An inactive category/brand/tax slab is refused when *newly* linked to a product (`409 INACTIVE_REFERENCE`), but an existing link is left alone, so editing an old product never forces a re-categorization.
+
+**Two fixes found while building this:** (1) `GET /products` applied its price filter *after* `LIMIT`, so a filtered page could come back short and no correct total was possible. The filter now lives in the product-level `WHERE` shared by the count and the page. (2) The first draft of the category rename matched descendants with `LIKE path || '/%'`, which treats `_` and `%` in a category name as wildcards. It now uses an exact prefix comparison, live-verified with a sibling named `Racket_…x` that the `LIKE` version would have renamed.
+
+**Verified live** against a throwaway API container on the compose seed database (never the host development database), with 29 API checks:
+- **Brands:** create; case-insensitive duplicate (409); POS User denied (403); blank name (400); paged and unpaged list shapes; deactivate; invalid status (400); status filter.
+- **Product links:** product creation refused against an inactive brand, then allowed after reactivation; editing a product whose brand was since deactivated still succeeds.
+- **Dependencies and delete:** dependency counts; delete refused while in use (409 with counts); an unused brand deleted (204, then 404); unknown entity (400); other id (404); product dependencies counted via its variants.
+- **Categories:** rename cascades to descendants only; a same-name sibling is refused while the same name under another parent is allowed; deleting a parent with a child is refused.
+- **Tax slabs:** rate validation; rates ignored on PATCH; sort by total rate.
+- **Suppliers:** search by GSTIN fragment with paging; unpaged list for pickers; deactivation leaves other fields untouched.
+- **Products list:** search by SKU and by barcode; the price filter's total is correct.
+
+`internal/httpx/list_test.go` pins the parser: unpaged by default, clamped to 200, and unknown sort keys never reach SQL.
+
+New error codes: `DUPLICATE_NAME`, `IN_USE`, `INACTIVE_REFERENCE` (409).
 
 ---
 

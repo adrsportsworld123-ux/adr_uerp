@@ -112,11 +112,11 @@ export default function PriceListsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">Wholesale Price Lists</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Assign a customer to a price list (Customers screen) to have their orders and quotations automatically use
         these prices instead of the plain retail selling price.
       </p>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardHeader>
@@ -143,7 +143,7 @@ export default function PriceListsPage() {
             </TableHeader>
             <TableBody>
               {lists.map((l) => (
-                <TableRow key={l.price_list_id} className={l.price_list_id === selectedId ? "bg-blue-50" : ""}>
+                <TableRow key={l.price_list_id} className={l.price_list_id === selectedId ? "bg-primary-soft" : ""}>
                   <TableCell>{l.name}</TableCell>
                   <TableCell>{l.item_count}</TableCell>
                   <TableCell className="flex gap-2">
@@ -158,7 +158,7 @@ export default function PriceListsPage() {
               ))}
               {lists.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={3} className="text-center text-sm text-muted-foreground py-6">
                     No price lists yet
                   </TableCell>
                 </TableRow>
@@ -206,7 +206,7 @@ export default function PriceListsPage() {
               <TableBody>
                 {detail.items.map((it) => (
                   <TableRow key={it.variant_id}>
-                    <TableCell>{it.product_name} <span className="text-xs text-zinc-500">({it.sku})</span></TableCell>
+                    <TableCell>{it.product_name} <span className="text-xs text-muted-foreground">({it.sku})</span></TableCell>
                     <TableCell>₹{it.price}</TableCell>
                     <TableCell>
                       <Button variant="outline" onClick={() => removeItem(it.variant_id)}>Remove</Button>
@@ -215,7 +215,7 @@ export default function PriceListsPage() {
                 ))}
                 {detail.items.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={3} className="text-center text-sm text-zinc-500 py-6">
+                    <TableCell colSpan={3} className="text-center text-sm text-muted-foreground py-6">
                       No items set yet — every product still sells at plain retail price for customers on this list
                     </TableCell>
                   </TableRow>

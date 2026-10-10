@@ -148,7 +148,7 @@ export default function EmployeesPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">Employees</h1>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardHeader>
@@ -291,7 +291,7 @@ export default function EmployeesPage() {
                   ))}
                   {salaryHistory.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-4">No salary structure on file</TableCell>
+                      <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-4">No salary structure on file</TableCell>
                     </TableRow>
                   )}
                 </TableBody>

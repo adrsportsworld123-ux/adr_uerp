@@ -131,17 +131,17 @@ export default function NewPurchaseReturnPage() {
                 {lines.map((l, i) => (
                   <TableRow key={i}>
                     <TableCell>
-                      {l.product_name} <span className="text-zinc-400">({l.sku})</span>
+                      {l.product_name} <span className="text-muted-foreground">({l.sku})</span>
                     </TableCell>
                     <TableCell>{l.quantity}</TableCell>
                     <TableCell>₹{l.unit_cost}</TableCell>
-                    <TableCell>{l.batch_no || <span className="text-zinc-400">—</span>}</TableCell>
+                    <TableCell>{l.batch_no || <span className="text-muted-foreground">—</span>}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           )}
-          <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-zinc-50">
+          <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-muted/50">
             <div className="flex flex-col gap-2">
               <Label htmlFor="barcode">Scan or enter barcode</Label>
               <Input id="barcode" required value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="8901234567890" />
@@ -160,7 +160,7 @@ export default function NewPurchaseReturnPage() {
               <Label htmlFor="batchNo">Batch no (batch-tracked items only)</Label>
               <Input id="batchNo" value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="Blank = expired/oldest batch first" />
             </div>
-            {lineError && <p className="text-sm text-red-600">{lineError}</p>}
+            {lineError && <p className="text-sm text-destructive">{lineError}</p>}
             <Button type="submit" variant="outline">
               Add line
             </Button>
@@ -168,7 +168,7 @@ export default function NewPurchaseReturnPage() {
         </CardContent>
       </Card>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
       <Button onClick={handleSubmit} disabled={submitting || !supplierId || !reason || lines.length === 0}>
         {submitting ? "Submitting..." : "Submit return"}
       </Button>

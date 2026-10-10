@@ -10,6 +10,7 @@ test("register a B2C customer, register a B2B customer, and search/filter", asyn
 
   await test.step("login as POS User (Ravi)", async () => {
     await page.goto("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

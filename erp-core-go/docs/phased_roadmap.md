@@ -489,6 +489,235 @@ User-requested audit ("make sure product edit is implemented"): it largely wasn'
 
 ---
 
+## Phases 11–16 — UI/UX Modernization & SaaS Platform Completion (planned 2026-10-10)
+
+**Status: planned, not started.** Added at the user's request after a UI/UX review of both clients against a new consolidated requirements brief (POS + Web Admin + multi-tenant SaaS). This block is **additive only**: it doesn't reopen, re-scope or re-sequence Phases 0–10, and it doesn't change any decision recorded above. That includes the non-negotiables in `../CLAUDE.md` (custom auth, shared-DB RLS multi-tenancy, `NUMERIC(14,2)` money, optimistic-locked reservations, idempotency keys on retryable writes).
+
+**Design source.** The UI/UX design (tokens, component kit, sitemap for both apps, high-fidelity screens for POS billing/payment/open-price/approval/sales history/phone-offline and admin list/edit/labels/journal/subscription, the states checklist, breakpoints and shortcuts) is published as the "ADR ERP Design System" page (https://claude.ai/artifact/352v1TM8GCN7d5F4nh9p84; private to its owner until shared). It carries out `tech_stack_decision.md` §4's existing "Shared design system" row: one token set, shadcn/ui on the web, and a Flutter theme mirrored from the same tokens. It isn't a new stack decision. Everything a phase below depends on from that design is restated here, so this roadmap stays self-contained if the link is unavailable.
+
+### Why these phases are sequenced this way
+
+1. **Restyle before you rebuild.** Phase 11 changes no logic, so the existing 20+ Playwright specs and the Flutter test suite prove it broke nothing. Every later phase then builds on one component kit instead of restyling 50 screens twice.
+2. **POS before admin.** `pos_frd_complete.md` Part A's ≤6-second scan-to-receipt target and the FRD's "offline-first POS" objective are the product's core promise. Phase 1's own note says it is "the only phase that really matters for validating the business."
+3. **Backend gaps travel with the screen that needs them**, the same "UI built in this same pass" pattern every phase since Phase 2 has followed. No endpoint is built without a caller, and no screen is built against an endpoint that doesn't exist.
+4. **SaaS subscriptions last.** They're the only item here with no existing schema at all (FRD §19 was never started). Plan limits also need the terminal, user and branch management surfaces from Phases 11–14 to exist before there's anything to limit.
+
+### Requirement traceability: new brief → existing documents
+
+Brief section numbers refer to the 2026-10-10 consolidated requirements brief. "Existing" means already built and verified per the phase status blocks above.
+
+| Brief § | Requirement | Existing source of truth | Already built | Gap closed in |
+| --- | --- | --- | --- | --- |
+| 1 | Modern, consistent UI across POS + admin; responsive; accessible; loading/empty/error/confirm/unsaved states | `tech_stack_decision.md` §4 (shared design system); FRD Part A performance targets | Functional screens only; framework-default styling; no confirm or unsaved-change patterns | 11, 12 |
+| 2 | Master CRUD with activate/deactivate, dependency-safe delete, server-side paging/search/sort/filter, record counts | FRD §10 (catalog, lifecycle, bulk ops), §9 supplier mgmt, §1 hierarchy; `phase0_1_design.md` §3.31 (one shared "sellable" rule) | Most masters have create/list; paging only on some endpoints (products, customers, audit, notifications, search); no category/brand/unit list endpoints (known gap in `erp-web-admin/CLAUDE.md`) | 11 |
+| 3 | Product lookup/update in POS, permission-gated price/stock edits, sync to terminals | FRD §2 stock adjustments, §11 pricing, §13 search; Phase 2 Pricing (`pricing.manage`), Phase 1 adjustments (`inventory.adjust`); `/sync/pull` (§3.5) | Backend endpoints and permissions exist; POS has search + scan only | 13 |
+| 4 | Barcode labels: EAN-13/UPC-A/Code 128/QR, templates, sizes, preview, bulk, printer paths | FRD §12 (types, 4 predefined templates, WYSIWYG editor, Zebra/TSC/Brother/Epson/DYMO, ESC/POS/ZPL/TSPL, bulk + GRN printing) | `internal/printing` ESC/POS, 2 of 4 templates (Standard, Compact), EAN-13 + Code 128; **no client calls the label endpoint** | 13 (POS), 14 (admin studio) |
+| 5 | Open-price items with min/max, supervisor approval, audit | Not in the FRD. Closest: FRD §3 "Bill Modification" (manager approval + reason + audit) and §5 "Manual Discount Authorization" tiers | Not modelled | 13 |
+| 6 | Sales creation + history + returns/refunds in admin, same rules as POS | FRD §3 (payments, return & exchange, bill modification), §15 A (sales reports); Phase 7's `CreateCart`/`AddLineToCart` extraction (one checkout path) | No admin cart; no order list endpoint (only `GET /sales/orders/held`); void exists, returns/refunds don't | 14 |
+| 7 | POS sales history, filters, summaries, reprint, returns, cashier-wise, offline-aware | FRD §15 A (cashier-wise, payment-method-wise), §16 (cash recon); Phase 1 basic reports | `GET /reports/daily-sales`, `/eod-cash`; receipt + reprint per order; no history list | 13 |
+| 8 | Journal entries with draft → approve → post → reverse, periods, export | FRD §8 (double-entry, chart of accounts); Phase 2 Ledger & Accounting | Manual JV posts immediately, no approval workflow (deliberate Phase 2 simplification, recorded above); auto-journaling already idempotent | 14 (workflow), 13 (POS petty-cash view; scope decision below) |
+| 9 | Granular RBAC: module/action/data scope, approval policies, UI hides/disables, backend enforces | FRD §18 (roles, feature/action/data-level permissions); UACL cross-cutting block above | Backend enforcement + role admin done; UI only reacts to a `403` after the fact; no `/me` permissions endpoint; data-level (own-branch) scoping limited (Phase 2 "Known simplification") | 11 (`/me`), 15 (data scope) |
+| 10 | SaaS subscription tiers, limits, trials, renewals, grace, usage dashboards, no loss of legally required data | **FRD §19** (Freemium / Starter / Professional / Enterprise, per-POS pricing, limits, retention, add-ons); FRD Part A "Tiered subscription" objective | Not modelled (no plan/entitlement tables) | 16 |
+| 11 | Multiple terminals per branch, terminal settings, shifts, cash management | FRD §1 hierarchy, §18 "Device binding for POS (registered devices only)", §16 cash recon | `pos_terminals` table, no API; POS hardcodes the seed terminal (`TODO(phase 2)` in `session.dart`); PIN device binding exists; EOD cash recon exists, no shift open/close | 12 (pairing), 13 (shifts) |
+| 12 | Offline sales, idempotent sync, conflict states, clear indicators | FRD Part A "Offline-first POS"; `phase0_1_design.md` §3.5 (idempotent `/sync/push`, oversell → `NEGATIVE_STOCK` rule), §6.6 | Fully built for cash sales; live-only list documented in `erp-pos-flutter/CLAUDE.md` | 12 (UI states), 13 (sync queue screen) |
+| 13 | Performance, scalability, SLOs, load testing | FRD Part A (≤6 s transaction, ≤100 ms search, ≤3 s dashboard, 99.9% uptime, 10,000 txn/hour); `tech_stack_decision.md` §9 (k6/Locust, Flutter `integration_test` with offline transitions) | Functional verification only; no load tests on file | Every phase (UI budgets below); 16 (load test gate) |
+| 14 | Custom report template engine | FRD §15 "Custom Builder: drag-and-drop (select fields, filters, groupings)", export PDF/Excel/CSV/JSON, scheduling; FRD §19 places Custom builder in **Professional** | Fixed reports only; NLP-BI routes to 5 fixed report intents (Phase 6) | 16 |
+| 15 | Dependency map + business rules | `phase0_1_design.md` §1 ER overview + §2 key decisions | Implicit in code (FK `ON DELETE` rules, `409 ROLE_IN_USE`, `409 PRICE_LIST_IN_USE` style refusals) | 11 (dependency-count endpoints + doc) |
+| 16 | Deliverables (FRD, matrices, sitemap, designs, schema, API, tests, deployment) | `pos_frd_complete.md`, `phase0_1_design.md`, `tech_stack_decision.md`, this roadmap, the design page above | FRD, ER, API contract, roadmap exist and are kept current | Each phase adds its own `phase0_1_design.md` §3.x entry, as every phase has |
+
+### Conflicts and open decisions (need the user's call, not decided unilaterally)
+
+These follow the same "don't unilaterally decide a big call" posture already used for the GSP vendor, the LLM vendor and the storefront scope.
+
+1. **Subscription tier names and limits.** The brief's example names ("Basic, Standard, Premium") differ from **FRD §19's four tiers (Freemium, Starter, Professional, Enterprise)**. This plan follows FRD §19 as the source of truth. The design page's subscription mock-up is illustrative until this is confirmed.
+2. **Data retention vs statutory retention.** FRD §19 gives Freemium "30-day retention" and Starter "1-year retention". Phase 4's audit trail is deliberately indefinite ("7-year retention" requirement), GST records carry their own statutory retention, and the brief says subscription limits must never compromise legally required data. **Proposed:** tier retention limits only how far back the *UI and reports* reach. Invoices, ledgers, GST data and the audit log are never deleted by a plan change and stay exportable read-only. Needs confirmation.
+3. **Open-price items** are new scope, not in the FRD. Proposed model: a product-level `is_open_price` flag with optional min/max, default description editable at billing, an approval threshold, and approver/time/reason stored on the sale line plus `audit_logs`. Inventory treatment (a stock-tracked "misc" variant vs non-stock) needs a decision.
+4. **Journal entries inside the POS** (brief §8). FRD §8 places accounting in the back office. Proposed: POS gets a petty-cash/cash-in-out journal only, gated by permission. Full JV authoring and approval stay in the admin. Needs confirmation.
+5. **Offline scope widening.** Today discounts, promotions, coupons, loyalty, void and customer attach are live-only (`erp-pos-flutter/CLAUDE.md`). The design proposes allowing discounts up to the 5% no-approval tier offline, and flagging (not blocking) sales priced from a cache older than 24 hours. Both change business rules. Neither ships without sign-off, and neither changes §3.5's existing oversell rule.
+6. **JV approval workflow.** Phase 2 deliberately chose "post immediately, no approval workflow". Adding draft → approve → post (brief §8) makes that a configurable merchant setting, with the default left as today's behaviour.
+7. **Data isolation Option A** (FRD §1, separate DB per merchant) stays out of scope. Shared-DB RLS is a recorded non-negotiable. The SaaS console in Phase 16 is built on the shared model.
+
+### Cross-phase UI performance budgets
+
+Measured on a mid-range Android tablet (POS) and a mid-range laptop on throttled "Fast 3G" (admin). Each budget derives from FRD Part A's targets; none replaces them.
+
+| Interaction | Budget (p95) | Derived from |
+| --- | --- | --- |
+| Scan → line visible in cart (online) | ≤ 300 ms | FRD ≤6 s scan-to-receipt |
+| Scan → line visible in cart (offline, local cache) | ≤ 150 ms | same |
+| Pay → receipt shown (cash, online) | ≤ 1.5 s | same |
+| Product search results (POS + admin) | ≤ 300 ms rendered | FRD ≤100 ms server-side search |
+| Admin list page, any master, server-paged | ≤ 1 s | FRD ≤3 s dashboard refresh |
+| Sync of a 50-sale offline backlog | ≤ 30 s, zero duplicates | §3.5 idempotency contract |
+
+---
+
+### Phase 11 — Design System Foundations & Admin List/Form Kit (design UI-0 + UI-1)
+
+**Size: L | Goal: Both apps share one visual language, and every admin master screen behaves the same way.**
+
+**In:**
+
+- **Tokens in both clients.** In `erp-web-admin/app/globals.css`, replace the greyscale shadcn defaults while keeping the same variable names, so existing components pick them up unchanged. Add `pay`, `warn`, `plum`, `teal` status colors and dark mode. In `erp-pos-flutter`, add `lib/ui/theme.dart` (`ThemeData` + a `ThemeExtension` with the same tokens). Geist is **bundled as an asset**, not fetched, so an offline terminal never falls back to another font.
+- **One status language.** Every sale, sync, journal, master-record and subscription state has one fixed color and label in both apps (design page §03).
+- **Admin shell.** The flat 42-link sidebar becomes 11 groups, adding icons, breadcrumbs, a branch selector and a ⌘K command palette. **Every existing route keeps its URL**, so bookmarks and all existing Playwright specs remain valid. "New Product" moves from the sidebar to a page action.
+- **List/form kit (web):** `DataTable` (server paging, page size, sort, column visibility, row selection + bulk bar, record count), `FilterBar` with filters in the URL query string, `EmptyState`, `Skeleton`, `ConfirmDialog`, `DependencyDialog`, `useUnsavedChanges` (route-leave guard + sticky save bar), `StatusChip`, `MoneyText`.
+- **Backend, in the same pass:**
+  - A standard list convention on every master list endpoint: `q`, `status`, `sort`, `dir`, `page`, `limit` in; the endpoint's existing collection key plus `total`, `page`, `limit` out (`internal/httpx/list.go`). *As built:* the key is not renamed to `items`, and an endpoint that returned every row still does when no `page`/`limit` is passed, so existing pickers and clients are unaffected.
+  - Lifecycle for categories, brands and tax slabs: edit, activate/deactivate, delete only when unused (`migrations/036`). *Correction:* their list endpoints already existed since §3.19; the "no category/brand list endpoint" note in `erp-web-admin/CLAUDE.md` was stale. Units of measure have no table yet and stay out of Phase 11.
+  - `GET /me/permissions`, so the UI can disable an action with a reason *before* a `403`. The backend stays the enforcer; this changes no gate.
+  - Per-master dependency counts behind `DependencyDialog` (e.g. a product's sales lines, bills, price lists, promotions), reusing the existing `409 *_IN_USE` refusals instead of replacing them.
+- **Migrate master screens** onto the kit one at a time: products, customers, suppliers, branches, categories, brands, units, tax, price lists, promotions, coupons, employees, roles.
+
+**Deferred:** POS layout changes (Phase 12), new business flows.
+
+**Definition of Done:**
+
+- Every existing Playwright spec and Flutter test passes unchanged.
+- Every master list has server paging, search, sort, filters and a record count.
+- Delete on a referenced record shows its dependencies and offers deactivate.
+- Unsaved forms warn before leaving.
+- Screenshot baselines exist for each migrated screen in light and dark.
+- An axe accessibility scan is clean.
+- A keyboard-only create → edit → deactivate test passes.
+
+**Status: in progress (started 2026-10-10).** Done and verified:
+
+- **Tokens in both clients.**
+  - Web: `app/globals.css`, with dark mode via `next-themes` (light by default). This also fixed a self-referencing `--font-sans` that had silently kept Geist from ever applying.
+  - Flutter: `lib/ui/theme.dart` (`PosColors` theme extension) with Geist bundled under `assets/fonts/` (OFL). This also fixed the POS app-bar actions, whose hard-coded white icons sat on a light Material 3 app bar.
+  - 55 admin screens' hard-coded palette classes now map to tokens.
+- **Admin shell:** 11 grouped sidebar sections (every label and URL unchanged), breadcrumb, Ctrl/⌘+K screen palette, theme switch, mobile drawer.
+- **Backend:** list convention, master lifecycle, dependencies and `/me/permissions` — see `phase0_1_design.md` §3.32 (29 live API checks, plus parser unit tests).
+- **Web kit:** `DataTable` (URL-synced search/filter/sort/paging, skeleton/empty/no-results/error states), `StatusChip`, `PageHeader`, `Modal`/`AlertModal`, `DeleteWithDependencies`, `useUnsavedChanges`, `PermissionsProvider`.
+- **Screens on the kit:** new Categories, Brands and Tax Slabs screens; Suppliers migrated (search, status, sort, paging, deactivate).
+- **e2e:** new `e2e/phase11-masters.spec.ts` (4 tests) passes. Of the 33 existing specs, 27 pass against the new UI.
+
+**Still to do in Phase 11:** migrate Products, Customers, Branches, Promotions/Coupons, Price Lists, Employees and Roles onto the kit; supplier edit (the PATCH can't clear a field today); Playwright screenshot baselines (light/dark) and an axe scan; a keyboard-only CRUD spec. Units of measure need a table first, so they move to a later phase.
+
+**e2e environment notes, found while verifying (not caused by Phase 11):**
+
+- Since `fd15e48` the compose `api` service points at the *host* Postgres (merchant `adr_sports_world`), while every spec targets the `acme-sports` seed data in the compose database. Phase 11 was verified with a throwaway API container on the seed database, with the developer's own API stopped only for the run and restored afterwards.
+- `da24e81` removed the login screen's pre-filled email, which 11 spec logins silently relied on. Those specs now fill the email explicitly.
+- The pre-filled merchant code now comes from `NEXT_PUBLIC_DEFAULT_MERCHANT_CODE` (unset = `adr_sports_world`, so nothing changes day to day). Run e2e with it and `E2E_MERCHANT_CODE` set to `acme-sports`.
+- Six existing specs still fail for reasons outside this phase:
+  - `pricing.spec.ts`: strict-mode clash with "customer pays ₹…" text added in `9c786bc`.
+  - `grocery.spec.ts` and `payment-gateway-reconciliation.spec.ts`: loose matchers collide with leftovers from earlier runs.
+  - `inventory-reconciliation.spec.ts`: its product picker only loads the first 50 products, and accumulated test products push the seed bat off that page. Fixed for good when that picker moves to the kit.
+  - `cash-reconciliation.spec.ts`: depends on a manager PIN set by hand during earlier backend verification, which a seed-volume reset has since wiped.
+  - `einvoice.spec.ts`: depends on the merchant GSTIN, likewise wiped by a reset.
+- Specs that read "today" are also unreliable between 00:00 and 05:30 IST (UTC and IST dates differ), as `01875f5` already found for the pharmacy spec.
+- **Migration 036 has been applied to the compose seed database only.** The host development database needs `psql -f migrations/036_master_data_lifecycle.sql` before an API built from this code runs against it (the running container is still on the previous image).
+
+### Phase 12 — POS Billing Redesign & Terminal Pairing (design UI-2)
+
+**Size: L | Goal: A cashier can complete a normal sale with scanner + keyboard alone, on any supported screen size, and always knows the terminal's sync state.**
+
+**In:**
+
+- Split `lib/screens/pos_screen.dart` (813 lines) into `StatusBar` (terminal, shift, held count, sync pill, cashier), `ProductGrid` (category chips + tiles with stock), `CartPanel` (qty steppers, selected-line actions), and `PaymentSheet` (tenders, quick cash, change due). Coupon, promotions and loyalty move into the payment step.
+- Function-key shortcuts via Flutter `Shortcuts`/`Actions`: F2 search, F3 open price (enabled in Phase 13), F4 customer, F7 discount, F8/F9 hold/recall, F12 pay, `+`/`−`/`Del` on the selected line.
+- Responsive layouts at the design's breakpoints: phone (<600), tablet portrait, landscape, ≥1280. The 1024×768 all-in-one terminals fall in the landscape layout.
+- Offline UI states: amber sync pill, offline banner, and unavailable tenders shown disabled *with the reason* (the rules already in `erp-pos-flutter/CLAUDE.md`, not new ones).
+- Shared `ApprovalPinPad`, used first for the existing manual-discount approval tiers (FRD §5).
+- **Terminal registration/pairing**, closing `session.dart`'s `TODO(phase 2)` and FRD §18's "registered devices only". Backend: `POST/GET/PATCH /pos-terminals` (activate/deactivate, name, settings) plus a one-time pairing code. The POS stops hardcoding `kSeedBranchId`/`kSeedPosTerminalId`. Branch-level terminal management screen in the admin.
+
+**Deferred:** new sale flows (Phase 13).
+
+**Definition of Done:**
+
+- Flutter golden tests at 360, 800 and 1280 widths, light and dark.
+- A Flutter `integration_test` completes a full sale without pointer input (`tech_stack_decision.md` §9).
+- The scan → cart budget above is met on a real mid-range tablet.
+- Two paired terminals in one branch sell concurrently against the same stock without double-reserving (existing optimistic locking, now exercised from two real devices).
+- On-device verification closes Phase 1's still-open hardware item where hardware is available.
+
+### Phase 13 — New POS Flows: Open Price, Sales History, Returns, Shifts, Labels, Sync Queue (design UI-3)
+
+**Size: XL | Goal: The POS covers the counter's whole day, from open shift to close, not just a single sale.**
+
+**In:**
+
+- **Open-price items** (decision 3 above). Backend fields + validation + approval capture on the line + `audit_logs`; keypad dialog in the POS. Receipts, history and reports show the entered price and approver.
+- **POS sales history.** Backend: paged `GET /sales/orders?terminal_id=&cashier_id=&status=&payment_method=&from=&to=`, plus a terminal/day summary (gross, discounts, tax, net, per-tender split) reusing the `reports` package's existing aggregation. POS shows filters, detail, reprint, and local `OFF-` sales from SQLite marked as queued until synced.
+- **Returns & refunds** (FRD §3 "Return & Exchange", hybrid immediate vs approval, configurable). Return and refund statuses are distinct from void, and stock and ledger reversal reuse the existing void posting pattern (mirror entry, never delete). Returning an unsynced offline sale is refused with a clear message.
+- **Shifts.** Open with a float, cash in/out, close with an X/Z report. Close feeds the existing Phase 4 cash reconciliation instead of duplicating it.
+- **Product lookup in POS.** Stock by branch, price edit (`pricing.manage`), stock adjust (`inventory.adjust`). Same endpoints and guards as the admin; past sales are never re-priced.
+- **Labels from POS.** Calls the existing `GET /products/variants/{id}/label`. Adds FRD §12's two missing predefined templates (Detailed 100×50 with batch/expiry; QR 50×50) server-side.
+- **Sync queue screen.** Pending, synced, failed and needs-review items, with retry. A `NEGATIVE_STOCK` oversell from §3.5 surfaces here and in the admin as "needs review" (the existing rule, now visible).
+- **Petty-cash journal in POS**, if decision 4 is confirmed.
+
+**Deferred:** admin-side equivalents (Phase 14).
+
+**Definition of Done:**
+
+- Offline sale → reconnect → exactly one server sale and one ledger posting, verified with a forced retry storm (the §3.5 idempotency contract, now proven from the device).
+- A return posts the exact mirror journal entry.
+- Shift close reconciles to the cash-recon figure.
+- Open price outside min/max is refused, and a value above the approval threshold is refused without a valid supervisor PIN.
+- Every new endpoint's error codes are added to `phase0_1_design.md` §3's catalogue.
+
+### Phase 14 — Admin Sales, Label Studio, JV Workflow (design UI-4)
+
+**Size: L | Goal: The back office can sell, refund and print labels with exactly the same rules as the till.**
+
+**In:**
+
+- **Admin new-sale screen** built on the existing `CreateCart`/`AddLineToCart`/`Checkout` path (Phase 7's extraction), so pricing, tax, promotions, credit limits and stock reservation are the *same code*, not a parallel implementation. It runs on the `channel` model Phase 7 introduced.
+- **Admin sales history + detail**: items, payments, tax breakdown, discounts, cashier, branch, terminal. Includes authorized cancel, return, refund and post-finalization correction (FRD §3 "Bill Modification": manager approval + reason + full audit).
+- **Label studio.** Product/GRN selection with quantities (FRD §12 bulk printing, "print entire GRN"), size presets plus custom, field toggles, live preview with a scannability check, and three explicitly distinct print paths:
+  - direct thermal: ESC/POS today, with ZPL/TSPL added per FRD §12;
+  - system print dialog at the exact page size;
+  - browser A4 sticker-sheet PDF.
+  The FRD's WYSIWYG drag-and-drop editor is scoped as a follow-up unless the user pulls it in.
+- **JV workflow as a merchant setting** (decision 6): draft → submitted → approved → posted → reversed, with period lock, paging, search and CSV/PDF export. Auto-generated entries stay read-only and link to their source document.
+
+**Definition of Done:**
+
+- A shared fixture cart totals identically to the paisa in POS and admin.
+- Labels scan on a real 203-dpi thermal printer at every preset size (or this is recorded as environment-blocked, the same way Phase 1's hardware item is).
+- Posted JVs can only be reversed, never edited (enforced server-side and tested).
+
+### Phase 15 — Data-Scoped RBAC & Approval Policies
+
+**Size: M | Goal: FRD §18's data-level permissions ("own branch vs all branches") are real, and approval thresholds are configurable without code.**
+
+**In:**
+
+- Branch-scoped access for password sessions. This closes Phase 2's recorded "Known simplification": only PIN-login carries a `branch_id` claim today.
+- Configurable approval policies (price override, discount tiers, refund, stock adjustment, JV posting) stored per merchant and read by the existing inline-PIN pattern.
+- Admin UI for both.
+- `GET /me/permissions` gains data scope.
+
+**Definition of Done:** A Branch Manager sees and acts on only their branch's data across every list, report and export, verified server-side per endpoint, not just in the UI.
+
+### Phase 16 — SaaS Subscriptions, Entitlements & Report Builder (design UI-5)
+
+**Size: XL | Goal: FRD §19's tiered subscription model is enforced by the backend, and FRD §15's custom builder exists for the tiers that include it.**
+
+**In:**
+
+- **Plans and entitlements as data, not code.** Plans, features, limits (branches, POS, products, transactions/month, retention) and add-ons per FRD §19, editable by platform staff without a deploy. Enforcement lives in Go middleware next to the existing permission middleware. The UI only reflects it (lock icon + preview page, never a 404).
+- **Subscription lifecycle:** trial, active, grace period, expired. Expiry means read-only, never deletion (decision 2). Includes upgrade/downgrade (a downgrade over a limit blocks *new* creation and never deactivates existing records), billing records and payment status. A real payment-gateway/billing vendor is a separate vendor decision, handled like the GSP stub: interface plus stub first.
+- **Merchant usage dashboard + SaaS (platform staff) console** for merchants, plans and billing. It runs on the shared-DB RLS model (decision 7) behind a separate platform-staff role.
+- **Report template engine** (FRD §15 Custom Builder): field and column picking from an allow-listed semantic layer per domain (sales, inventory, products, payments, tax, journals, branches, terminals). Supports filters, grouping, aggregations, saved/duplicated templates and export (CSV/Excel/PDF), with RBAC and branch scope applied server-side. Heavy reports run as background jobs. Query cost limits mean a template can never issue unbounded SQL. As with NLP-BI (Phase 6), users never write SQL.
+- **Load-test gate** (`tech_stack_decision.md` §9: k6/Locust) at 10,000 txn/hour across multiple tenants and terminals before calling the SaaS model production-ready.
+
+**Definition of Done:**
+
+- Exceeding a plan limit is refused server-side with a clear upgrade message.
+- An expired tenant can still read and export every invoice, ledger, GST report and audit row.
+- A report template can't return data outside the caller's branch scope.
+- The load test meets FRD Part A's targets with the results recorded.
+
+### QA approach applied to every phase above
+
+- **States checklist.** Loading, empty, no-results, error, forbidden, plan-locked, offline/stale and unsaved/conflict (design page §08) are part of each screen's acceptance, not polish.
+- **Verification as before.** Same verification bar as Phases 0–10: live against the docker-compose backend, not mocked. Playwright for the admin, Flutter widget/golden/`integration_test` for the POS, and every real bug found live recorded in that phase's `phase0_1_design.md` §3.x entry.
+- **Regression.** No phase is marked done while any pre-existing spec or test is red.
+
+---
+
 ## Solo-Builder Notes
 
 A few honest calls worth making as you execute this, given it's 1-2 people:
@@ -516,3 +745,9 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | —     | Session expiry handling, GST-inclusive pricing       | M       | Done — both clients return to login on expiry (silent refresh while active); per-product inclusive/exclusive GST pricing with a merchant default, see above |
 | —     | Product editing & status enforcement                 | M       | Done — edit product/variants, add variant, enforce discontinued/inactive at scan, cart and quotations, Products + edit screens, see above |
 | 10    | Pricing & quotation gaps                             | M       | Done — scheduled price changes (incl. bulk), dynamic price rules (happy hours/weekend/seasonal, branch timezone, MRP cap), draft-quotation editing, and quote conversion now bills the quoted price, see above |
+| 11    | Design system foundations, admin list/form kit       | L       | In progress (2026-10-10) — tokens in both clients, grouped admin shell, list/form kit, master lifecycle + dependencies + `/me/permissions` done; Categories/Brands/Tax Slabs/Suppliers on the kit; remaining masters, visual baselines and a11y scan to go, see above |
+| 12    | POS billing redesign, terminal pairing               | L       | Planned — split POS screen, F-key flow, responsive layouts, offline UI states, `/pos-terminals` + pairing, see above |
+| 13    | New POS flows                                        | XL      | Planned — open price, sales history, returns/refunds, shifts, POS product/label tools, sync queue, see above |
+| 14    | Admin sales, label studio, JV workflow               | L       | Planned — admin sale on the shared checkout path, sales history/refunds, label studio (ESC/POS + ZPL/TSPL + system + PDF), configurable JV approval, see above |
+| 15    | Data-scoped RBAC, approval policies                  | M       | Planned — branch-scoped password sessions, configurable approval thresholds, see above |
+| 16    | SaaS subscriptions, entitlements, report builder     | XL      | Planned — FRD §19 tiers enforced server-side, read-only on expiry (never delete), SaaS console, report template engine, load-test gate; 7 open decisions listed above |

@@ -8,13 +8,23 @@
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
+// Pre-filled merchant code on the login and forgot-password screens. Set
+// NEXT_PUBLIC_DEFAULT_MERCHANT_CODE per environment (the e2e suite runs
+// against the "acme-sports" seed merchant); unset keeps this deployment's
+// own merchant, so nothing changes for day-to-day use.
+export const DEFAULT_MERCHANT_CODE = process.env.NEXT_PUBLIC_DEFAULT_MERCHANT_CODE ?? "adr_sports_world";
+
 export class ApiError extends Error {
   code: string;
   status: number;
-  constructor(status: number, code: string, message: string) {
+  // The error body's optional `details` (e.g. a 409 IN_USE's dependency
+  // counts) — untyped here; each screen narrows what it expects.
+  details?: unknown;
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -255,7 +265,7 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
 
   if (!resp.ok) {
     const err = body?.error ?? {};
-    throw new ApiError(resp.status, err.code ?? "UNKNOWN_ERROR", err.message ?? `request failed with status ${resp.status}`);
+    throw new ApiError(resp.status, err.code ?? "UNKNOWN_ERROR", err.message ?? `request failed with status ${resp.status}`, err.details);
   }
   return body as T;
 }

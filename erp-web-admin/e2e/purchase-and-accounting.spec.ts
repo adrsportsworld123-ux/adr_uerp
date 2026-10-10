@@ -20,6 +20,7 @@ test("supplier → GRN → bill → payment → day book, end to end", async ({ 
 
   await test.step("login", async () => {
     await page.goto("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

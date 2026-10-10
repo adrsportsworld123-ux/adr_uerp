@@ -40,8 +40,8 @@ export default function TransfersPage() {
           New transfer
         </Link>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {transfers && transfers.length === 0 && <p className="text-sm text-zinc-500">No transfers yet.</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {transfers && transfers.length === 0 && <p className="text-sm text-muted-foreground">No transfers yet.</p>}
       {transfers && transfers.length > 0 && (
         <Table>
           <TableHeader>

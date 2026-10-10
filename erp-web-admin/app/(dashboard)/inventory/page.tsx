@@ -159,7 +159,7 @@ export default function InventoryPage() {
             </Button>
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-destructive">{error}</p>}
 
           {stock && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm border-t pt-4">
@@ -185,7 +185,7 @@ export default function InventoryPage() {
           <CardTitle className="text-base">Manual adjustment</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-muted-foreground">
             Gated by the <code>inventory.adjust</code> permission — attempted and toast-erred on 403, same pattern every other
             gated write in this app uses. Writes a <code>stock_movements</code> row and an <code>audit_logs</code> entry
             (before/after <code>on_hand</code>).

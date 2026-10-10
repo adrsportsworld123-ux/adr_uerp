@@ -270,7 +270,7 @@ function NewCountSection() {
                         onChange={(e) => setCounts({ ...counts, [vid]: e.target.value })}
                       />
                     </TableCell>
-                    <TableCell className={variance === 0 ? "text-green-700" : "text-red-600 font-semibold"}>{variance}</TableCell>
+                    <TableCell className={variance === 0 ? "text-pay" : "text-destructive font-semibold"}>{variance}</TableCell>
                     <TableCell>
                       {isTracked(vid) ? (
                         <div className="flex gap-1">
@@ -292,7 +292,7 @@ function NewCountSection() {
                           )}
                         </div>
                       ) : (
-                        <span className="text-zinc-400">—</span>
+                        <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
                     <TableCell>
@@ -305,7 +305,7 @@ function NewCountSection() {
               })}
               {lineVariantIds.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                     No lines added yet
                   </TableCell>
                 </TableRow>
@@ -316,13 +316,13 @@ function NewCountSection() {
           {lineVariantIds.length > 0 && (
             <p className="text-sm">
               Net quantity variance across all lines:{" "}
-              <span className={totalVariance === 0 ? "text-green-700 font-semibold" : "text-red-600 font-semibold"}>{Math.round(totalVariance * 1000) / 1000}</span>
+              <span className={totalVariance === 0 ? "text-pay font-semibold" : "text-destructive font-semibold"}>{Math.round(totalVariance * 1000) / 1000}</span>
             </p>
           )}
 
           {needsApproval && (
-            <div className="flex flex-col gap-3 border rounded-lg p-3 bg-amber-50">
-              <p className="text-xs text-amber-800">
+            <div className="flex flex-col gap-3 border rounded-lg p-3 bg-warn-soft">
+              <p className="text-xs text-warn">
                 A non-zero variance needs a reason and a Branch Manager or Merchant Admin&apos;s PIN before this can be closed.
               </p>
               <div className="flex flex-col gap-2">
@@ -342,9 +342,9 @@ function NewCountSection() {
             </div>
           )}
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-destructive">{error}</p>}
           {batchMissing && (
-            <p className="text-sm text-amber-700">A batch-tracked line counted above system stock needs the batch number the extra units belong to.</p>
+            <p className="text-sm text-warn">A batch-tracked line counted above system stock needs the batch number the extra units belong to.</p>
           )}
           <Button type="submit" disabled={busy || lineVariantIds.length === 0 || batchMissing} className="w-fit">
             {busy ? "Submitting..." : "Submit reconciliation"}
@@ -402,7 +402,7 @@ function HistorySection() {
           <Input id="histEnd" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-40" />
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
 
         <Table>
           <TableHeader>
@@ -420,13 +420,13 @@ function HistorySection() {
                 <TableCell>
                   <Badge variant="outline">{h.recon_type}</Badge>
                 </TableCell>
-                <TableCell className={Number(h.variance_value) !== 0 ? "text-red-600" : ""}>₹{h.variance_value}</TableCell>
-                <TableCell>{h.authorized ? <Badge variant="default">Yes</Badge> : <span className="text-zinc-400">—</span>}</TableCell>
+                <TableCell className={Number(h.variance_value) !== 0 ? "text-destructive" : ""}>₹{h.variance_value}</TableCell>
+                <TableCell>{h.authorized ? <Badge variant="default">Yes</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
               </TableRow>
             ))}
             {history.length === 0 && (
               <TableRow>
-                <TableCell colSpan={4} className="text-center text-sm text-zinc-500 py-6">
+                <TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-6">
                   No reconciliations in range
                 </TableCell>
               </TableRow>

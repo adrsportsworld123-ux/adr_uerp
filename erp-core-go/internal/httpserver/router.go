@@ -15,6 +15,7 @@ import (
 	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/customers"
 	"erp-core-go/internal/db"
+	"erp-core-go/internal/dependencies"
 	"erp-core-go/internal/einvoice"
 	"erp-core-go/internal/gst"
 	"erp-core-go/internal/hr"
@@ -50,6 +51,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	barcode := &catalog.BarcodeHandler{DB: database}
 	barcodeAssign := &catalog.BarcodeAssignHandler{DB: database}
 	taxonomy := &catalog.TaxonomyHandler{DB: database}
+	deps := &dependencies.Handler{DB: database}
+	me := &authn.MeHandler{DB: database}
 	label := &catalog.LabelHandler{DB: database}
 	productList := &catalog.ListHandler{DB: database, Search: searchClient}
 	prc := &pricing.Handler{DB: database, Search: searchClient}
@@ -102,6 +105,11 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		api.Group(func(protected chi.Router) {
 			protected.Use(authn.RequireAuth(issuer))
 			protected.Post("/auth/logout", logout.ServeHTTP)
+			// Phase 11: the caller's permission codes (a UI hint — every
+			// gate below still enforces on its own), and "what uses this
+			// record?" counts for master data.
+			protected.Get("/me/permissions", me.Permissions)
+			protected.Get("/dependencies/{entity}/{id}", deps.Get)
 
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
 			protected.Post("/products/variants/{id}/barcodes", barcodeAssign.AssignBarcode)
@@ -129,6 +137,20 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/tax-slabs", taxonomy.ListTaxSlabs)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Post("/tax-slabs", taxonomy.CreateTaxSlab)
+			// Phase 11 (migrations/036): edit, activate/deactivate, and a
+			// delete that refuses (409 IN_USE) while anything references it.
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Patch("/categories/{id}", taxonomy.UpdateCategory)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Delete("/categories/{id}", taxonomy.DeleteCategory)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Patch("/brands/{id}", taxonomy.UpdateBrand)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Delete("/brands/{id}", taxonomy.DeleteBrand)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Patch("/tax-slabs/{id}", taxonomy.UpdateTaxSlab)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Delete("/tax-slabs/{id}", taxonomy.DeleteTaxSlab)
 			protected.Get("/collections", taxonomy.ListCollections)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Post("/collections", taxonomy.CreateCollection)

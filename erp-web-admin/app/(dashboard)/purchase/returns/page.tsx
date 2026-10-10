@@ -26,8 +26,8 @@ export default function PurchaseReturnsPage() {
           New return
         </Link>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {returns && returns.length === 0 && <p className="text-sm text-zinc-500">No purchase returns yet.</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {returns && returns.length === 0 && <p className="text-sm text-muted-foreground">No purchase returns yet.</p>}
       {returns && returns.length > 0 && (
         <Table>
           <TableHeader>

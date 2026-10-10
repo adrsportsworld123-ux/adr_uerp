@@ -85,7 +85,7 @@ function PromotionsSection() {
       <CardContent className="flex flex-col gap-6">
         <NewPromotionForm products={products} onCreated={load} />
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
         <Table>
           <TableHeader>
             <TableRow>
@@ -104,7 +104,7 @@ function PromotionsSection() {
                 <TableCell className="text-xs">{PROMO_TYPES.find((t) => t.value === p.promo_type)?.label ?? p.promo_type}</TableCell>
                 <TableCell className="text-xs">
                   {p.application_level}
-                  {p.target_segment && <span className="text-zinc-400"> · {p.target_segment}</span>}
+                  {p.target_segment && <span className="text-muted-foreground"> · {p.target_segment}</span>}
                 </TableCell>
                 <TableCell className="text-xs">{p.stacking}</TableCell>
                 <TableCell>
@@ -119,7 +119,7 @@ function PromotionsSection() {
             ))}
             {promotions.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                   No promotions yet
                 </TableCell>
               </TableRow>
@@ -292,7 +292,7 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
           <div className="flex flex-col gap-2">
             <Label htmlFor="categoryId">Category ID</Label>
             <Input id="categoryId" required value={categoryId} onChange={(e) => setCategoryId(e.target.value)} placeholder="UUID" />
-            <p className="text-xs text-zinc-500">No category picker yet — same gap as Party Ledger&apos;s customer field.</p>
+            <p className="text-xs text-muted-foreground">No category picker yet — same gap as Party Ledger&apos;s customer field.</p>
           </div>
         )}
         <div className="flex flex-col gap-2">
@@ -355,7 +355,7 @@ function NewPromotionForm({ products, onCreated }: { products: Product[]; onCrea
         </Select>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
       <Button type="submit" disabled={busy} className="w-fit">
         {busy ? "Creating..." : "Create promotion"}
       </Button>
@@ -432,15 +432,15 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
         {p.tiers.map((t, i) => (
           <div key={i} className="flex gap-2 items-end">
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-zinc-500">Min qty</span>
+              <span className="text-xs text-muted-foreground">Min qty</span>
               <Input type="number" min="1" step="1" className="w-24" value={t.min_qty} onChange={(e) => updateTier(i, "min_qty", Number(e.target.value))} />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-zinc-500">Max qty (0 = no limit)</span>
+              <span className="text-xs text-muted-foreground">Max qty (0 = no limit)</span>
               <Input type="number" min="0" step="1" className="w-32" value={t.max_qty} onChange={(e) => updateTier(i, "max_qty", Number(e.target.value))} />
             </div>
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-zinc-500">Discount %</span>
+              <span className="text-xs text-muted-foreground">Discount %</span>
               <Input type="number" min="0.01" max="100" step="0.01" className="w-24" value={t.discount_pct} onChange={(e) => updateTier(i, "discount_pct", Number(e.target.value))} />
             </div>
             {p.tiers.length > 1 && (
@@ -594,10 +594,10 @@ function CouponsSection() {
           <Button type="submit" disabled={busy}>
             {busy ? "Creating..." : "Create coupon"}
           </Button>
-          {formError && <p className="text-sm text-red-600 w-full">{formError}</p>}
+          {formError && <p className="text-sm text-destructive w-full">{formError}</p>}
         </form>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
         <Table>
           <TableHeader>
             <TableRow>
@@ -631,7 +631,7 @@ function CouponsSection() {
             ))}
             {coupons.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-zinc-500 py-6">
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">
                   No coupons yet
                 </TableCell>
               </TableRow>
@@ -691,7 +691,7 @@ function LoyaltySettingsSection() {
         <CardTitle className="text-base">Loyalty settings</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted-foreground">
           A customer&apos;s whole point balance expires together if they go this many months without a new sale (&quot;rolling&quot;
           expiry) — not per-batch. Points earn automatically at checkout; redemption happens from the POS terminal, not here.
         </p>
@@ -712,7 +712,7 @@ function LoyaltySettingsSection() {
             {busy ? "Saving..." : "Save"}
           </Button>
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
   );

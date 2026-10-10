@@ -9,6 +9,7 @@ import { test, expect } from "@playwright/test";
 test("branch → transfer request → approve → dispatch → complete with a discrepancy", async ({ page }) => {
   await test.step("login as POS User (Ravi)", async () => {
     await page.goto("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");
@@ -78,6 +79,7 @@ test("branch → transfer request → approve → dispatch → complete with a d
     await page.goto("/dashboard");
     await page.click("text=Log out");
     await page.waitForURL("/login");
+    await page.fill("#email", "ravi@acme-sports.test");
     await page.fill("#password", "Passw0rd!");
     await page.click('button[type="submit"]');
     await page.waitForURL("/dashboard");

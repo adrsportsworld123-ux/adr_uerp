@@ -113,7 +113,7 @@ export default function RBACPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">User Access Control (Roles &amp; Permissions)</h1>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardHeader>
@@ -187,7 +187,7 @@ export default function RBACPage() {
                   <span>
                     <span className="font-mono text-xs">{p.code}</span>
                     <br />
-                    <span className="text-zinc-500 text-xs">{p.description}</span>
+                    <span className="text-muted-foreground text-xs">{p.description}</span>
                   </span>
                 </label>
               ))}
@@ -248,7 +248,7 @@ export default function RBACPage() {
                           {rid && (
                             <button
                               type="button"
-                              className="ml-1 text-zinc-400 hover:text-red-600"
+                              className="ml-1 text-muted-foreground hover:text-destructive"
                               onClick={() => revokeRole(e.id, rid)}
                               aria-label={`Revoke ${roleName}`}
                             >
@@ -258,7 +258,7 @@ export default function RBACPage() {
                         </Badge>
                       );
                     })}
-                    {e.roles.length === 0 && <span className="text-zinc-400 text-xs">No roles</span>}
+                    {e.roles.length === 0 && <span className="text-muted-foreground text-xs">No roles</span>}
                   </TableCell>
                 </TableRow>
               ))}

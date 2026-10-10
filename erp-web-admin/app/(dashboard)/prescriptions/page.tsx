@@ -72,7 +72,7 @@ export default function PrescriptionsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
       <h1 className="text-2xl font-semibold">Prescriptions</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         A scheduled-drug sale (anything with a &quot;Drug Schedule&quot; other than OTC) refuses at checkout unless a
         prescription like this is attached to the order — attaching one to a specific sale is done via the API
         directly (this app has no checkout screen), the same way an existing credit sale is created.
@@ -150,7 +150,7 @@ export default function PrescriptionsPage() {
               ))}
               {history.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-6">
                     {lookupCustomerId ? "No prescriptions on file" : "Select a customer to see their history"}
                   </TableCell>
                 </TableRow>

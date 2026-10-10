@@ -51,7 +51,7 @@ export default function CustomersPage() {
           New customer
         </Link>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
         <CardContent className="flex gap-2 items-end flex-wrap pt-6">
@@ -135,7 +135,7 @@ export default function CustomersPage() {
               ))}
               {customers.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">
                     No matching customers
                   </TableCell>
                 </TableRow>

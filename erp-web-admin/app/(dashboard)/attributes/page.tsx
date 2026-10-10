@@ -120,7 +120,7 @@ export default function AttributesPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">Product Attributes</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Define an attribute once (e.g. &quot;Purity&quot;, a select with 18K/22K/24K), then assign it to whichever
         category needs it — required or optional, with an optional display unit. New Product renders the right
         fields automatically once a category with a declared set is picked. The same mechanism works for any
@@ -168,7 +168,7 @@ export default function AttributesPage() {
                           {v.value}
                           <button
                             type="button"
-                            className="ml-1 text-zinc-500 hover:text-red-600"
+                            className="ml-1 text-muted-foreground hover:text-destructive"
                             onClick={() => removeValue(a.attribute_id, v.value_id)}
                             aria-label={`Remove ${v.value}`}
                           >
@@ -176,7 +176,7 @@ export default function AttributesPage() {
                           </button>
                         </Badge>
                       ))}
-                      {a.values.length === 0 && <span className="text-xs text-zinc-500">No values yet</span>}
+                      {a.values.length === 0 && <span className="text-xs text-muted-foreground">No values yet</span>}
                     </div>
                     <div className="flex items-center gap-2">
                       <Input
@@ -193,7 +193,7 @@ export default function AttributesPage() {
                 )}
               </div>
             ))}
-            {attributes.length === 0 && <p className="text-sm text-zinc-500">No attributes defined yet</p>}
+            {attributes.length === 0 && <p className="text-sm text-muted-foreground">No attributes defined yet</p>}
           </div>
         </CardContent>
       </Card>
@@ -241,7 +241,7 @@ export default function AttributesPage() {
                   ))}
                   {categorySet.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-6">
+                      <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">
                         No attributes assigned to this category yet — every product in it is unrestricted
                       </TableCell>
                     </TableRow>

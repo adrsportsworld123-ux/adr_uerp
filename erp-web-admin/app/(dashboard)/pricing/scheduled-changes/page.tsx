@@ -115,7 +115,7 @@ export default function ScheduledChangesPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <h1 className="text-2xl font-semibold">Scheduled Price Changes</h1>
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted-foreground">
         Set a price to change at a future date and time — applied automatically within a minute of that time, with the same
         below-cost check as an immediate edit. A change that would sell below cost on the day is marked <em>failed</em> with the
         reason, never skipped silently.
@@ -212,8 +212,8 @@ export default function ScheduledChangesPage() {
               {changes.map((c) => (
                 <TableRow key={c.scheduled_change_id}>
                   <TableCell>
-                    {c.product_name} <span className="text-xs text-zinc-500">({c.sku})</span>
-                    {c.reason && <div className="text-xs text-zinc-500">{c.reason}</div>}
+                    {c.product_name} <span className="text-xs text-muted-foreground">({c.sku})</span>
+                    {c.reason && <div className="text-xs text-muted-foreground">{c.reason}</div>}
                   </TableCell>
                   <TableCell className="text-sm">
                     {c.selling_price && <div>Selling ₹{c.selling_price}</div>}
@@ -223,7 +223,7 @@ export default function ScheduledChangesPage() {
                   <TableCell className="text-sm">{fmtWhen(c.effective_at)}</TableCell>
                   <TableCell>
                     <Badge variant={STATUS_VARIANT[c.status] ?? "outline"}>{c.status}</Badge>
-                    {c.failure_reason && <div className="text-xs text-red-600 mt-1">{c.failure_reason}</div>}
+                    {c.failure_reason && <div className="text-xs text-destructive mt-1">{c.failure_reason}</div>}
                   </TableCell>
                   <TableCell>
                     {c.status === "pending" && (
@@ -236,7 +236,7 @@ export default function ScheduledChangesPage() {
               ))}
               {changes.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-sm text-zinc-500 py-6">
+                  <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-6">
                     No scheduled changes
                   </TableCell>
                 </TableRow>

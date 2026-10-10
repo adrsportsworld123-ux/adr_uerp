@@ -31,8 +31,12 @@ import (
 
 var (
 	errInvalidReference = errors.New("referenced record not found")
-	errVariantHasStock  = errors.New("variant has stock")
-	errPricesElsewhere  = errors.New("prices are changed via PATCH /pricing/variants/{id}")
+	// errInactiveReference: the category/brand/tax slab exists but was
+	// deactivated (migrations/036) — fine for a product that already
+	// points at it, refused for a new link.
+	errInactiveReference = errors.New("referenced record is inactive")
+	errVariantHasStock   = errors.New("variant has stock")
+	errPricesElsewhere   = errors.New("prices are changed via PATCH /pricing/variants/{id}")
 )
 
 // SellablePredicate is the one definition of "this variant can be sold":
@@ -167,6 +171,30 @@ func refExists(ctx context.Context, tx pgx.Tx, table, id string) error {
 	return nil
 }
 
+// lifecycleTables are the link targets with an active/inactive status
+// (migrations/036). Collections have none yet.
+var lifecycleTables = map[string]bool{"categories": true, "brands": true, "tax_slabs": true}
+
+// refUsable is refExists plus "and it's active" — the check for a link
+// being newly set. An existing link to a since-deactivated record stays
+// valid, so editing an old product never forces a re-categorization.
+func refUsable(ctx context.Context, tx pgx.Tx, table, id string) error {
+	if err := refExists(ctx, tx, table, id); err != nil {
+		return err
+	}
+	if !lifecycleTables[table] {
+		return nil
+	}
+	var status string
+	if err := tx.QueryRow(ctx, `SELECT status FROM `+table+` WHERE id::text = $1`, id).Scan(&status); err != nil {
+		return err
+	}
+	if status != "active" {
+		return fmt.Errorf("%w: %s %s", errInactiveReference, strings.TrimSuffix(table, "s"), id)
+	}
+	return nil
+}
+
 // linkChanged reports whether a PATCH field for an optional link changes
 // it: nil = leave it, "" = clear it, an id = set it.
 func linkChanged(req *string, current *string) bool {
@@ -225,14 +253,24 @@ func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 		}
 
 		links := []struct {
-			req   *string
-			table string
-		}{{req.CategoryID, "categories"}, {req.BrandID, "brands"}, {req.TaxSlabID, "tax_slabs"}, {req.CollectionID, "collections"}}
+			req, current *string
+			table        string
+		}{
+			{req.CategoryID, before.CategoryID, "categories"},
+			{req.BrandID, before.BrandID, "brands"},
+			{req.TaxSlabID, before.TaxSlabID, "tax_slabs"},
+			{req.CollectionID, before.CollectionID, "collections"},
+		}
 		for _, l := range links {
-			if l.req != nil && *l.req != "" {
-				if err := refExists(ctx, tx, l.table, *l.req); err != nil {
-					return err
-				}
+			if l.req == nil || *l.req == "" {
+				continue
+			}
+			check := refExists
+			if linkChanged(l.req, l.current) {
+				check = refUsable
+			}
+			if err := check(ctx, tx, l.table, *l.req); err != nil {
+				return err
 			}
 		}
 
@@ -484,6 +522,8 @@ func respondProductEditError(w http.ResponseWriter, err error, internalMsg strin
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "product or variant not found")
 	case errors.Is(err, errInvalidReference):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REFERENCE", err.Error())
+	case errors.Is(err, errInactiveReference):
+		httpx.Error(w, http.StatusConflict, "INACTIVE_REFERENCE", err.Error()+" — reactivate it or pick another")
 	case errors.Is(err, errAttributeRequired):
 		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_REQUIRED", err.Error())
 	case errors.Is(err, errAttributeInvalidValue):

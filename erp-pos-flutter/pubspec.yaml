@@ -23,3 +23,23 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Bundled, not fetched at runtime (no google_fonts): an offline terminal
+  # must still render the design system's face. SIL OFL 1.1, see
+  # assets/fonts/Geist-OFL.txt.
+  fonts:
+    - family: Geist
+      fonts:
+        - asset: assets/fonts/Geist-Regular.ttf
+        - asset: assets/fonts/Geist-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Geist-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Geist-Bold.ttf
+          weight: 700
+    - family: GeistMono
+      fonts:
+        - asset: assets/fonts/GeistMono-Regular.ttf
+        - asset: assets/fonts/GeistMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/GeistMono-SemiBold.ttf
+          weight: 600
