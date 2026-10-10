@@ -40,9 +40,9 @@ test("UACL: create a custom role, assign permissions, grant/revoke on a user, an
   });
 
   await test.step("assign the role to Ravi alongside his existing role", async () => {
-    await page.getByRole("combobox").nth(0).click();
+    await page.getByRole("combobox", { name: "Employee" }).click();
     await page.getByRole("option", { name: "Ravi Kumar" }).click();
-    await page.getByRole("combobox").nth(1).click();
+    await page.getByRole("combobox", { name: "Role" }).click();
     await page.getByRole("option", { name: roleName, exact: true }).click();
     await page.getByRole("button", { name: "Assign" }).click();
 

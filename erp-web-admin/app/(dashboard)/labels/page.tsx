@@ -118,7 +118,7 @@ export default function LabelStudioPage() {
   const spec: Spec = useMemo(() => (preset === "custom" ? { ...custom, dpi } : { ...PRESETS[preset].spec, dpi }), [preset, custom, dpi]);
 
   useEffect(() => {
-    api.get<{ branches: Branch[] }>("/api/v1/branches?status=active").then((d) => setBranches(d.branches)).catch(() => {});
+    api.get<{ branches: Branch[] }>("/api/v1/branches?status=active&scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
     api.get<{ grns: GRNSummary[] }>("/api/v1/purchase/grn?status=completed").then((d) => setGrns(d.grns.slice(0, 50))).catch(() => {});
   }, []);
 

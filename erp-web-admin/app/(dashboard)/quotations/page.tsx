@@ -54,7 +54,7 @@ export default function QuotationsPage() {
   }, [statusFilter]);
 
   useEffect(() => {
-    api.get<{ branches: Branch[] }>("/api/v1/branches").then((d) => setBranches(d.branches)).catch(() => {});
+    api.get<{ branches: Branch[] }>("/api/v1/branches?scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
     api.get<{ customers: Customer[] }>("/api/v1/customers?limit=200").then((d) => setCustomers(d.customers)).catch(() => {});
     api.get<{ products: Product[] }>("/api/v1/products?limit=200").then((d) => setProducts(d.products)).catch(() => {});
     fetchQuotations().then((d) => setQuotations(d.quotations)).catch(() => {});

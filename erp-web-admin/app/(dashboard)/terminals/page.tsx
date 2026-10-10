@@ -119,7 +119,7 @@ export default function TerminalsPage() {
   useEffect(() => {
     load();
     api
-      .get<{ branches: Branch[] }>("/api/v1/branches")
+      .get<{ branches: Branch[] }>("/api/v1/branches?scope=mine")
       .then((d) => setBranches(d.branches))
       .catch(() => {});
   }, [load]);

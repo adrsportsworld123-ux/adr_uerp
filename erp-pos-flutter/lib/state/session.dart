@@ -1022,6 +1022,10 @@ class AppSession extends ChangeNotifier {
 
   bool can(String code) => permissions == null || permissions!.contains(code);
 
+  /// The merchant's manual-discount tiers (Phase 15 approval policy); the
+  /// server's defaults until loaded. Only a hint: the server enforces them.
+  List<DiscountTier> discountTiers = DiscountTier.defaults;
+
   Future<void> refreshPermissions() async {
     if (offlineMode) return;
     try {
@@ -1029,6 +1033,12 @@ class AppSession extends ChangeNotifier {
       notifyListeners();
     } catch (_) {
       // Unknown: actions stay enabled and the server's 403 is the answer.
+    }
+    try {
+      discountTiers = await api.discountTiers();
+      notifyListeners();
+    } catch (_) {
+      // Keep the defaults; the server still decides.
     }
   }
 
@@ -1039,8 +1049,17 @@ class AppSession extends ChangeNotifier {
   Future<void> updateSellingPrice(String variantId, double price, String reason, {bool override = false}) =>
       _live(() => api.updateSellingPrice(variantId: variantId, sellingPrice: price, reason: reason, override: override));
 
-  Future<void> adjustStock(String variantId, double delta, String reason, {String? batchNo, String? expiryDate}) => _live(() =>
-      api.adjustStock(variantId: variantId, branchId: branchId, delta: delta, reason: reason, batchNo: batchNo, expiryDate: expiryDate));
+  Future<void> adjustStock(String variantId, double delta, String reason,
+          {String? batchNo, String? expiryDate, String? approverCode, String? approverPin}) =>
+      _live(() => api.adjustStock(
+          variantId: variantId,
+          branchId: branchId,
+          delta: delta,
+          reason: reason,
+          batchNo: batchNo,
+          expiryDate: expiryDate,
+          approverCode: approverCode,
+          approverPin: approverPin));
 
   /// Fetches the label's ESC/POS bytes and sends them to the configured
   /// network printer (the same one receipts use).

@@ -362,6 +362,8 @@ function ReturnDialog({ sale, onClose, onDone }: { sale: SaleDetail; onClose: ()
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the server asks for an approver this dialog's estimate didn't expect.
+  const [approvalDemanded, setApprovalDemanded] = useState(false);
   const [key] = useState(newKey); // one key per dialog: a retry never refunds twice
 
   useEffect(() => {
@@ -377,7 +379,10 @@ function ReturnDialog({ sale, onClose, onDone }: { sale: SaleDetail; onClose: ()
     .filter((x) => x.q > 0);
   const tooMany = chosen.some((x) => x.q > Number(x.l.returnable_quantity));
   const estimate = chosen.reduce((s, x) => s + x.q * Number(x.l.unit_refund), 0);
-  const needsApproval = info?.requires_approval ?? true;
+  // Approval (Sales Policy) applies above the Approval Policies' refund
+  // threshold only; null means every refund.
+  const above = info?.approval_above ?? null;
+  const needsApproval = approvalDemanded || ((info?.requires_approval ?? true) && (above == null || estimate > above));
   const ready = chosen.length > 0 && !tooMany && reason.trim() !== "" && (!needsApproval || (code.trim() !== "" && pin.length >= 4));
 
   async function submit() {
@@ -398,6 +403,7 @@ function ReturnDialog({ sale, onClose, onDone }: { sale: SaleDetail; onClose: ()
       onClose();
       onDone();
     } catch (e) {
+      if (e instanceof ApiError && e.code === "RETURN_NOT_APPROVED") setApprovalDemanded(true);
       setError(e instanceof ApiError ? e.message : "Could not record the return");
       setBusy(false);
     }

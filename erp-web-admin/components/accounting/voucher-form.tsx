@@ -46,7 +46,7 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
 
   useEffect(() => {
     api.get<{ accounts: Account[] }>("/api/v1/accounting/accounts").then((d) => setAccounts(d.accounts)).catch(() => {});
-    api.get<{ branches: Branch[] }>("/api/v1/branches?status=active").then((d) => setBranches(d.branches)).catch(() => {});
+    api.get<{ branches: Branch[] }>("/api/v1/branches?status=active&scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
     api.get<AccountingSettings>("/api/v1/accounting/settings").then(setSettings).catch(() => {});
   }, []);
 

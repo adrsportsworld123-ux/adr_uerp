@@ -65,6 +65,19 @@ export default function RBACPage() {
   }, []);
   useEffect(load, [load]);
 
+  // Phase 15: which branches' data the role's holders see. Takes effect on
+  // their next request; the database enforces it for every list and report.
+  async function setDataScope(role: RBACRole, scope: RBACRole["data_scope"]) {
+    try {
+      const updated = await api.patch<RBACRole>(`/api/v1/rbac/roles/${role.id}`, { data_scope: scope });
+      setRoles((rs) => rs.map((r) => (r.id === updated.id ? updated : r)));
+      setSelectedRole((sel) => (sel && sel.id === updated.id ? { ...sel, data_scope: updated.data_scope } : sel));
+      toast.success(`${role.name}: ${scope === "all" ? "all branches" : "own branch only"}`);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not change data access");
+    }
+  }
+
   async function createRole() {
     try {
       await api.post("/api/v1/rbac/roles", { name: newRoleName });
@@ -203,6 +216,7 @@ export default function RBACPage() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Permissions</TableHead>
+                <TableHead>Data access</TableHead>
                 <TableHead>Users</TableHead>
                 <TableHead></TableHead>
               </TableRow>
@@ -216,6 +230,7 @@ export default function RBACPage() {
                 >
                   <TableCell>{role.name}</TableCell>
                   <TableCell className="text-xs">{role.permission_codes.length} permission(s)</TableCell>
+                  <TableCell className="text-xs">{role.data_scope === "all" ? "All branches" : "Own branch only"}</TableCell>
                   <TableCell>{role.user_count}</TableCell>
                   <TableCell>
                     <Button
@@ -248,6 +263,23 @@ export default function RBACPage() {
             <CardTitle className="text-base">Permissions for &quot;{selectedRole.name}&quot;</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <label htmlFor="role-data-scope" className="font-medium">
+                Data access
+              </label>
+              <select
+                id="role-data-scope"
+                value={selectedRole.data_scope}
+                onChange={(e) => setDataScope(selectedRole, e.target.value as RBACRole["data_scope"])}
+                className="h-8 rounded-md border bg-card px-1.5 text-sm"
+              >
+                <option value="all">All branches</option>
+                <option value="branch">Own branch only</option>
+              </select>
+              <span className="text-muted-foreground">
+                Own branch: sales, stock, cash and books of their home branch (and any extra ones on Data Access) only. Saved at once.
+              </span>
+            </div>
             <div className="flex max-h-[28rem] flex-col gap-4 overflow-auto pr-1">
               {groupPermissions(permissions).map(([mod, perms]) => {
                 const ids = perms.map((p) => p.id);
@@ -304,7 +336,7 @@ export default function RBACPage() {
             <div className="flex flex-col gap-2 w-56">
               <Label>Employee</Label>
               <Select value={assignEmployeeId} onValueChange={(v) => setAssignEmployeeId(v ?? "")} items={Object.fromEntries(employees.map((e) => [e.id, e.name]))}>
-                <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
+                <SelectTrigger aria-label="Employee"><SelectValue placeholder="Select employee" /></SelectTrigger>
                 <SelectContent>
                   {employees.map((e) => (
                     <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
@@ -315,7 +347,7 @@ export default function RBACPage() {
             <div className="flex flex-col gap-2 w-44">
               <Label>Role</Label>
               <Select value={assignRoleId} onValueChange={(v) => setAssignRoleId(v ?? "")} items={Object.fromEntries(roles.map((r) => [r.id, r.name]))}>
-                <SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger>
+                <SelectTrigger aria-label="Role"><SelectValue placeholder="Select role" /></SelectTrigger>
                 <SelectContent>
                   {roles.map((r) => (
                     <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>

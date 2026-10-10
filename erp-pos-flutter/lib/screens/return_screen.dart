@@ -38,6 +38,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
   final _approverCode = TextEditingController();
   String _pin = '';
   bool _submitting = false;
+  // Set when the server asks for an approver the estimate didn't expect.
+  bool _approvalDemanded = false;
   String? _error;
   // One key for this screen: a retry after a lost response replays the
   // same return instead of refunding twice.
@@ -87,7 +89,17 @@ class _ReturnScreenState extends State<ReturnScreen> {
       !_submitting &&
       _anySelected &&
       _reasonText.isNotEmpty &&
-      (!(_order?.requiresApproval ?? false) || (_approverCode.text.trim().isNotEmpty && _pin.length >= 4));
+      (!_needsApproval || (_approverCode.text.trim().isNotEmpty && _pin.length >= 4));
+
+  /// Approval (Sales Policy) applies only above the approval policy's refund
+  /// threshold. The server decides on the exact refund and says so if it
+  /// disagrees with this estimate.
+  bool get _needsApproval {
+    final o = _order;
+    if (o == null) return false;
+    if (_approvalDemanded) return true;
+    return o.requiresApproval && (o.approvalAbove == null || _estimate > o.approvalAbove!);
+  }
 
   void _setQty(ReturnableLine l, double q) {
     final max = _max(l);
@@ -133,6 +145,11 @@ class _ReturnScreenState extends State<ReturnScreen> {
       if (!mounted) return;
       setState(() {
         _submitting = false;
+        if (e.code == 'RETURN_NOT_APPROVED' && !_needsApproval) {
+          _approvalDemanded = true;
+          _error = 'This refund needs a manager\'s approval.';
+          return;
+        }
         _error = switch (e.code) {
           'RETURN_NOT_APPROVED' => 'Approval failed. Check the manager\'s employee code and PIN.',
           'RETURN_WINDOW_CLOSED' => 'This sale is past the return window.',
@@ -295,7 +312,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
           value: _restock,
           onChanged: (v) => setState(() => _restock = v),
         ),
-        if (o.requiresApproval) ...[
+        if (_needsApproval) ...[
           const Divider(height: 32),
           Text('Manager approval', style: theme.textTheme.titleMedium),
           const SizedBox(height: 4),

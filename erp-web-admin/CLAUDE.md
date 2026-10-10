@@ -57,4 +57,6 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
   - **Seed passwords:**
     - Ravi, Arjun and the E2E users use `Passw0rd!`, but Meera's password is `9999`. Restoring hers to anything else locks her account after the next run.
     - `forgot-password.spec.ts` resets Ravi's password as part of what it tests.
+  - **Super admin:** the a11y sweep logs in as `admin@adrsw.com` / `Idontsay3#`, so restore that password too after a seed reset.
+  - **Branch scope (Phase 15):** Branch Manager is own-branch by default, so Meera sees only MG Road. Specs that change a role's data scope, a user's extra branches or the approval policy restore them in `finally`. Branch pickers fetch `/api/v1/branches?scope=mine`.
   - **Specs create their own data:** a spec that needs a product, slab or till creates it through the API instead of hard-coding an id or barcode, because generated barcodes are reused after other specs reset data.

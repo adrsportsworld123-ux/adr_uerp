@@ -962,6 +962,8 @@ export interface RBACRole {
   is_system_default: boolean;
   permission_codes: string[];
   user_count: number;
+  // Phase 15: all branches' data, or only the holder's own branch(es).
+  data_scope: "all" | "branch";
 }
 
 // Mirrors internal/ai (Phase 6 v1 — reorder suggestions & recommendations).
@@ -1281,6 +1283,8 @@ export interface ReturnableOrder {
   returnable: boolean;
   window_open: boolean;
   requires_approval: boolean;
+  // Phase 15: refunds at or below this need no approver; null = every refund.
+  approval_above: number | null;
   credit_outstanding: string;
   lines: { line_id: string; product_name: string; sku: string; sold_quantity: string; returned_quantity: string; returnable_quantity: string; unit_refund: string }[];
 }

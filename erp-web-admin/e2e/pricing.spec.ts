@@ -36,7 +36,7 @@ test("calculator, single-variant negative-margin override, and bulk update", asy
     await page.getByText(/override anyway/i).click();
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("Price updated")).toBeVisible();
-    await expect(page.getByText("₹1.00")).toBeVisible();
+    await expect(page.getByText("₹1.00", { exact: true })).toBeVisible();
   });
 
   await test.step("bulk update: preview then apply a +5% change with override", async () => {

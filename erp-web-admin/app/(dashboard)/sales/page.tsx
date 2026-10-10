@@ -78,7 +78,7 @@ function SalesView() {
   const [branches, setBranches] = useState<Branch[]>([]);
 
   useEffect(() => {
-    api.get<{ branches: Branch[] }>("/api/v1/branches").then((d) => setBranches(d.branches)).catch(() => {});
+    api.get<{ branches: Branch[] }>("/api/v1/branches?scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
   }, []);
   // The summary covers the same filters as the list (not the page).
   const f = state.filters;

@@ -89,7 +89,7 @@ export default function SalesSettingsPage() {
                 <span>
                   <span className="font-medium">Manager approval</span> (recommended)
                   <span className="block text-muted-foreground">
-                    A Branch Manager or Merchant Admin enters their employee code and PIN on the till for every return.
+                    A Branch Manager or Merchant Admin enters their employee code and PIN on the till. Who approves, and above what refund amount, is set under Approval Policies.
                   </span>
                 </span>
               </label>

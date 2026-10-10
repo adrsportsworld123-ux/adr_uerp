@@ -637,6 +637,34 @@ class ReturnableLine {
       );
 }
 
+/// One manual-discount tier of the merchant's approval policy: a discount
+/// up to [upTo] percent needs [approver] ('none', 'branch_manager' or
+/// 'merchant_admin'). Anything above the last tier is refused.
+class DiscountTier {
+  final double upTo;
+  final String approver;
+
+  const DiscountTier(this.upTo, this.approver);
+
+  /// What the server does when the merchant never set a policy.
+  static const defaults = [
+    DiscountTier(5, 'none'),
+    DiscountTier(15, 'branch_manager'),
+    DiscountTier(25, 'merchant_admin'),
+  ];
+
+  factory DiscountTier.fromJson(Map<String, dynamic> json) =>
+      DiscountTier((json['up_to'] as num).toDouble(), json['approver'] as String? ?? 'merchant_admin');
+
+  /// The tier covering [percent], or null when it's above every tier.
+  static DiscountTier? forPercent(List<DiscountTier> tiers, double percent) {
+    for (final t in tiers) {
+      if (percent <= t.upTo + 1e-9) return t;
+    }
+    return null;
+  }
+}
+
 class ReturnableOrder {
   final String orderId;
   final String orderNumber;
@@ -644,6 +672,9 @@ class ReturnableOrder {
   final bool returnable;
   final bool windowOpen;
   final bool requiresApproval;
+  // Phase 15 approval policy: refunds at or below this need no approver;
+  // null means every refund does (when [requiresApproval]).
+  final double? approvalAbove;
   final String creditOutstanding;
   final List<ReturnableLine> lines;
 
@@ -654,6 +685,7 @@ class ReturnableOrder {
     required this.returnable,
     required this.windowOpen,
     required this.requiresApproval,
+    this.approvalAbove,
     required this.creditOutstanding,
     required this.lines,
   });
@@ -665,6 +697,7 @@ class ReturnableOrder {
         returnable: json['returnable'] as bool? ?? false,
         windowOpen: json['window_open'] as bool? ?? true,
         requiresApproval: json['requires_approval'] as bool? ?? true,
+        approvalAbove: (json['approval_above'] as num?)?.toDouble(),
         creditOutstanding: json['credit_outstanding'] as String? ?? '0.00',
         lines: (json['lines'] as List<dynamic>? ?? const [])
             .map((e) => ReturnableLine.fromJson(e as Map<String, dynamic>))
@@ -1541,6 +1574,16 @@ class ApiClient {
     return (body['permissions'] as List<dynamic>? ?? const []).cast<String>().toSet();
   }
 
+  /// GET /settings/approval-policies — the merchant's discount tiers
+  /// (Phase 15), so the discount dialog asks for the right approver.
+  Future<List<DiscountTier>> discountTiers() async {
+    final body = _decode(await _http.get(Uri.parse('$baseUrl/api/v1/settings/approval-policies'), headers: _authHeaders));
+    final tiers = (body['discount_tiers'] as List<dynamic>? ?? const [])
+        .map((e) => DiscountTier.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return tiers.isEmpty ? DiscountTier.defaults : tiers;
+  }
+
   Future<ProductDetailData> productDetail(String productId) async {
     final resp = await _http.get(Uri.parse('$baseUrl/api/v1/products/$productId'), headers: _authHeaders);
     return ProductDetailData.fromJson(_decode(resp));
@@ -1571,6 +1614,8 @@ class ApiClient {
     required String reason,
     String? batchNo,
     String? expiryDate,
+    String? approverCode,
+    String? approverPin,
   }) async {
     final resp = await _http.post(
       Uri.parse('$baseUrl/api/v1/inventory/adjustments'),
@@ -1582,6 +1627,8 @@ class ApiClient {
         'reason': reason,
         if (batchNo != null && batchNo.isNotEmpty) 'batch_no': batchNo,
         if (expiryDate != null && expiryDate.isNotEmpty) 'expiry_date': expiryDate,
+        if (approverCode != null && approverCode.isNotEmpty) 'approver_code': approverCode,
+        if (approverPin != null && approverPin.isNotEmpty) 'approver_pin': approverPin,
       }),
     );
     _decode(resp);

@@ -141,9 +141,9 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
 
 
 // ---------------------------------------------------------------------
-// Manual discount — mirrors internal/sales/discounts.go's tiers (0-5% no
-// approval, 5-15% Branch Manager PIN, 15-25% Merchant Admin PIN) as a UX
-// nicety only; the server enforces the real boundaries. Phase 12: the
+// Manual discount — shows the merchant's discount tiers (Phase 15 approval
+// policy, AppSession.discountTiers; 0-5% none, 5-15% Branch Manager, 15-25%
+// Merchant Admin by default) as a UX nicety only; the server enforces them. Phase 12: the
 // approver is named by EMPLOYEE CODE (what staff know) and enters their
 // PIN on the shared ApprovalPinPad, instead of a raw user id.
 // ---------------------------------------------------------------------
@@ -171,12 +171,18 @@ class _DiscountDialogState extends State<_DiscountDialog> {
   String _pin = '';
 
   double get _percent => double.tryParse(_percentController.text) ?? 0;
-  bool get _needsApproval => _percent > 5;
-  String get _tierLabel => _percent > 15 ? 'a Merchant Admin' : 'a Branch Manager or Merchant Admin';
+  List<DiscountTier> get _tiers => context.read<AppSession>().discountTiers;
+  double get _max => _tiers.last.upTo;
+  double get _free => _tiers.where((t) => t.approver == 'none').fold(0.0, (m, t) => t.upTo > m ? t.upTo : m);
+  DiscountTier? get _tier => DiscountTier.forPercent(_tiers, _percent);
+  bool get _needsApproval => _tier != null && _tier!.approver != 'none';
+  String get _tierLabel => _tier?.approver == 'merchant_admin' ? 'a Merchant Admin' : 'a Branch Manager or Merchant Admin';
+
+  String _pct(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
 
   bool get _canApply =>
       _percent > 0 &&
-      _percent <= 25 &&
+      _percent <= _max &&
       _reasonController.text.trim().isNotEmpty &&
       (!_needsApproval || (_approverController.text.trim().isNotEmpty && _pin.length >= 4));
 
@@ -206,8 +212,10 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
                   labelText: 'Discount %',
-                  helperText: _percent > 25 ? 'The maximum is 25%' : 'Up to 5% needs no approval',
-                  helperStyle: _percent > 25 ? TextStyle(color: theme.colorScheme.error) : null,
+                  helperText: _percent > _max
+                      ? 'The maximum is ${_pct(_max)}%'
+                      : (_free > 0 ? 'Up to ${_pct(_free)}% needs no approval' : 'Every discount needs approval'),
+                  helperStyle: _percent > _max ? TextStyle(color: theme.colorScheme.error) : null,
                 ),
                 onChanged: (_) => setState(() {}),
               ),
@@ -228,7 +236,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                     children: [
                       Icon(Icons.verified_user_outlined, color: theme.pos.plum, size: 18),
                       const SizedBox(width: 8),
-                      Expanded(child: Text('Above 5% needs $_tierLabel to approve.', style: TextStyle(color: theme.pos.plum))),
+                      Expanded(child: Text('This discount needs $_tierLabel to approve.', style: TextStyle(color: theme.pos.plum))),
                     ],
                   ),
                 ),

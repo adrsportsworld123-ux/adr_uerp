@@ -186,6 +186,10 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `JV_APPROVAL_OFF` | 409 | `POST /accounting/vouchers` (`action: submit`), `.../submit` | Approval is off: post directly (§3.41) |
 | `VOUCHER_STATE` | 409 | voucher edit/delete/actions | The voucher's status doesn't allow it, e.g. editing a posted voucher or reversing twice (§3.41) |
 | `SELF_APPROVAL` | 403 | `POST /accounting/vouchers/{id}/approve` | The maker can't approve their own voucher (§3.41) |
+| `BRANCH_FORBIDDEN` | 403 | any protected route given `branch_id`, `from_branch_id` or `to_branch_id` (query or JSON body) | The branch is outside the caller's data scope (§3.42) |
+| `DISCOUNT_ABOVE_POLICY` | 400 | `POST /sales/orders/{id}/discounts` | Above the last tier of the merchant's discount policy (§3.43) |
+| `ADJUSTMENT_NOT_APPROVED` | 403 | `POST /inventory/adjustments` | Worth more than the policy's stock threshold (quantity × cost) without a valid approver code + PIN (§3.43) |
+| `BELOW_COST_NOT_ALLOWED` | 403 | `PATCH /pricing/variants/{id}` (`override: true`) | The policy limits below-cost prices to a higher role (§3.43) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -1344,6 +1348,126 @@ The returns (27), shifts (37), back-office sales (23) and label (15) suites were
 - approval on: the cashier can only submit, the admin approves and posts, and can't approve their own
 - the journal search and CSV export
 - the period lock in the voucher form
+
+### 3.42 Phase 15: branch data scope (`internal/authn/scope.go`, `internal/db/db.go`, `migrations/044_branch_data_scope.sql`, 2026-10-10)
+
+**What a user sees.** Each role has a `data_scope`: `all` (every branch) or `branch` (own branch only). Branch Manager defaults to `branch`; every other role, including custom ones, to `all`. A user sees every branch if any of their roles is `all`. Otherwise they see:
+- their home branch (`users.branch_id`)
+- any extra branches in `user_branches`
+- on a PIN session, the terminal's branch
+
+This closes Phase 2's "only PIN-login carries a branch" simplification for password sessions.
+
+**The database does the filtering.** `BranchScopeMiddleware` runs after `RequireAuth` on every protected route. It resolves the caller's scope, caches it for 30 seconds, and puts it on the request context. `WithTenant` then sets `app.branch_scope` for the transaction: unset or `all` means unrestricted, `none` means a scoped user with no branch, and otherwise it's a comma list of ids. A RESTRICTIVE `branch_scope` policy (USING and WITH CHECK) calls `app_branch_visible(branch_id)` on every branch-owned table:
+- attendance
+- cash_reconciliations
+- goods_receipt_notes
+- inventory_reconciliations
+- journal_entries and journal_vouchers
+- pos_cash_movements and pos_shifts
+- purchase_bills and purchase_returns
+- quotations
+- sales_orders and sales_returns
+- serial_numbers
+- stock_batches, stock_levels, stock_movements and stock_reservations
+- stock_review_items
+
+Child rows (lines, payments) follow their parent through the joins that already read them. Some tables have their own rule:
+- `branch_transfers` is visible when either end is.
+- `notifications` is visible when the row it refers to is visible.
+- `pos_terminals` has no RLS, so its handler filters with `app_branch_visible`.
+
+As a result, every list, report, export and dashboard is scoped without a per-query change, and a write into another branch fails the WITH CHECK.
+
+**A clear refusal up front.** A request that names a branch outside the scope (`branch_id`, `from_branch_id` or `to_branch_id`, in the query or a JSON body) gets `403 BRANCH_FORBIDDEN` before any handler runs. A transfer is allowed if either end is in scope.
+
+**Merchant-wide by design:**
+- master data: products, customers, suppliers, branches, users and roles
+- coupons and price rules
+- HR shift definitions
+- the audit log, which stays behind `audit.view`; a Branch Manager doesn't hold that permission
+
+`GET /branches?scope=mine` lists only visible branches, and the admin's branch pickers use it. `db.Unrestricted` is the one way around the policy, for system bookkeeping only: a new variant gets a zero-stock row in every branch, even when a scoped user creates it.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /me/permissions` | Now also `data_scope: {all, branches: [{branch_id, name}]}` |
+| `PATCH /rbac/roles/{id}` `{name?, data_scope?}` | `rbac.manage`; `data_scope` is `all` or `branch` |
+| `GET /rbac/data-access` | `rbac.manage`: each active user with roles, home branch, extra branches, `all_branches` |
+| `PUT /rbac/users/{id}/branches` `{branch_ids}` | `rbac.manage`: replaces the user's extra branches; audited |
+
+Role and branch changes clear the scope cache, so they apply on the next request.
+
+**Verified live** (`p15_scope.py`, 27 checks; re-run on a freshly seeded database). The setup puts tagged data in Koramangala: a sale, a return, stock, a batch, a GRN, a bill, a quotation, a transfer, a cash count, a voucher and a notification. Meera, a Branch Manager at MG Road, then calls every GET route parsed from `router.go` (74 routes) four ways: plain, with Koramangala's `branch_id`, with a date range, and as CSV.
+- No response contains a Koramangala tag.
+- Every route given Koramangala's id returns 403.
+- Writes into Koramangala are refused.
+- Giving her Koramangala as an extra branch makes it visible at once, and removing it hides it again.
+- A role switched to `all` sees everything.
+- Routes outside her permissions (audit log, payroll, RBAC, anomalies, statutory configuration) stay 403.
+
+**Found on the way:**
+- `/notifications` leaked a Koramangala sale's receipt notification; it now has its own policy.
+- A scoped Branch Manager couldn't create a product, because seeding zero stock in other branches failed the WITH CHECK; that seeding now uses `db.Unrestricted`.
+
+### 3.43 Phase 15: approval policies (`internal/approvals`, `migrations/045_approval_policies.sql`, 2026-10-10)
+
+**One policy per merchant**, stored as JSON in `approval_policies`. With no row, the defaults apply, and they are exactly the rules that were hardcoded before:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `discount_tiers` `[{up_to, approver}]` | 5 none, 15 branch_manager, 25 merchant_admin | 1–6 rising tiers, at most 100%; above the last is `400 DISCOUNT_ABOVE_POLICY` |
+| `refund_approval_above`, `refund_approver` | null, branch_manager | With the Sales Policy's returns approval on: only refunds above the amount need an approver (null = every refund) |
+| `below_cost_price` | any | Who may save a price below cost: `any` (whoever holds `pricing.manage`), `branch_manager` or `merchant_admin` |
+| `stock_adjust_approval_above`, `stock_adjust_approver` | null, branch_manager | Adjustments worth more than this (quantity changed × cost, either direction) need an approver's code + PIN; null = never |
+| `jv_approval_above` | null | With voucher approval on: vouchers totalling at most this post directly; null = every voucher needs approval |
+
+Levels: `branch_manager` is met by a Branch Manager or a Merchant Admin; `merchant_admin` only by a Merchant Admin.
+
+**One check for every inline approval.** `approvals.Approve(code or user id, PIN, level, branch)` is used by:
+- discounts
+- refunds
+- open prices
+- shift cash movements and closes
+- payment corrections
+- stock adjustments
+
+It checks that the user is active, the PIN matches, a role meets the level, and the action's branch is inside the approver's own data scope (§3.42). So a Branch Manager of one store can't approve in another, while a merchant-wide admin can approve anywhere. Every failure gives the same answer, so a code can't be probed.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /settings/approval-policies` | Any signed-in user (the POS reads the discount tiers) |
+| `PUT /settings/approval-policies` | `approvals.manage` (Merchant Admin): the whole policy, validated (`400 INVALID_REQUEST`), audited with before and after |
+
+`GET /sales/orders/{id}/returnable` now also returns `approval_above`. `POST /inventory/adjustments` accepts `approver_code` and `approver_pin`.
+
+**Clients:**
+- **Admin:**
+  - The Approval Policies page (Access & Audit) edits the tiers, thresholds and levels, and validates them before saving.
+  - The return dialog asks for a manager only above the threshold.
+  - The Inventory adjust form shows approver fields once the server asks for them.
+- **POS:**
+  - The discount dialog loads the tiers with the permissions, so it names the right approver and the right maximum.
+  - The return screen asks only above the threshold.
+  - The product lookup's adjust dialog asks for an approver on `ADJUSTMENT_NOT_APPROVED`.
+  - When the server wants an approver that a client's estimate didn't expect, the fields appear.
+
+**Verified live** (`p15_approvals.py`, 35 checks):
+- **Policy API:** defaults; POS User and Branch Manager can't save it (403); four invalid policies give 400; a save is audited.
+- **Discounts:**
+  - With tiers 10 none / 20 BM / 30 MA: 8% needs no approver, 18% needs one and the Branch Manager approves it.
+  - 25% refuses the Branch Manager and accepts the Merchant Admin.
+  - 35% gives `DISCOUNT_ABOVE_POLICY`.
+  - On a Koramangala sale, the MG Road manager is refused and the admin is accepted.
+- **Refunds:**
+  - Below the threshold, no approver is needed; above it, `RETURN_NOT_APPROVED` until an approver signs.
+  - The MG Road manager is refused in Koramangala.
+  - With the approver raised to merchant admin, the manager is refused and the admin is accepted.
+- **Stock adjustments:** worth ₹1,200 against a ₹1,000 threshold, the adjustment is refused without an approver and with a POS User's PIN, and accepted with an admin's; under the threshold it goes through without one.
+- **Below-cost prices:** with the policy at merchant admin, the Branch Manager is refused (`BELOW_COST_NOT_ALLOWED`) and the admin is accepted.
+- **Journal vouchers:** with approval on and a ₹500 threshold, a ₹100 voucher posts directly; a ₹1,000 one gives `JV_APPROVAL_REQUIRED` and defaults to submitted.
+
+All earlier suites pass again: returns, shifts, back-office sales, JV, labels, open price, Stock Review and lookup. In the admin, `e2e/phase15-data-access.spec.ts` and `e2e/phase15-approval-policies.spec.ts` cover both pages and check each change against what the server then allows. `test/approval_policy_test.dart` covers the POS tier lookup and threshold parsing.
 
 ---
 

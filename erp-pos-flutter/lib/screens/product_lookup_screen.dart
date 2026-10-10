@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../api/api_client.dart';
 import '../printing/printer_service.dart';
 import '../state/session.dart';
+import '../ui/approval_pin_pad.dart';
 import '../ui/format.dart';
 
 /// Product lookup at the till (Phase 13): price, stock here and in the
@@ -290,10 +291,16 @@ class _AdjustDialogState extends State<_AdjustDialog> {
   String? _batchChoice; // an existing batch for a removal
   bool _busy = false;
   String? _error;
+  // Phase 15: an adjustment worth more than the approval policy's stock
+  // threshold needs a manager. The cost isn't known here, so the fields
+  // appear once the server answers ADJUSTMENT_NOT_APPROVED.
+  bool _needsApprover = false;
+  final _approverCode = TextEditingController();
+  String _pin = '';
 
   @override
   void dispose() {
-    for (final c in [_qty, _reason, _batchNo, _expiry]) {
+    for (final c in [_qty, _reason, _batchNo, _expiry, _approverCode]) {
       c.dispose();
     }
     super.dispose();
@@ -305,6 +312,10 @@ class _AdjustDialogState extends State<_AdjustDialog> {
     final q = double.tryParse(_qty.text);
     if (q == null || q <= 0 || _reason.text.trim().isEmpty || (_needsBatch && _batchNo.text.trim().isEmpty)) {
       setState(() => _error = _needsBatch ? 'Quantity, reason and batch number are required' : 'Quantity and reason are required');
+      return;
+    }
+    if (_needsApprover && (_approverCode.text.trim().isEmpty || _pin.length < 4)) {
+      setState(() => _error = 'Enter the approver\'s employee code and PIN');
       return;
     }
     setState(() {
@@ -319,12 +330,21 @@ class _AdjustDialogState extends State<_AdjustDialog> {
             _reason.text.trim(),
             batchNo: _needsBatch ? _batchNo.text.trim() : removalBatch,
             expiryDate: _needsBatch ? _expiry.text.trim() : null,
+            approverCode: _needsApprover ? _approverCode.text.trim() : null,
+            approverPin: _needsApprover ? _pin : null,
           );
       if (mounted) Navigator.pop(context, true);
     } on ApiException catch (e) {
       setState(() {
         _busy = false;
-        _error = e.statusCode == 403 ? 'You don\'t have permission to adjust stock.' : e.message;
+        if (e.code == 'ADJUSTMENT_NOT_APPROVED') {
+          _error = _needsApprover
+              ? 'Approval failed. Check the manager\'s employee code and PIN.'
+              : 'An adjustment this size needs a manager\'s approval.';
+          _needsApprover = true;
+        } else {
+          _error = e.statusCode == 403 ? 'You don\'t have permission to adjust stock.' : e.message;
+        }
       });
     } catch (_) {
       setState(() {
@@ -392,6 +412,17 @@ class _AdjustDialogState extends State<_AdjustDialog> {
                 ],
                 onChanged: (v) => setState(() => _batchChoice = v),
               ),
+            ],
+            if (_needsApprover) ...[
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('adjust-approver-code'),
+                controller: _approverCode,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Approver employee code', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 8),
+              ApprovalPinPad(onChanged: (pin) => setState(() => _pin = pin)),
             ],
             if (_error != null)
               Padding(

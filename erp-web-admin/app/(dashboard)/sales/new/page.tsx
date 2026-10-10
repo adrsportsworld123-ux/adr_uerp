@@ -55,7 +55,7 @@ export default function NewSalePage() {
 
   useEffect(() => {
     api
-      .get<{ branches: Branch[] }>("/api/v1/branches?status=active")
+      .get<{ branches: Branch[] }>("/api/v1/branches?status=active&scope=mine")
       .then((d) => {
         setBranches(d.branches);
         if (d.branches.length && !d.branches.some((b) => b.branch_id === SEED_BRANCH_ID)) setBranchId(d.branches[0].branch_id);

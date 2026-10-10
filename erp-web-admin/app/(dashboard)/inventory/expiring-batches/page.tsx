@@ -33,7 +33,7 @@ export default function ExpiringBatchesPage() {
   }, [branchId, days]);
 
   useEffect(() => {
-    api.get<{ branches: Branch[] }>("/api/v1/branches").then((d) => setBranches(d.branches)).catch(() => {});
+    api.get<{ branches: Branch[] }>("/api/v1/branches?scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
     fetchBatches().then((d) => setBatches(d.batches)).catch((e) => setError(e instanceof ApiError ? e.message : "Could not load expiring batches"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -861,6 +861,23 @@ Part 3: **JV workflow** (§3.41):
 
 ### Phase 15 — Data-Scoped RBAC & Approval Policies
 
+**Status: done (2026-10-10).**
+
+Part 1: **branch data scope** (`migrations/044`, `phase0_1_design.md` §3.42):
+- Roles are `all` or `branch`; Branch Manager defaults to `branch`.
+- A scoped user sees their home branch, any extra branches given on the admin's Data Access page, and on a PIN session the terminal's branch.
+- Postgres row-level security does the filtering on every branch-owned table, so every list, report, export and write is scoped without a per-query change. A request naming another branch gets `403 BRANCH_FORBIDDEN`.
+- `/me/permissions` reports the scope.
+- The Definition of Done is met and verified per endpoint: a Branch Manager called all 74 GET routes with another branch's data present, with no leak, a 403 for every route given the other branch's id, and refused writes.
+- Master data, coupons, price rules and the audit log stay merchant-wide by design. The audit log is behind `audit.view`, which a Branch Manager doesn't hold.
+
+Part 2: **approval policies** (`migrations/045`, §3.43):
+- One policy per merchant covers discount tiers, the refund threshold and approver, who may price below cost, the stock adjustment threshold and approver, and the JV threshold. The defaults equal the old hardcoded rules.
+- Every inline PIN approval goes through one check, which also requires the action's branch to be inside the approver's own scope.
+- The admin has an Approval Policies page. The admin and POS return, adjust and discount flows follow the policy.
+
+**Migrations:** `044` and `045` must be applied to the host database.
+
 **Size: M | Goal: FRD §18's data-level permissions ("own branch vs all branches") are real, and approval thresholds are configurable without code.**
 
 **In:**
@@ -930,5 +947,5 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 12    | POS billing redesign, terminal pairing               | L       | Done (2026-10-10) — terminal management + one-time pairing codes, inactive branch closes its tills, POS pairing screen, billing redesign (grid/cart/payment sheet, F-keys, 3 layouts, offline search), approver by employee code; on-device timing/concurrency not verifiable here, see above |
 | 13    | New POS flows                                        | XL      | Done (2026-10-10) — sales history + returns/refunds, open price, shifts with X/Z close feeding cash recon, sync queue + Stock Review, POS product lookup + Detailed/QR labels; on-device printing not verifiable here, see above |
 | 14    | Admin sales, label studio, JV workflow               | L       | Done (2026-10-10) — back-office sales on the till's code (paisa parity), sale detail/void/return/payment correction, label studio (ZPL/TSPL/ESC-POS, exact-size print, A4 sheet, scannability), JV workflow with maker-checker, period lock, append-only ledger; real-printer scan check environment-blocked |
-| 15    | Data-scoped RBAC, approval policies                  | M       | Planned — branch-scoped password sessions, configurable approval thresholds, see above |
+| 15    | Data-scoped RBAC, approval policies                  | M       | Done (2026-10-10) — branch data scope enforced by RLS on every branch-owned table (74-route leak sweep clean), extra branches per user, `BRANCH_FORBIDDEN`; per-merchant approval policies (discount tiers, refund/stock/JV thresholds, below-cost level) with branch-scoped approvers; admin Data Access + Approval Policies pages, POS follows the policy |
 | 16    | SaaS subscriptions, entitlements, report builder     | XL      | Planned — FRD §19 tiers enforced server-side, read-only on expiry (never delete), SaaS console, report template engine, load-test gate; 7 open decisions listed above |

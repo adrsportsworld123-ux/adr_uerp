@@ -22,6 +22,8 @@ const SCREENS = [
   "/labels",
   "/accounting/journal-entries",
   "/accounting/vouchers",
+  "/rbac/data-access",
+  "/rbac/approval-policies",
 ];
 
 async function login(page: Page) {

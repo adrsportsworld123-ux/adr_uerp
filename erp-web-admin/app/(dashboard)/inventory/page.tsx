@@ -43,10 +43,17 @@ export default function InventoryPage() {
   const [expiryDate, setExpiryDate] = useState("");
   const trackBatch = variantOptions.find((o) => o.variantId === variantId)?.trackBatch ?? false;
   const batchMissing = trackBatch && Number(delta) > 0 && !batchNo.trim();
+  // Phase 15: an adjustment worth more than the Approval Policies' stock
+  // threshold (quantity x cost) needs an approver. The cost isn't on this
+  // screen, so the fields appear once the server asks for them.
+  const [needsApprover, setNeedsApprover] = useState(false);
+  const [approverCode, setApproverCode] = useState("");
+  const [approverPin, setApproverPin] = useState("");
+  const approverMissing = needsApprover && (!approverCode.trim() || approverPin.length < 4);
 
   useEffect(() => {
     api
-      .get<{ branches: Branch[] }>("/api/v1/branches")
+      .get<{ branches: Branch[] }>("/api/v1/branches?scope=mine")
       .then((d) => setBranches(d.branches))
       .catch(() => {});
     api
@@ -84,7 +91,7 @@ export default function InventoryPage() {
 
   async function adjust() {
     const quantityDelta = Number(delta);
-    if (!variantId || !quantityDelta || !reason.trim() || batchMissing) return;
+    if (!variantId || !quantityDelta || !reason.trim() || batchMissing || approverMissing) return;
     setBusy(true);
     try {
       await api.post("/api/v1/inventory/adjustments", {
@@ -93,14 +100,22 @@ export default function InventoryPage() {
         quantity_delta: quantityDelta,
         reason: reason.trim(),
         ...(trackBatch && batchNo.trim() ? { batch_no: batchNo.trim(), ...(expiryDate ? { expiry_date: expiryDate } : {}) } : {}),
+        ...(needsApprover ? { approver_code: approverCode.trim(), approver_pin: approverPin } : {}),
       });
       toast.success("Stock adjusted");
       setDelta("");
       setReason("");
       setBatchNo("");
       setExpiryDate("");
+      setNeedsApprover(false);
+      setApproverCode("");
+      setApproverPin("");
       await lookup();
     } catch (e) {
+      if (e instanceof ApiError && e.code === "ADJUSTMENT_NOT_APPROVED") {
+        if (needsApprover) setApproverPin("");
+        setNeedsApprover(true);
+      }
       toast.error(e instanceof ApiError ? e.message : "Could not adjust stock");
     } finally {
       setBusy(false);
@@ -225,7 +240,31 @@ export default function InventoryPage() {
                 )}
               </>
             )}
-            <Button onClick={adjust} disabled={busy || !variantId || !delta || !reason.trim() || batchMissing}>
+            {needsApprover && (
+              <>
+                <div className="flex flex-col gap-2 w-40">
+                  <Label htmlFor="approverCode">Approver&apos;s employee code</Label>
+                  <Input
+                    id="approverCode"
+                    value={approverCode}
+                    autoComplete="off"
+                    onChange={(e) => setApproverCode(e.target.value.toUpperCase())}
+                  />
+                </div>
+                <div className="flex flex-col gap-2 w-32">
+                  <Label htmlFor="approverPin">Approver&apos;s PIN</Label>
+                  <Input
+                    id="approverPin"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={approverPin}
+                    onChange={(e) => setApproverPin(e.target.value.replace(/\D/g, ""))}
+                  />
+                </div>
+              </>
+            )}
+            <Button onClick={adjust} disabled={busy || !variantId || !delta || !reason.trim() || batchMissing || approverMissing}>
               Apply
             </Button>
           </div>

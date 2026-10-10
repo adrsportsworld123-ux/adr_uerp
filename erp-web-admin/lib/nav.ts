@@ -146,6 +146,8 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: ShieldCheck,
     items: [
       { href: "/rbac", label: "Roles & Permissions" },
+      { href: "/rbac/data-access", label: "Data Access" },
+      { href: "/rbac/approval-policies", label: "Approval Policies" },
       { href: "/audit-logs", label: "Audit Log" },
     ],
   },

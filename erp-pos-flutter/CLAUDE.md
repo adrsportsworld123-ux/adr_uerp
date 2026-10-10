@@ -146,6 +146,13 @@ Live tests need seed stock and seed credentials. After a full admin e2e run, res
 
 **Product lookup (Phase 13).** `lib/screens/product_lookup_screen.dart`, reached from menu → Product lookup (`ProductSearchScreen(lookupMode: true)`, where a scanned barcode opens the product directly) or from the search screen's info button. It shows price, stock by branch and batches, and offers Edit price, Adjust stock and Print label (Standard, Compact, Detailed or QR, with copies, to the receipt printer). Permissions come from `GET /me/permissions` (`AppSession.can`). While they're unknown, actions stay enabled and the server's 403 decides.
 
+**Approval policy (Phase 15).** The merchant's approval policy (`GET /settings/approval-policies`) drives these screens:
+- The discount dialog reads `AppSession.discountTiers`, which `refreshPermissions` loads. It falls back to the server defaults of 5/15/25%.
+- The return screen asks for a manager only above the returnable's `approval_above`.
+- Product lookup's adjust dialog shows approver fields after `ADJUSTMENT_NOT_APPROVED`.
+
+In all three the client only gives hints. When the server wants an approver the client didn't expect, the fields appear.
+
 **Known gap, still real:** `GET /sales/orders/{id}` doesn't yet return
 line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second
