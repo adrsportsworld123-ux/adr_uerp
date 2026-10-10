@@ -507,7 +507,7 @@ func (h *Handler) AddCashMovement(w http.ResponseWriter, r *http.Request) {
 		}
 		var approvedBy *string
 		if req.Kind == "paid_out" {
-			id, err := approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN)
+			id, err := approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN, s.BranchID)
 			if err != nil {
 				return err
 			}
@@ -613,7 +613,7 @@ func (h *Handler) CloseShift(w http.ResponseWriter, r *http.Request) {
 			OpeningFloat: s.openingFloatV, SystemExpected: expected, Denominations: req.Denominations,
 			Reason: req.Reason, CountedBy: claims.UserID,
 			Authorize: func(ctx context.Context, tx pgx.Tx) (string, error) {
-				return approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN)
+				return approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN, s.BranchID)
 			},
 		})
 		if err != nil {

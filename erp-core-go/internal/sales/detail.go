@@ -423,7 +423,7 @@ func (h *Handler) CorrectPayment(w http.ResponseWriter, r *http.Request) {
 			status != "captured" || !correctableMethods[method] || method == req.ToMethod {
 			return errPaymentNotCorrectable
 		}
-		approver, err := approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN)
+		approver, err := approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN, branchID)
 		if err != nil {
 			return err
 		}

@@ -124,8 +124,14 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 	branches := []branchResponse{}
 	total := 0
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Phase 15: scope=mine narrows to the branches the caller may act on
+		// (branch pickers); without it every branch is listed, as master
+		// data (transfers name the other end).
 		where := ` WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR code ILIKE '%' || $1 || '%' OR gstin ILIKE '%' || $1 || '%')
 			AND ($2 = '' OR status = $2)`
+		if r.URL.Query().Get("scope") == "mine" {
+			where += ` AND app_branch_visible(id)`
+		}
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM branches`+where, p.Q, status).Scan(&total); err != nil {
 			return err
 		}

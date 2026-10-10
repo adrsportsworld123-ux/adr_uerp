@@ -10,6 +10,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,6 +56,14 @@ func (d *DB) WithTenant(ctx context.Context, tenantID string, fn func(ctx contex
 	if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
 		return fmt.Errorf("db: set tenant context: %w", err)
 	}
+	// Phase 15: the request's branch scope, when the API attached one
+	// (migrations/044_branch_data_scope.sql). Absent = unrestricted, for
+	// background work that doesn't act for a user.
+	if scope, ok := ScopeFrom(ctx); ok {
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.branch_scope', $1, true)`, scope.setting()); err != nil {
+			return fmt.Errorf("db: set branch scope: %w", err)
+		}
+	}
 
 	if err := fn(ctx, tx); err != nil {
 		return err
@@ -69,3 +78,67 @@ func (d *DB) WithTenant(ctx context.Context, tenantID string, fn func(ctx contex
 // ErrNotFound is returned by lookups that use pgx.ErrNoRows internally, so
 // callers in other packages don't need to import pgx just to check this.
 var ErrNotFound = pgx.ErrNoRows
+
+// BranchScope is which branches' rows a request may see and write
+// (Phase 15). All = every branch of the merchant.
+type BranchScope struct {
+	All       bool
+	BranchIDs []string
+}
+
+// Allows reports whether a branch id is inside the scope.
+func (s BranchScope) Allows(branchID string) bool {
+	if s.All {
+		return true
+	}
+	for _, b := range s.BranchIDs {
+		if b == branchID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s BranchScope) setting() string {
+	switch {
+	case s.All:
+		return "all"
+	case len(s.BranchIDs) == 0:
+		return "none" // a scoped user with no branch sees no branch's rows
+	}
+	return strings.Join(s.BranchIDs, ",")
+}
+
+type scopeKey struct{}
+
+// WithBranchScope attaches a scope that every WithTenant transaction in
+// this context then applies.
+func WithBranchScope(ctx context.Context, s BranchScope) context.Context {
+	return context.WithValue(ctx, scopeKey{}, s)
+}
+
+// ScopeFrom returns the context's branch scope, if one was attached.
+func ScopeFrom(ctx context.Context) (BranchScope, bool) {
+	s, ok := ctx.Value(scopeKey{}).(BranchScope)
+	return s, ok
+}
+
+// Unrestricted runs fn with the branch scope lifted, then puts it back.
+// Only for system bookkeeping that a scoped user's legitimate action
+// implies in every branch, such as the zero-stock rows a new product
+// variant gets everywhere. Never for reading or acting on another branch's
+// data on a user's behalf.
+func Unrestricted(ctx context.Context, tx pgx.Tx, fn func() error) error {
+	var prev string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(current_setting('app.branch_scope', true), '')`).Scan(&prev); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.branch_scope', 'all', true)`); err != nil {
+		return err
+	}
+	ferr := fn()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.branch_scope', $1, true)`, prev); err != nil && ferr == nil {
+		ferr = err
+	}
+	return ferr
+}

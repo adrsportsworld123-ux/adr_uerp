@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
@@ -38,6 +39,7 @@ type Handler struct {
 }
 
 var errNegativeMargin = errors.New("this price would result in a negative margin")
+var errBelowCostForbidden = errors.New("role may not save below-cost prices")
 
 func marginPct(sellingPrice, costPrice float64) *float64 {
 	if sellingPrice <= 0 {
@@ -166,12 +168,29 @@ func (h *Handler) UpdateVariantPricing(w http.ResponseWriter, r *http.Request) {
 
 	var resp pricingResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Phase 15: who may save a below-cost price is the approval policy
+		// (default: anyone with pricing.manage, as before).
+		if req.Override {
+			policy, err := approvals.Load(ctx, tx)
+			if err != nil {
+				return err
+			}
+			ok, err := approvals.UserMeets(ctx, tx, claims.UserID, policy.BelowCostPrice)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errBelowCostForbidden
+			}
+		}
 		var err error
 		resp, err = applyVariantPricing(ctx, tx, variantID, req.CostPrice, req.MRP, req.SellingPrice, req.Reason, req.Override, claims.UserID)
 		return err
 	})
 
 	switch {
+	case errors.Is(err, errBelowCostForbidden):
+		httpx.Error(w, http.StatusForbidden, "BELOW_COST_NOT_ALLOWED", "your role can't save a price below cost (approval policy)")
 	case errors.Is(err, errNegativeMargin):
 		httpx.Error(w, http.StatusConflict, "NEGATIVE_MARGIN", "this price would sell below cost — pass override:true to allow it anyway")
 	case errors.Is(err, pgx.ErrNoRows):

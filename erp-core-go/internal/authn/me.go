@@ -28,10 +28,33 @@ func (h *MeHandler) Permissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var codes []string
+	type branchRef struct {
+		BranchID string `json:"branch_id"`
+		Name     string `json:"name"`
+	}
+	scope, _ := db.ScopeFrom(r.Context())
+	branches := []branchRef{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
-		codes, err = FetchPermissions(ctx, tx, claims.UserID)
-		return err
+		if codes, err = FetchPermissions(ctx, tx, claims.UserID); err != nil {
+			return err
+		}
+		if scope.All {
+			return nil
+		}
+		rows, err := tx.Query(ctx, `SELECT id::text, name FROM branches WHERE id::text = ANY($1) ORDER BY name`, scope.BranchIDs)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var b branchRef
+			if err := rows.Scan(&b.BranchID, &b.Name); err != nil {
+				return err
+			}
+			branches = append(branches, b)
+		}
+		return rows.Err()
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not load permissions")
@@ -50,5 +73,9 @@ func (h *MeHandler) Permissions(w http.ResponseWriter, r *http.Request) {
 		"branch_id":   claims.BranchID,
 		"roles":       roles,
 		"permissions": codes,
+		// Phase 15: which branches' data this user sees. all = every
+		// branch; otherwise exactly `branches`. A hint for the UI (branch
+		// pickers, empty states); the database enforces it.
+		"data_scope": map[string]any{"all": scope.All, "branches": branches},
 	})
 }

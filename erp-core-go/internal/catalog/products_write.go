@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 )
 
@@ -268,11 +269,18 @@ func insertVariant(ctx context.Context, tx pgx.Tx, productID string, categoryID 
 	// other unstocked one: visible in stock reports at zero, and a
 	// real STOCK_UNAVAILABLE (not a NOT_FOUND) if sold before being
 	// received.
-	if _, err := tx.Exec(ctx, `
+	//
+	// Phase 15: every branch, whatever the creator's branch scope. A new
+	// variant's zero rows are bookkeeping its creation implies everywhere,
+	// not the creator acting on another branch's stock.
+	if err := db.Unrestricted(ctx, tx, func() error {
+		_, err := tx.Exec(ctx, `
 			INSERT INTO stock_levels (id, merchant_id, branch_id, variant_id, on_hand, reserved, version)
 			SELECT gen_random_uuid(), current_setting('app.tenant_id')::uuid, b.id, $1, 0, 0, 0
 			FROM branches b WHERE b.merchant_id = current_setting('app.tenant_id')::uuid
-			ON CONFLICT (branch_id, variant_id) DO NOTHING`, variantID); err != nil {
+			ON CONFLICT (branch_id, variant_id) DO NOTHING`, variantID)
+		return err
+	}); err != nil {
 		return variantResponse{}, err
 	}
 

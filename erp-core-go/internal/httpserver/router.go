@@ -9,6 +9,7 @@ import (
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/ai"
 	"erp-core-go/internal/ai/llm"
+	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/branches"
@@ -74,6 +75,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	hrH := &hr.Handler{DB: database}
 	payrollH := &payroll.Handler{DB: database}
 	rbacH := &rbac.Handler{DB: database}
+	apprH := &approvals.Handler{DB: database}
 	aiH := &ai.Handler{DB: database, LLM: llmClient}
 	quoH := &quotations.Handler{DB: database}
 	pharmH := &pharmacy.Handler{DB: database}
@@ -109,6 +111,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		// authn.FromContext(ctx), never from a client-supplied parameter.
 		api.Group(func(protected chi.Router) {
 			protected.Use(authn.RequireAuth(issuer))
+			// Phase 15: own-branch vs all-branches data scope, enforced by RLS.
+			protected.Use(authn.BranchScopeMiddleware(database))
 			protected.Post("/auth/logout", logout.ServeHTTP)
 			// Phase 11: the caller's permission codes (a UI hint — every
 			// gate below still enforces on its own), and "what uses this
@@ -506,6 +510,16 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Post("/rbac/users/{id}/roles", rbacH.AssignUserRole)
 			protected.With(authn.RequirePermission(database, "rbac.manage")).
 				Delete("/rbac/users/{id}/roles/{role_id}", rbacH.RevokeUserRole)
+			// Phase 15: branch data scope management.
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Get("/rbac/data-access", rbacH.DataAccess)
+			protected.With(authn.RequirePermission(database, "rbac.manage")).
+				Put("/rbac/users/{id}/branches", rbacH.SetUserBranches)
+			// Phase 15: approval policies (discount tiers, refunds, below-cost prices,
+			// stock adjustments, JV posting).
+			protected.Get("/settings/approval-policies", apprH.Get)
+			protected.With(authn.RequirePermission(database, "approvals.manage")).
+				Put("/settings/approval-policies", apprH.Put)
 
 			protected.Get("/ai/reorder-suggestions", aiH.GetReorderSuggestions)
 			protected.Get("/ai/recommendations/{variant_id}", aiH.GetRecommendations)

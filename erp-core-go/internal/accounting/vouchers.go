@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
@@ -348,7 +349,7 @@ func writeVoucherError(w http.ResponseWriter, err error) {
 	case errors.Is(err, errApprovalRequired):
 		httpx.Error(w, http.StatusConflict, "JV_APPROVAL_REQUIRED", "journal vouchers need approval before they post: submit it instead")
 	case errors.Is(err, errApprovalNotConfigued):
-		httpx.Error(w, http.StatusConflict, "JV_APPROVAL_OFF", "approval is turned off: post the voucher directly")
+		httpx.Error(w, http.StatusConflict, "JV_APPROVAL_OFF", "this voucher doesn't need approval (approval is off, or it's within the amount that posts directly): post it")
 	case errors.Is(err, errVoucherState):
 		httpx.Error(w, http.StatusConflict, "VOUCHER_STATE", err.Error())
 	case errors.Is(err, errSelfApproval):
@@ -360,6 +361,19 @@ func writeVoucherError(w http.ResponseWriter, err error) {
 	}
 }
 
+// jvNeedsApproval: JV approval is on and (Phase 15 approval policy) the
+// voucher is above the amount that may post without it.
+func jvNeedsApproval(ctx context.Context, tx pgx.Tx, settings accountingSettings, total float64) (bool, error) {
+	if !settings.JVApprovalRequired {
+		return false, nil
+	}
+	policy, err := approvals.Load(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	return policy.JVApprovalAbove == nil || total > *policy.JVApprovalAbove+0.004, nil
+}
+
 // createVoucher is the one way a manual entry comes into being, used by
 // POST /accounting/vouchers and the older POST /accounting/journal-entries.
 func createVoucher(ctx context.Context, tx pgx.Tx, in voucherInput, userID string) (voucher, error) {
@@ -367,19 +381,27 @@ func createVoucher(ctx context.Context, tx pgx.Tx, in voucherInput, userID strin
 	if err != nil {
 		return voucher{}, err
 	}
+	var total float64
+	for _, l := range in.Lines {
+		total += l.Debit
+	}
+	needs, err := jvNeedsApproval(ctx, tx, settings, total)
+	if err != nil {
+		return voucher{}, err
+	}
 	action := in.Action
 	if action == "" {
 		action = "post"
-		if settings.JVApprovalRequired {
+		if needs {
 			action = "submit"
 		}
 	}
 	switch {
 	case action != "draft" && action != "submit" && action != "post":
 		return voucher{}, fmt.Errorf("%w: action must be draft, submit or post", errVoucherInvalid)
-	case action == "post" && settings.JVApprovalRequired:
+	case action == "post" && needs:
 		return voucher{}, errApprovalRequired
-	case action == "submit" && !settings.JVApprovalRequired:
+	case action == "submit" && !needs:
 		return voucher{}, errApprovalNotConfigued
 	}
 	if err := checkPeriodOpen(ctx, tx, &in.EntryDate); err != nil {
@@ -546,6 +568,12 @@ func (h *Handler) VoucherAction(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		var total float64
+		fmt.Sscan(cur.Total, &total)
+		needs, err := jvNeedsApproval(ctx, tx, settings, total)
+		if err != nil {
+			return err
+		}
 		needApprover := func() error {
 			ok, err := hasPermission(ctx, tx, claims.UserID, "accounting.jv_approve")
 			if err != nil {
@@ -567,7 +595,7 @@ func (h *Handler) VoucherAction(w http.ResponseWriter, r *http.Request) {
 		reason := ""
 		switch action {
 		case "submit":
-			if !settings.JVApprovalRequired {
+			if !needs {
 				return errApprovalNotConfigued
 			}
 			if err := state("draft"); err != nil {
@@ -594,7 +622,7 @@ func (h *Handler) VoucherAction(w http.ResponseWriter, r *http.Request) {
 				_, err = tx.Exec(ctx, `UPDATE journal_vouchers SET status = 'draft', rejection_note = $1, submitted_by = NULL, submitted_at = NULL, updated_at = now() WHERE id::text = $2`, reason, id)
 			}
 		case "post":
-			if settings.JVApprovalRequired {
+			if needs {
 				if err := state("approved"); err != nil {
 					return fmt.Errorf("%w (approval is on: submit and approve it first)", err)
 				}

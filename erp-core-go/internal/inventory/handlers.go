@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/accounting"
+	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
@@ -131,7 +133,13 @@ type adjustmentRequest struct {
 	// expired-first (see DrainBatches).
 	BatchNo    string  `json:"batch_no"`
 	ExpiryDate *string `json:"expiry_date"` // YYYY-MM-DD; only used when a positive delta creates a new batch
+	// Phase 15: when the approval policy sets a threshold, an adjustment
+	// worth more than it at cost needs an approver's code + PIN.
+	ApproverCode string `json:"approver_code"`
+	ApproverPIN  string `json:"approver_pin"`
 }
+
+var errAdjustNotApproved = errors.New("adjustment needs approval")
 
 // AdjustStock: POST /inventory/adjustments — manual correction, writes a
 // stock_movements row and an audit_logs row (before/after on_hand).
@@ -167,6 +175,27 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 	resp.BranchID = req.BranchID
 	resp.VariantID = req.VariantID
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Phase 15 approval policy: large adjustments (by value at cost)
+		// need an approver who covers this branch.
+		policy, err := approvals.Load(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if policy.StockAdjustApprovalAbove != nil {
+			var cost float64
+			if err := tx.QueryRow(ctx, `SELECT cost_price FROM product_variants WHERE id = $1`, req.VariantID).Scan(&cost); err != nil {
+				return err
+			}
+			if math.Abs(req.QuantityDelta*cost) > *policy.StockAdjustApprovalAbove+0.004 {
+				id, err := approvals.Approve(ctx, tx, req.ApproverCode, "", req.ApproverPIN, policy.StockAdjustApprover, req.BranchID)
+				if err != nil {
+					return err
+				}
+				if id == "" {
+					return errAdjustNotApproved
+				}
+			}
+		}
 		// Best-effort "before" value for the audit log only — if no row exists
 		// yet (first stock for this branch/variant), before stays 0, which is
 		// the correct value anyway.
@@ -250,6 +279,12 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	switch {
+	case errors.Is(err, errAdjustNotApproved):
+		httpx.Error(w, http.StatusForbidden, "ADJUSTMENT_NOT_APPROVED", "an adjustment this large needs a manager's employee code and PIN (approval policy)")
+		return
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "variant not found")
+		return
 	case errors.Is(err, ErrBatchRequired):
 		httpx.Error(w, http.StatusBadRequest, "BATCH_REQUIRED", ErrBatchRequired.Error())
 		return

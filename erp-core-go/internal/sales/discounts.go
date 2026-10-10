@@ -4,19 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/crypto/bcrypt"
 
+	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 )
 
-// Tiered discount authorization, per pos_frd_complete.md "Manual Discount
+// Tiered discount authorization (Phase 15: the tiers are now the
+// merchant's approval policy, internal/approvals, whose default is the
+// one below), per pos_frd_complete.md "Manual Discount
 // Authorization": 0-5% needs no extra approval, 5-15% needs a Branch
 // Manager's PIN, 15-25% needs a Merchant Admin's PIN. The FRD specifies OTP
 // for the top tier, but there's no notification channel in this codebase
@@ -26,15 +28,13 @@ import (
 // with equivalent-or-stronger strength (a PIN, like an OTP, proves the
 // approver was physically present), not a silently weaker shortcut.
 const (
-	discountTierNoApproval = 5.0
-	discountTierManagerPIN = 15.0
-	discountTierAdminPIN   = 25.0
-	roleBranchManager      = "branch manager"
-	roleMerchantAdmin      = "merchant admin"
+	roleBranchManager = "branch manager"
+	roleMerchantAdmin = "merchant admin"
 )
 
 var errDiscountNotAuthorized = errors.New("discount exceeds what the authorizer's role/PIN permits")
 var errDiscountOutOfRange = errors.New("discount value must be between 0 and 25 percent")
+var errDiscountAbovePolicy = errors.New("this discount is above the largest the approval policy allows")
 
 type discountRequest struct {
 	Type          string  `json:"type"` // "manual" | "coupon"
@@ -75,19 +75,29 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "type must be 'manual' or 'coupon'")
 		return
 	}
-	if req.ValuePercent <= 0 || req.ValuePercent > discountTierAdminPIN {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "value must be between 0 and 25 percent")
+	if req.ValuePercent <= 0 || req.ValuePercent > 100 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "value must be above 0 and at most 100 percent")
 		return
 	}
 
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var status string
-		if err := tx.QueryRow(ctx, `SELECT status FROM sales_orders WHERE id = $1`, orderID).Scan(&status); err != nil {
+		var status, branchID string
+		if err := tx.QueryRow(ctx, `SELECT status, branch_id FROM sales_orders WHERE id = $1`, orderID).Scan(&status, &branchID); err != nil {
 			return err
 		}
 		if status != "cart" {
 			return errOrderNotEditable
+		}
+		// Phase 15: the tiers are the merchant's approval policy
+		// (internal/approvals); the default is the old 5/15/25.
+		policy, err := approvals.Load(ctx, tx)
+		if err != nil {
+			return err
+		}
+		tier, ok := policy.DiscountTierFor(req.ValuePercent)
+		if !ok {
+			return fmt.Errorf("%w: at most %.4g%%", errDiscountAbovePolicy, policy.MaxDiscount())
 		}
 
 		var subtotal float64
@@ -99,27 +109,24 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 			return errDiscountOutOfRange // nothing to discount against
 		}
 
-		if req.AuthorizedBy == "" && strings.TrimSpace(req.AuthorizedByCode) != "" {
-			// Unknown code: leave AuthorizedBy empty, so authorizerPermits
-			// refuses with the same DISCOUNT_NOT_AUTHORIZED as a wrong PIN.
-			var uid string
-			if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE employee_code = $1 AND status = 'active'`,
-				strings.TrimSpace(req.AuthorizedByCode)).Scan(&uid); err == nil {
-				req.AuthorizedBy = uid
-			} else if !errors.Is(err, pgx.ErrNoRows) {
-				return err
-			}
-		}
 		var authorizerID *string
-		if req.ValuePercent > discountTierNoApproval {
-			ok, err := authorizerPermits(ctx, tx, req, req.ValuePercent)
+		if tier.Approver != approvals.LevelNone {
+			// By user id (authorized_by) or, from the POS PIN pad, by
+			// employee code; an unknown code or wrong PIN, a role below the
+			// tier, or a branch outside the approver's scope all answer
+			// DISCOUNT_NOT_AUTHORIZED alike.
+			code := ""
+			if req.AuthorizedBy == "" {
+				code = req.AuthorizedByCode
+			}
+			id, err := approvals.Approve(ctx, tx, code, req.AuthorizedBy, req.AuthorizedPIN, tier.Approver, branchID)
 			if err != nil {
 				return err
 			}
-			if !ok {
+			if id == "" {
 				return errDiscountNotAuthorized
 			}
-			authorizerID = &req.AuthorizedBy
+			authorizerID = &id
 		}
 
 		discountTotal := round2(subtotal * req.ValuePercent / 100)
@@ -142,6 +149,8 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this order is no longer a cart")
 	case errors.Is(err, errDiscountNotAuthorized):
 		httpx.Error(w, http.StatusForbidden, "DISCOUNT_NOT_AUTHORIZED", "the presented authorizer/PIN does not permit a discount of this size")
+	case errors.Is(err, errDiscountAbovePolicy):
+		httpx.Error(w, http.StatusBadRequest, "DISCOUNT_ABOVE_POLICY", err.Error())
 	case errors.Is(err, errDiscountOutOfRange), errors.Is(err, ErrDiscountExceedsAvailable):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has nothing left to discount")
 	case errors.Is(err, pgx.ErrNoRows):
@@ -151,35 +160,6 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.JSON(w, http.StatusOK, resp)
 	}
-}
-
-// authorizerPermits checks that req.AuthorizedBy names a user, within the
-// same tenant, holding the role required for valuePercent's tier, and that
-// req.AuthorizedPIN matches that user's pin_hash.
-func authorizerPermits(ctx context.Context, tx pgx.Tx, req discountRequest, valuePercent float64) (bool, error) {
-	if req.AuthorizedBy == "" || req.AuthorizedPIN == "" {
-		return false, nil
-	}
-	var pinHash *string
-	if err := tx.QueryRow(ctx, `SELECT pin_hash FROM users WHERE id = $1 AND status = 'active'`, req.AuthorizedBy).Scan(&pinHash); err != nil {
-		if err == pgx.ErrNoRows {
-			return false, nil
-		}
-		return false, err
-	}
-	if pinHash == nil || bcrypt.CompareHashAndPassword([]byte(*pinHash), []byte(req.AuthorizedPIN)) != nil {
-		return false, nil
-	}
-	roles, err := fetchRolesFor(ctx, tx, req.AuthorizedBy)
-	if err != nil {
-		return false, err
-	}
-	requiredRole := roleBranchManager
-	if valuePercent > discountTierManagerPIN {
-		requiredRole = roleMerchantAdmin
-	}
-	// Merchant Admin's approval also covers the manager tier.
-	return authn.HasRole(roles, requiredRole) || (requiredRole == roleBranchManager && authn.HasRole(roles, roleMerchantAdmin)), nil
 }
 
 func fetchRolesFor(ctx context.Context, tx pgx.Tx, userID string) ([]string, error) {

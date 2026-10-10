@@ -41,7 +41,7 @@ var errPriceNotEditable = fmt.Errorf("this item has a fixed price; only open-pri
 //   - fixed-price variant, unit_price sent -> errPriceNotEditable
 //   - open-price variant                   -> a validated override, or an
 //     *openPriceError (price missing, out of range, approval failed)
-func resolveOpenPrice(ctx context.Context, tx pgx.Tx, variantID string, req addLineRequest) (*LinePriceOverride, error) {
+func resolveOpenPrice(ctx context.Context, tx pgx.Tx, orderID, variantID string, req addLineRequest) (*LinePriceOverride, error) {
 	var enabled, includesTax bool
 	var min, max, above *string
 	var suggested string
@@ -70,7 +70,11 @@ func resolveOpenPrice(ctx context.Context, tx pgx.Tx, variantID string, req addL
 	}
 	override := &LinePriceOverride{UnitPrice: *req.UnitPrice, PriceIncludesTax: includesTax, OpenPrice: true}
 	if needsApproval {
-		approver, err := approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN)
+		var branchID string
+		if err := tx.QueryRow(ctx, `SELECT branch_id FROM sales_orders WHERE id = $1`, orderID).Scan(&branchID); err != nil {
+			return nil, err
+		}
+		approver, err := approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN, branchID)
 		if err != nil {
 			return nil, err
 		}

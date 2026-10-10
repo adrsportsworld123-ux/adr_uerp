@@ -53,7 +53,7 @@ func (h *Handler) VariantStock(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(sl.on_hand - sl.reserved, 0)::text, COALESCE(sl.reorder_point, 0)::text
 			FROM branches b
 			LEFT JOIN stock_levels sl ON sl.branch_id = b.id AND sl.variant_id::text = $1
-			WHERE b.status = 'active'
+			WHERE b.status = 'active' AND app_branch_visible(b.id) -- Phase 15: only branches this user may see
 			ORDER BY (b.id::text = $2) DESC, b.name`, variantID, branchID)
 		if err != nil {
 			return err

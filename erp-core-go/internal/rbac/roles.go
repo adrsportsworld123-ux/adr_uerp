@@ -42,6 +42,9 @@ type roleResponse struct {
 	IsSystemDefault bool     `json:"is_system_default"`
 	PermissionCodes []string `json:"permission_codes"`
 	UserCount       int      `json:"user_count"`
+	// Phase 15: "all" branches or only the holder's own "branch"
+	// (migrations/044). A user sees all if any of their roles is "all".
+	DataScope string `json:"data_scope"`
 }
 
 // loadRole assembles one role's full detail — its permission codes and
@@ -52,8 +55,8 @@ type roleResponse struct {
 func loadRole(ctx context.Context, tx pgx.Tx, id string) (roleResponse, error) {
 	var role roleResponse
 	role.PermissionCodes = []string{}
-	if err := tx.QueryRow(ctx, `SELECT id, name, is_system_default FROM roles WHERE id = $1`, id).
-		Scan(&role.ID, &role.Name, &role.IsSystemDefault); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT id, name, is_system_default, data_scope FROM roles WHERE id = $1`, id).
+		Scan(&role.ID, &role.Name, &role.IsSystemDefault, &role.DataScope); err != nil {
 		return role, err
 	}
 	rows, err := tx.Query(ctx, `
@@ -194,7 +197,8 @@ func (h *Handler) GetRole(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateRoleRequest struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	DataScope string `json:"data_scope"` // Phase 15: "all" | "branch"; "" leaves it
 }
 
 // UpdateRole: PATCH /rbac/roles/{id} — rename only; a role's permission
@@ -211,17 +215,25 @@ func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
 		return
 	}
-	if req.Name == "" {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name is required")
+	if req.Name == "" && req.DataScope == "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name or data_scope is required")
+		return
+	}
+	if req.DataScope != "" && req.DataScope != "all" && req.DataScope != "branch" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "data_scope must be all or branch")
 		return
 	}
 
 	var resp roleResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE roles SET name = $2 WHERE id = $1`, id, req.Name); err != nil {
+		tag, err := tx.Exec(ctx, `UPDATE roles SET name = COALESCE(NULLIF($2, ''), name), data_scope = COALESCE(NULLIF($3, ''), data_scope) WHERE id = $1`,
+			id, req.Name, req.DataScope)
+		if err != nil {
 			return err
 		}
-		var err error
+		if tag.RowsAffected() == 0 {
+			return errRoleNotFound
+		}
 		resp, err = loadRole(ctx, tx, id)
 		return err
 	})
@@ -232,6 +244,7 @@ func (h *Handler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update role")
 		return
 	}
+	authn.InvalidateScopes() // the role's scope may have changed
 	httpx.JSON(w, http.StatusOK, resp)
 }
 

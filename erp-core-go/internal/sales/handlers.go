@@ -290,7 +290,7 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		override, err := resolveOpenPrice(ctx, tx, req.VariantID, req)
+		override, err := resolveOpenPrice(ctx, tx, orderID, req.VariantID, req)
 		if err != nil {
 			return err
 		}

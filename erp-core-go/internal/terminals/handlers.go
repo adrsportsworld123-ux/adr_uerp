@@ -78,7 +78,7 @@ func scanTerminal(row pgx.Row) (terminalResponse, error) {
 
 func loadTerminal(ctx context.Context, tx pgx.Tx, merchantID, id string) (terminalResponse, error) {
 	t, err := scanTerminal(tx.QueryRow(ctx, terminalSelect+`
-		WHERE t.merchant_id = $1 AND t.id::text = $2 AND t.channel = 'pos'`, merchantID, id))
+		WHERE t.merchant_id = $1 AND t.id::text = $2 AND t.channel = 'pos' AND app_branch_visible(t.branch_id)`, merchantID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, errNotFound
 	}
@@ -102,7 +102,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	list := []terminalResponse{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, terminalSelect+`
-			WHERE t.merchant_id = $1 AND t.channel = 'pos'
+			WHERE t.merchant_id = $1 AND t.channel = 'pos' AND app_branch_visible(t.branch_id)
 			  AND ($2 = '' OR t.branch_id::text = $2)
 			  AND ($3 = '' OR t.status = $3)
 			  AND ($4 = '' OR t.name ILIKE '%' || $4 || '%' OR b.name ILIKE '%' || $4 || '%')
@@ -209,7 +209,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			       -- a deactivated terminal can't be paired, so drop any live code
 			       pairing_code_hash = CASE WHEN $4 = 'inactive' THEN NULL ELSE pairing_code_hash END,
 			       updated_at = now()
-			WHERE merchant_id = $1 AND id::text = $2 AND channel = 'pos'`, claims.TenantID, id, req.Name, req.Status)
+			WHERE merchant_id = $1 AND id::text = $2 AND channel = 'pos' AND app_branch_visible(branch_id)`, claims.TenantID, id, req.Name, req.Status)
 		if err != nil {
 			return err
 		}
@@ -302,7 +302,7 @@ func (h *Handler) ResetDevice(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE pos_terminals SET device_fingerprint = NULL, paired_at = NULL, updated_at = now()
-			WHERE merchant_id = $1 AND id::text = $2 AND channel = 'pos'`, claims.TenantID, id)
+			WHERE merchant_id = $1 AND id::text = $2 AND channel = 'pos' AND app_branch_visible(branch_id)`, claims.TenantID, id)
 		if err != nil {
 			return err
 		}
@@ -365,7 +365,7 @@ func (h *Handler) Pair(w http.ResponseWriter, r *http.Request) {
 			    pairing_expires_at = NULL, updated_at = now()
 			FROM branches b
 			WHERE t.merchant_id = $1 AND t.pairing_code_hash = $2 AND t.pairing_expires_at > now()
-			  AND t.status = 'active' AND t.channel = 'pos'
+			  AND t.status = 'active' AND t.channel = 'pos' AND app_branch_visible(t.branch_id)
 			  AND b.id = t.branch_id AND b.status = 'active'
 			RETURNING t.id`, merchantID, hashCode(req.PairingCode), strings.TrimSpace(req.DeviceFingerprint)).Scan(&id)
 		if err != nil {

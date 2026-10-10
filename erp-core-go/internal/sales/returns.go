@@ -12,9 +12,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/crypto/bcrypt"
 
 	"erp-core-go/internal/accounting"
+	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
@@ -207,6 +207,12 @@ func (h *Handler) GetReturnable(w http.ResponseWriter, r *http.Request) {
 		resp["returnable"] = (status == "finalized" || status == "partially_refunded") && windowOpen
 		resp["window_open"] = windowOpen
 		resp["requires_approval"] = settings.ReturnsRequireApproval
+		// Phase 15: refunds up to this amount need no approval (null = all).
+		policy, err := approvals.Load(ctx, tx)
+		if err != nil {
+			return err
+		}
+		resp["approval_above"] = policy.RefundApprovalAbove
 		resp["return_window_days"] = settings.ReturnWindowDays
 		resp["credit_outstanding"] = fmt.Sprintf("%.2f", math.Max(0, creditOutstanding))
 		if lines == nil {
@@ -257,31 +263,11 @@ type returnResponse struct {
 }
 
 // approverFor resolves an employee code + PIN to a Branch Manager or
-// Merchant Admin; "" means not approved (unknown code, wrong PIN, or a
-// role that can't approve) — deliberately one answer for all three.
-func approverFor(ctx context.Context, tx pgx.Tx, code, pin string) (string, error) {
-	if strings.TrimSpace(code) == "" || pin == "" {
-		return "", nil
-	}
-	var id string
-	var pinHash *string
-	err := tx.QueryRow(ctx, `SELECT id, pin_hash FROM users WHERE employee_code = $1 AND status = 'active'`, strings.TrimSpace(code)).Scan(&id, &pinHash)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	} else if err != nil {
-		return "", err
-	}
-	if pinHash == nil || bcrypt.CompareHashAndPassword([]byte(*pinHash), []byte(pin)) != nil {
-		return "", nil
-	}
-	roles, err := fetchRolesFor(ctx, tx, id)
-	if err != nil {
-		return "", err
-	}
-	if authn.HasRole(roles, roleBranchManager) || authn.HasRole(roles, roleMerchantAdmin) {
-		return id, nil
-	}
-	return "", nil
+// Merchant Admin who covers branchID; "" means not approved (unknown code,
+// wrong PIN, a role that can't approve, or another branch's manager), one
+// answer for all. Phase 15: the check itself is approvals.Approve.
+func approverFor(ctx context.Context, tx pgx.Tx, code, pin, branchID string) (string, error) {
+	return approvals.Approve(ctx, tx, code, "", pin, approvals.LevelBranchManager, branchID)
 }
 
 func loadReturn(ctx context.Context, tx pgx.Tx, returnID string) (returnResponse, error) {
@@ -370,17 +356,6 @@ func (h *Handler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 			time.Since(*finalizedAt) > time.Duration(*settings.ReturnWindowDays)*24*time.Hour {
 			return errReturnWindow
 		}
-		var approvedBy *string
-		if settings.ReturnsRequireApproval {
-			id, err := approverFor(ctx, tx, req.ApproverCode, req.ApproverPIN)
-			if err != nil {
-				return err
-			}
-			if id == "" {
-				return errReturnNotApproved
-			}
-			approvedBy = &id
-		}
 
 		lines, err := loadReturnableLines(ctx, tx, orderID)
 		if err != nil {
@@ -430,6 +405,25 @@ func (h *Handler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 			if customerID == nil || refund > round2(creditAmount-creditPaid)+0.004 {
 				return errCreditRefund
 			}
+		}
+
+		// Approval (Phase 15: the merchant's approval policy may exempt
+		// refunds up to an amount, and names the approver level). Decided
+		// after the refund is known; the approver must cover this branch.
+		var approvedBy *string
+		policy, err := approvals.Load(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if settings.ReturnsRequireApproval && (policy.RefundApprovalAbove == nil || refund > *policy.RefundApprovalAbove+0.004) {
+			id, err := approvals.Approve(ctx, tx, req.ApproverCode, "", req.ApproverPIN, policy.RefundApprover, branchID)
+			if err != nil {
+				return err
+			}
+			if id == "" {
+				return errReturnNotApproved
+			}
+			approvedBy = &id
 		}
 
 		var terminalID *string
