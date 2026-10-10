@@ -100,6 +100,10 @@ func PostJournalEntryOnDate(ctx context.Context, tx pgx.Tx, branchID, sourceType
 }
 
 func postJournalEntry(ctx context.Context, tx pgx.Tx, branchID, sourceType, sourceID, description, performedBy string, entryDate *string, lines []JournalLine) (entryNumber string, err error) {
+	// Phase 14: nothing posts into a locked period (accounting_settings).
+	if err := checkPeriodOpen(ctx, tx, entryDate); err != nil {
+		return "", err
+	}
 	var totalDebit, totalCredit float64
 	for _, l := range lines {
 		totalDebit += l.Debit

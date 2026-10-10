@@ -1297,3 +1297,59 @@ export interface CartOrder {
   grand_total: string;
   lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean }[];
 }
+
+// ---------------------------------------------------------------------
+// Phase 14: journal vouchers and the ledger (erp-core-go
+// internal/accounting/vouchers.go).
+// ---------------------------------------------------------------------
+
+export type VoucherStatus = "draft" | "submitted" | "approved" | "posted" | "reversed";
+
+export interface VoucherLine {
+  line_no: number;
+  account_code: string;
+  account_name: string;
+  debit: string;
+  credit: string;
+  memo: string | null;
+}
+
+export interface Voucher {
+  voucher_id: string;
+  voucher_number: string;
+  status: VoucherStatus;
+  branch_id: string | null;
+  entry_date: string;
+  description: string;
+  total: string;
+  created_by: string;
+  created_by_id: string;
+  submitted_by: string | null;
+  approved_by: string | null;
+  posted_by: string | null;
+  reversed_by: string | null;
+  rejection_note: string | null;
+  reversal_reason: string | null;
+  entry_number: string | null;
+  reversal_entry_number: string | null;
+  created_at: string;
+  lines?: VoucherLine[];
+}
+
+export interface LedgerEntry {
+  entry_id: string;
+  entry_number: string;
+  entry_date: string;
+  source_type: string;
+  source_id: string | null;
+  description: string;
+  branch_name: string | null;
+  amount: string;
+  created_by: string | null;
+  lines?: { account_code: string; account_name: string; debit: string; credit: string; party_type: string | null; party_id: string | null }[];
+}
+
+export interface AccountingSettings {
+  jv_approval_required: boolean;
+  locked_through: string | null;
+}

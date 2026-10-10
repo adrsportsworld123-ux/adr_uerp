@@ -270,16 +270,17 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
   return body as T;
 }
 
-// POST that returns a file (e.g. a label printer job): same session rules as
-// request() (fresh token first, one refresh-and-retry on a rejected token),
-// but the success body is a Blob, with the server's suggested file name.
-async function download(path: string, body: unknown, retried = false): Promise<{ blob: Blob; filename: string }> {
+// A request that returns a file (a label printer job, a CSV export): same
+// session rules as request() (fresh token first, one refresh-and-retry on a
+// rejected token), but the success body is a Blob, with the server's
+// suggested file name. A body makes it a POST, no body a GET.
+async function download(path: string, body?: unknown, retried = false): Promise<{ blob: Blob; filename: string }> {
   if (!retried) await ensureFreshSession();
   const token = getToken();
   const resp = await fetch(`${API_BASE_URL}${path}`, {
-    method: "POST",
+    method: body === undefined ? "GET" : "POST",
     headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (resp.ok) {
     const filename = /filename="([^"]+)"/.exec(resp.headers.get("Content-Disposition") ?? "")?.[1] ?? "download";

@@ -33,3 +33,23 @@ export const STATUS_LABEL: Record<string, string> = {
 export const CHANNEL_LABEL: Record<string, string> = { pos: "Till", online: "Online", backoffice: "Back office" };
 
 export const METHOD_LABEL: Record<string, string> = { cash: "Cash", card: "Card", upi: "UPI", credit: "Credit" };
+
+// What made a journal entry (journal_entries.source_type).
+export const SOURCE_LABEL: Record<string, string> = {
+  sale: "Sale",
+  sale_void: "Sale void",
+  sales_return: "Sales return",
+  payment_correction: "Payment correction",
+  purchase_bill: "Purchase bill",
+  bill_payment: "Bill payment",
+  purchase_return: "Purchase return",
+  inventory_adjustment: "Stock adjustment",
+  inventory_reconciliation: "Stock count",
+  manual: "Journal voucher",
+  manual_reversal: "Voucher reversal",
+  receivable_payment: "Customer payment",
+  cash_reconciliation: "Cash count",
+  cash_movement: "Cash in/out",
+  payment_gateway_settlement: "Gateway settlement",
+  payment_gateway_settlement_reversal: "Gateway reversal",
+};

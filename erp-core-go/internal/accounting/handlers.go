@@ -121,10 +121,11 @@ type manualJournalRequest struct {
 	Lines       []manualJournalLine `json:"lines"`
 }
 
-// CreateManualJournalEntry: POST /accounting/journal-entries — posts
-// immediately (no approval workflow — see this migration's header comment
-// for why that's out of scope for now, same simplification as skipping
-// Purchase's formal PO step).
+// CreateManualJournalEntry: POST /accounting/journal-entries — the
+// original manual entry, now a journal voucher (vouchers.go). With JV
+// approval off (the default) it posts at once, exactly as before; with it
+// on, the voucher is submitted for approval (202) instead of posting, so
+// this older path can't skip the merchant's approval rule.
 func (h *Handler) CreateManualJournalEntry(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -136,31 +137,31 @@ func (h *Handler) CreateManualJournalEntry(w http.ResponseWriter, r *http.Reques
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
 		return
 	}
-	if req.Description == "" || len(req.Lines) < 2 {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "description and at least two lines are required")
+	in := voucherInput{BranchID: req.BranchID, Description: req.Description}
+	for _, l := range req.Lines {
+		in.Lines = append(in.Lines, voucherLineInput{AccountCode: l.AccountCode, Debit: l.Debit, Credit: l.Credit})
+	}
+	if err := in.validate(); err != nil {
+		writeVoucherError(w, err)
 		return
 	}
-
-	lines := make([]JournalLine, 0, len(req.Lines))
-	for _, l := range req.Lines {
-		if l.AccountCode == "" || (l.Debit == 0) == (l.Credit == 0) {
-			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "each line needs an account_code and exactly one of debit/credit set")
-			return
-		}
-		lines = append(lines, JournalLine{AccountCode: l.AccountCode, Debit: l.Debit, Credit: l.Credit})
-	}
-
-	var entryNumber string
+	var v voucher
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		num, err := PostJournalEntry(ctx, tx, req.BranchID, "manual", "", req.Description, claims.UserID, lines)
-		entryNumber = num
+		var err error
+		v, err = createVoucher(ctx, tx, in, claims.UserID)
 		return err
 	})
 	if err != nil {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		writeVoucherError(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusCreated, map[string]string{"status": "posted", "entry_number": entryNumber})
+	resp := map[string]string{"status": v.Status, "voucher_id": v.VoucherID, "voucher_number": v.VoucherNumber, "entry_number": ""}
+	if v.EntryNumber != nil {
+		resp["entry_number"] = *v.EntryNumber
+		httpx.JSON(w, http.StatusCreated, resp)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, resp)
 }
 
 // ---------------------------------------------------------------------

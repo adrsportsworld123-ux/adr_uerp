@@ -293,6 +293,19 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/accounting/accounts", acct.ListAccounts)
 			protected.Post("/accounting/accounts", acct.CreateAccount)
 			protected.Post("/accounting/journal-entries", acct.CreateManualJournalEntry)
+			// Phase 14: the ledger browsable + exportable, journal vouchers with an
+			// optional approval workflow, and the period lock (migrations/043).
+			protected.Get("/accounting/journal-entries", acct.ListJournalEntries)
+			protected.Get("/accounting/journal-entries/{id}", acct.GetJournalEntry)
+			protected.Get("/accounting/vouchers", acct.ListVouchers)
+			protected.Post("/accounting/vouchers", acct.CreateVoucher)
+			protected.Get("/accounting/vouchers/{id}", acct.GetVoucher)
+			protected.Put("/accounting/vouchers/{id}", acct.UpdateVoucher)
+			protected.Delete("/accounting/vouchers/{id}", acct.DeleteVoucher)
+			protected.Post("/accounting/vouchers/{id}/{action}", acct.VoucherAction)
+			protected.Get("/accounting/settings", acct.GetAccountingSettings)
+			protected.With(authn.RequirePermission(database, "accounting.manage")).
+				Put("/accounting/settings", acct.UpdateAccountingSettings)
 			protected.Get("/accounting/party-ledger", acct.PartyLedger)
 			protected.Get("/accounting/day-book", acct.DayBook)
 			protected.Get("/accounting/cash-book", acct.CashBook)

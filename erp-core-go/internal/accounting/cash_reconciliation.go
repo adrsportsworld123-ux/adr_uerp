@@ -165,6 +165,8 @@ func (h *Handler) CreateCashReconciliation(w http.ResponseWriter, r *http.Reques
 	})
 
 	switch {
+	case errors.Is(err, ErrPeriodLocked):
+		httpx.Error(w, http.StatusConflict, "PERIOD_LOCKED", "that date is in a locked accounting period")
 	case errors.Is(err, errShiftsInUse):
 		httpx.Error(w, http.StatusConflict, "SHIFTS_IN_USE", "this branch ran POS shifts on this date; each till's cash was counted at shift close")
 	case errors.Is(err, errAlreadyReconciled):

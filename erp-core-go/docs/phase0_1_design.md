@@ -181,6 +181,11 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `PAYMENT_NOT_CORRECTABLE` | 409 | `POST /sales/orders/{id}/payments/{payment_id}/correct` | Not a captured cash/card/UPI payment on a completed sale, or the same method (§3.39) |
 | `CORRECTION_NOT_APPROVED` | 403 | `POST /sales/orders/{id}/payments/{payment_id}/correct` | Missing or wrong Branch Manager/Merchant Admin code + PIN (§3.39) |
 | `TAX_SLAB_MIXED` | 400 | `POST /tax-slabs` | A slab with both CGST/SGST and IGST: every component on a slab is charged, so it's one or the other (§3.39) |
+| `PERIOD_LOCKED` | 409 | voucher create/edit/post/reverse, `POST /cash-reconciliation` (any posting dated on or before `accounting_settings.locked_through`) | The period is locked (§3.41) |
+| `JV_APPROVAL_REQUIRED` | 409 | `POST /accounting/vouchers` (`action: post`) | Approval is on: submit instead (§3.41) |
+| `JV_APPROVAL_OFF` | 409 | `POST /accounting/vouchers` (`action: submit`), `.../submit` | Approval is off: post directly (§3.41) |
+| `VOUCHER_STATE` | 409 | voucher edit/delete/actions | The voucher's status doesn't allow it, e.g. editing a posted voucher or reversing twice (§3.41) |
+| `SELF_APPROVAL` | 403 | `POST /accounting/vouchers/{id}/approve` | The maker can't approve their own voucher (§3.41) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -1290,6 +1295,55 @@ The FRD's drag-and-drop designer remains a follow-up, as the roadmap scoped it.
 - 15 live checks cover presets, the next-selling batch, a GRN batch passed through, a tiny custom label flagged, 400s for impossible sizes / zero copies / too many labels, 404 for an unknown variant, a missing barcode flagged in preview and refused (409) in print, ZPL/TSPL/ESC-POS output, and `code: none` at 300 dpi.
 - `e2e/phase14-label-studio.spec.ts` covers the preview with a drawn barcode, the unscannable custom size, a downloaded TSPL file read back, and both browser print layouts (exact-size `@page`, A4 grid 3 across). It caught the CORS `Content-Disposition` exposure.
 - **Not verified:** printing on a real 203-dpi printer at every preset is recorded as environment-blocked (no printer here), as Phase 14's Definition of Done allows.
+
+### 3.41 Phase 14: journal vouchers, period lock, append-only ledger (`internal/accounting/vouchers.go`, `migrations/043_jv_workflow.sql`, 2026-10-10)
+
+**Drafts live outside the ledger.** A `journal_vouchers` row is a manual entry being prepared: draft → submitted → approved. Only posting writes a `journal_entries` row (`source_type 'manual'`, `source_id` = the voucher). Every report, balance and GST figure reads `journal_entries`, so none can see a draft, and no existing query had to change.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET/PUT /accounting/settings` `{jv_approval_required, locked_through}` | `PUT` needs `accounting.manage`; audited. Default: no approval (today's behaviour), no lock |
+| `POST /accounting/vouchers` `{branch_id, entry_date?, description, lines: [{account_code, debit \| credit, party_type?, party_id?, memo?}], action?}` | `action`: `draft`, `submit` or `post`. Default: `post` when approval is off, `submit` when it's on. Lines must be one-sided, positive, at least two, and balance to the paisa; accounts must exist and be active |
+| `PUT` / `DELETE /accounting/vouchers/{id}` | A draft only (including one sent back) |
+| `POST /accounting/vouchers/{id}/submit\|approve\|reject\|post\|reverse` | Submit needs approval to be on. `approve`/`reject` (with `note`) need `accounting.jv_approve`, and the approver can't be the maker (`SELF_APPROVAL`). With approval on, `post` needs an approved voucher; with it off, a draft or approved one. `reverse` `{reason, date?}` posts a mirror entry (`manual_reversal`) and marks the voucher `reversed`; with approval on it needs `accounting.jv_approve` |
+| `GET /accounting/vouchers?status=&q=`, `GET /accounting/vouchers/{id}` | Paged list; detail with lines and who did each step |
+| `GET /accounting/journal-entries?source_type=&q=&from=&to=&branch_id=&page=&limit=` | The posted ledger, manual and automatic, paged, newest first. `format=csv` exports every matching entry's lines (up to 50,000 rows) |
+| `GET /accounting/journal-entries/{id or entry_number}` | One entry with its lines; `source_type`/`source_id` link to the document that made it |
+| `POST /accounting/journal-entries` (Phase 2) | Now creates a voucher. With approval off it posts at once (201, unchanged); with it on it is submitted (202), so the old path can't skip approval |
+
+**Who may create a voucher.** Creating stays as open as Phase 2's manual entry (any signed-in user); the merchant's control is approval. Approval (`accounting.jv_approve`) and settings (`accounting.manage`) go to Merchant Admin by role name.
+
+**Period lock.** `postJournalEntry`, the one function every posting goes through, refuses an entry dated on or before `locked_through` (`ErrPeriodLocked`, surfaced as `409 PERIOD_LOCKED` by vouchers and the cash reconciliation). Live sales are dated today, so they're unaffected by a past lock.
+
+**The ledger is append-only, enforced by the database.** Triggers on `journal_entries` and `journal_lines` refuse DELETE, and refuse UPDATE of anything but an entry's status, whoever asks: the app role, or the owner at a psql prompt. Nothing in the application updated or deleted journal rows before; now nothing can. Corrections are reversing entries. This meets Phase 14's Definition of Done ("posted JVs can only be reversed, never edited, enforced server-side and tested").
+
+**Verified live** (42 checks):
+- **Approval off:**
+  - settings default; a cashier is refused on settings (403)
+  - a voucher posts at once, and its ledger entry is manual, linked to the voucher, with 2 lines
+  - the legacy endpoint is unchanged (201)
+  - unbalanced, unknown-account and two-sided lines give 400
+- **Drafts:** saved with nothing in the ledger, edited, then posted. A posted voucher can't be edited or deleted (409); a draft deletes (204).
+- **Database triggers:** they refuse editing a posted line, back-dating an entry and deleting one.
+- **Reversal:** needs a reason (400); mirrors the lines exactly; can't be done twice (409).
+- **Approval on:**
+  - create gives `submitted`, and creating straight to posted gives 409
+  - posting before approval gives 409
+  - a cashier can't approve (403), and an admin can't approve their own voucher (`SELF_APPROVAL`)
+  - sending back needs a note, and goes back to draft with it; the voucher can be resubmitted
+  - another user approves, then it posts
+  - the legacy endpoint returns 202 submitted
+  - a cashier can't reverse (403)
+- **Period lock:** a back-dated voucher, a reversal and a back-dated cash count all give 409; today still posts.
+- **Lists:** the voucher list filters, the journal list filters/searches/pages, and the CSV export works; a bad date gives 400.
+
+The returns (27), shifts (37), back-office sales (23) and label (15) suites were re-run green with the trigger and lock in place.
+
+`e2e/phase14-jv-workflow.spec.ts` covers, in the browser:
+- post, open the entry and its voucher, then reverse
+- approval on: the cashier can only submit, the admin approves and posts, and can't approve their own
+- the journal search and CSV export
+- the period lock in the voucher form
 
 ---
 

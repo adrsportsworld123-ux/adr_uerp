@@ -792,9 +792,9 @@ Lookup tests: 15 live API checks, Go unit tests (labels and QR), 2 Flutter widge
 
 ### Phase 14 — Admin Sales, Label Studio, JV Workflow (design UI-4)
 
-**Status: in progress (2026-10-10).**
+**Status: done (2026-10-10), except printing on a real label printer (environment-blocked, below).**
 
-Part 1 done: **admin sales** (`migrations/042`, `phase0_1_design.md` §3.39):
+Part 1: **admin sales** (`migrations/042`, `phase0_1_design.md` §3.39):
 - **Selling from the admin app:** a `backoffice` channel from a virtual terminal per branch, running the till's own cart code. A fixture cart totals identically to the paisa on the till and in the admin, which meets the first Definition of Done item.
 - **Admin pages:**
   - Sales list (filters, summary)
@@ -809,7 +809,7 @@ Part 1 done: **admin sales** (`migrations/042`, `phase0_1_design.md` §3.39):
 
 **Decision for later: GST place of supply.** A slab names its components; choosing CGST+SGST vs IGST per sale by place of supply (inter-state B2B) would be a broader change to the cart, offline POS, GSTR-1/3B and e-invoicing.
 
-Part 2 done: **label studio** (§3.40):
+Part 2: **label studio** (§3.40):
 - **What and how:** products or a whole GRN; presets or a custom size; field toggles; 203/300 dpi.
 - **Preview:** live, with a per-label scannability check.
 - **Three print paths:**
@@ -819,7 +819,26 @@ Part 2 done: **label studio** (§3.40):
 - **Fixed on the way:** CORS now exposes `Content-Disposition`, so a download keeps its file name.
 - **Definition of Done, labels:** scanning on a real 203-dpi printer is **environment-blocked** (no hardware), recorded the same way as Phase 1's hardware item. The scan check and the decoded printer bytes are what this environment can verify.
 
-Still to do: JV workflow (part 3).
+Part 3: **JV workflow** (§3.41):
+- **Vouchers kept outside the ledger** until they post. With approval off (the default, today's behaviour) they post as saved; with it on, maker-checker applies (`accounting.jv_approve`, never your own).
+- **Corrections:** posted vouchers are reversed with a mirror entry, never edited.
+- **Period lock** in the one posting function, so it applies to every source.
+- **The ledger is append-only in the database itself** (triggers refuse UPDATE and DELETE). This meets the Definition of Done item "posted JVs can only be reversed, never edited (server-side, tested)".
+- **Admin pages:**
+  - the Journal, with paging, search, source/date filters, CSV export and print-to-PDF
+  - entry detail linking to its source document
+  - Journal Vouchers: list, form and detail with workflow actions
+  - Accounting Settings
+- **Old URL:** the legacy manual-entry page redirects to the voucher form.
+
+**Definition of Done:**
+- **Till/admin parity:** a shared fixture cart totals identically to the paisa on the till and in the admin (part 1).
+- **Label scanning:** scanning on a real 203-dpi printer at every preset is **environment-blocked** (no printer), recorded like Phase 1's hardware item. Scannability is checked by computing module widths in printer dots, and the printer files are verified by decoding them.
+- **Posted JVs:** they are reversed, never edited, enforced by the database and tested.
+
+**Decision still open (from part 1):** choosing CGST+SGST vs IGST per sale by place of supply.
+
+**Migrations:** `042` and `043` must be applied to the host database.
 
 **Size: L | Goal: The back office can sell, refund and print labels with exactly the same rules as the till.**
 
@@ -910,6 +929,6 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 11    | Design system foundations, admin list/form kit       | L       | Nearly done (2026-10-10) — tokens, shell, kit, master lifecycle, dependencies, `/me/permissions`, a11y + keyboard tests; every planned master screen on the kit; server-search product picker. Open: visual baselines (need fixture data), coupon paging, see above |
 | 12    | POS billing redesign, terminal pairing               | L       | Done (2026-10-10) — terminal management + one-time pairing codes, inactive branch closes its tills, POS pairing screen, billing redesign (grid/cart/payment sheet, F-keys, 3 layouts, offline search), approver by employee code; on-device timing/concurrency not verifiable here, see above |
 | 13    | New POS flows                                        | XL      | Done (2026-10-10) — sales history + returns/refunds, open price, shifts with X/Z close feeding cash recon, sync queue + Stock Review, POS product lookup + Detailed/QR labels; on-device printing not verifiable here, see above |
-| 14    | Admin sales, label studio, JV workflow               | L       | Planned — admin sale on the shared checkout path, sales history/refunds, label studio (ESC/POS + ZPL/TSPL + system + PDF), configurable JV approval, see above |
+| 14    | Admin sales, label studio, JV workflow               | L       | Done (2026-10-10) — back-office sales on the till's code (paisa parity), sale detail/void/return/payment correction, label studio (ZPL/TSPL/ESC-POS, exact-size print, A4 sheet, scannability), JV workflow with maker-checker, period lock, append-only ledger; real-printer scan check environment-blocked |
 | 15    | Data-scoped RBAC, approval policies                  | M       | Planned — branch-scoped password sessions, configurable approval thresholds, see above |
 | 16    | SaaS subscriptions, entitlements, report builder     | XL      | Planned — FRD §19 tiers enforced server-side, read-only on expiry (never delete), SaaS console, report template engine, load-test gate; 7 open decisions listed above |

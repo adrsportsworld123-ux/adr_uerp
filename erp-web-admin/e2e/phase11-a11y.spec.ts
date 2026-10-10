@@ -20,6 +20,8 @@ const SCREENS = [
   "/inventory/review",
   "/sales",
   "/labels",
+  "/accounting/journal-entries",
+  "/accounting/vouchers",
 ];
 
 async function login(page: Page) {

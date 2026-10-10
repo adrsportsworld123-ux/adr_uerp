@@ -108,7 +108,8 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: BookOpen,
     items: [
       { href: "/accounting/chart-of-accounts", label: "Chart of Accounts" },
-      { href: "/accounting/journal-entries/new", label: "Journal Entry" },
+      { href: "/accounting/journal-entries", label: "Journal", match: ["/accounting/journal-entries/"] },
+      { href: "/accounting/vouchers", label: "Journal Vouchers", match: ["/accounting/vouchers/"] },
       { href: "/accounting/party-ledger", label: "Party Ledger" },
       { href: "/accounting/day-book", label: "Day Book" },
       { href: "/accounting/cash-book", label: "Cash Book" },
@@ -117,6 +118,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/bank-reconciliation", label: "Bank Reconciliation" },
       { href: "/cash-reconciliation", label: "Cash Reconciliation" },
       { href: "/payment-gateway-reconciliation", label: "Payment Gateway Reconciliation" },
+      { href: "/accounting/settings", label: "Accounting Settings" },
     ],
   },
   {
