@@ -40,6 +40,24 @@ class PendingOrderForSync {
       this.deviceCreatedAt, this.lines, this.payments);
 }
 
+class QueuedSale {
+  final String id;
+  final String orderNumber;
+  final String createdAt;
+  final double grandTotal;
+  final double itemCount;
+  final String? syncError;
+
+  QueuedSale({
+    required this.id,
+    required this.orderNumber,
+    required this.createdAt,
+    required this.grandTotal,
+    required this.itemCount,
+    required this.syncError,
+  });
+}
+
 /// Owns all reads/writes to the local sqflite store — the offline
 /// counterpart to ApiClient. AppSession decides which of the two to call;
 /// this class doesn't know about connectivity at all.
@@ -265,6 +283,27 @@ class OfflineStore {
   Future<void> markSyncFailed(String pendingOrderId, String error) async {
     final db = await LocalDb.instance.db;
     await db.update('pending_orders', {'sync_error': error}, where: 'id = ?', whereArgs: [pendingOrderId]);
+  }
+
+  /// Sales finished on this device that the server hasn't accepted yet
+  /// (Phase 13 history: shown as "queued" above the server's list).
+  Future<List<QueuedSale>> listQueuedSales() async {
+    final db = await LocalDb.instance.db;
+    final rows = await db.rawQuery('''
+      SELECT o.id, o.device_created_at, o.grand_total, o.sync_error,
+             (SELECT COALESCE(SUM(quantity), 0) FROM pending_order_lines l WHERE l.pending_order_id = o.id) AS items
+      FROM pending_orders o WHERE o.status = 'pending_sync'
+      ORDER BY o.device_created_at DESC''');
+    return rows
+        .map((r) => QueuedSale(
+              id: r['id'] as String,
+              orderNumber: 'OFFLINE-${(r['id'] as String).substring(0, 8)}',
+              createdAt: r['device_created_at'] as String,
+              grandTotal: ((r['grand_total'] as num?) ?? 0).toDouble(),
+              itemCount: ((r['items'] as num?) ?? 0).toDouble(),
+              syncError: r['sync_error'] as String?,
+            ))
+        .toList();
   }
 
   Future<int> countPendingSync() async {

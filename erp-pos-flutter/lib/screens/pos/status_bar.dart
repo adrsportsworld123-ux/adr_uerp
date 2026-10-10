@@ -7,7 +7,7 @@ part of '../pos_screen.dart';
 // secondary actions in a menu on the right.
 // ---------------------------------------------------------------------
 
-enum _MenuAction { heldOrders, productSearch, syncNow, printer, signOut }
+enum _MenuAction { heldOrders, salesHistory, productSearch, syncNow, printer, signOut }
 
 class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
   final bool busy;
@@ -98,6 +98,10 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                     value: _MenuAction.heldOrders,
                     enabled: !offline,
                     child: const ListTile(leading: Icon(Icons.pause_circle_outline), title: Text('Held orders'), trailing: _KeyHint('F9')),
+                  ),
+                  const PopupMenuItem(
+                    value: _MenuAction.salesHistory,
+                    child: ListTile(leading: Icon(Icons.receipt_long_outlined), title: Text('Sales history & returns'), trailing: _KeyHint('F6')),
                   ),
                   PopupMenuItem(
                     value: _MenuAction.productSearch,

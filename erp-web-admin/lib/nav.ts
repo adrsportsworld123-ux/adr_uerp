@@ -40,6 +40,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/quotations", label: "B2B Quotations" },
       { href: "/prescriptions", label: "Prescriptions" },
+      { href: "/sales-settings", label: "Return Policy" },
     ],
   },
   {

@@ -105,6 +105,22 @@ complete keyboard-only sale offline against real SQLite plus goldens at
 change). Live-backend widget tests must let real I/O finish with
 `tester.runAsync` and end by pumping past dart:io's 15 s keep-alive timer.
 
+**Phase 13 (2026-10-10) — sales history and returns.** The F6 menu entry
+"Sales history & returns" opens `lib/screens/orders_screen.dart`:
+- a day summary, scoped to this till or the whole branch
+- filters
+- this device's unsynced offline sales from SQLite, shown as "waiting to sync"
+- server sales; tapping one opens `ReceiptScreen` in history mode (`orderId` set: reprint, no void)
+
+`lib/screens/return_screen.dart` records a return:
+- `GET .../returnable`, then `POST .../returns`
+- one idempotency key per screen, so a retried submit can never refund twice
+- the manager's code and PIN on `ApprovalPinPad` when the merchant's policy requires approval
+
+Returns are online-only, and an offline sale can't be returned until it has synced.
+
+`test/orders_returns_test.dart` uses its own SQLite directory, because test files run concurrently and share the default one. `api_client_live_test.dart` honours `ERP_API_URL` for running against a throwaway API.
+
 **Known gap, still real:** `GET /sales/orders/{id}` doesn't yet return
 line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second

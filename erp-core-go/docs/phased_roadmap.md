@@ -687,6 +687,41 @@ Measured on a mid-range Android tablet (POS) and a mid-range laptop on throttled
 
 ### Phase 13 — New POS Flows: Open Price, Sales History, Returns, Shifts, Labels, Sync Queue (design UI-3)
 
+**Status: in progress (2026-10-10).** Decisions taken at the start:
+- open-price items use normal stock
+- whether returns need approval is a per-merchant setting, defaulting to a manager's PIN
+- the POS journal is cash in/out only
+
+Done so far:
+- **Sales history and summary:** `GET /sales/orders` and `/sales/summary` (`phase0_1_design.md` §3.34) filter on branch-local dates.
+- **POS Sales history & returns screen (F6):**
+  - a day summary, scoped to this till or the whole branch
+  - period, status and search filters
+  - this device's queued offline sales, marked as waiting to sync
+  - a receipt view to reprint any sale
+- **Returns and refunds** (`migrations/038`, §3.34):
+  - partial or full returns
+  - a per-line refund that adds up exactly to what was paid
+  - restock back to the batches the sale consumed (optional, for damaged goods)
+  - a mirror `sales_return` journal entry
+  - credit refunds, but only up to the unpaid credit
+  - safe to replay with the same idempotency key
+  - order-row locking
+  - statuses `partially_refunded` and `refunded`
+- **POS return screen:**
+  - quantity steppers, reason chips, refund method and an optional reference
+  - a restock switch
+  - manager code plus PIN on the shared pad when the policy requires it
+  - one idempotency key per screen, so a retry never refunds twice
+- **Admin Return Policy page** (`sales.settings`): approval on or off, and an optional return window.
+- **Tests:**
+  - 32 live API checks
+  - Flutter widget tests for history plus an approval-retry return and for offline queued sales, and a live client test
+  - `e2e/phase13-return-policy.spec.ts`
+  - the a11y sweep now covers Terminals and Return Policy
+
+Still to do in this phase: open-price items, shifts (open, cash in/out, X/Z close), the sync queue screen, product lookup and labels from the POS. **Migration `038` must be applied to the host database.**
+
 **Size: XL | Goal: The POS covers the counter's whole day, from open shift to close, not just a single sale.**
 
 **In:**

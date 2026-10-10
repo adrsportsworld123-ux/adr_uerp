@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../api/api_client.dart';
 import '../printing/printer_service.dart';
 import '../state/session.dart';
+import '../ui/format.dart';
 import 'printer_settings_screen.dart';
 
 /// Shown right after a successful checkout — closes the real gap behind
@@ -15,10 +16,18 @@ import 'printer_settings_screen.dart';
 /// phase0_1_design.md) — this screen is the print-ready *digital*
 /// rendering of it; the Print button additionally sends the backend's
 /// ESC/POS bytes to a configured network printer via PrinterService.
+///
+/// Phase 13: also opened from sales history with [orderId] set. Then Print
+/// reprints that order, Void is not offered (it belongs to the sale just
+/// made), and [onReturn] (when the sale can still be returned) starts a return.
 class ReceiptScreen extends StatefulWidget {
   final ReceiptData receipt;
+  final String? orderId;
+  final VoidCallback? onReturn;
 
-  const ReceiptScreen({super.key, required this.receipt});
+  const ReceiptScreen({super.key, required this.receipt, this.orderId, this.onReturn});
+
+  bool get fromHistory => orderId != null;
 
   @override
   State<ReceiptScreen> createState() => _ReceiptScreenState();
@@ -32,7 +41,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Future<void> _print() async {
     setState(() => _printing = true);
     final session = context.read<AppSession>();
-    final ok = await session.printReceipt(_printer);
+    final ok = widget.fromHistory ? await session.printReceiptFor(widget.orderId!, _printer) : await session.printReceipt(_printer);
     if (!mounted) return;
     setState(() => _printing = false);
     ScaffoldMessenger.of(context).showSnackBar(
@@ -104,6 +113,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 const SizedBox(height: 4),
                 Text('Order ${r.orderNumber}', style: Theme.of(context).textTheme.bodySmall),
                 Text('Cashier: ${r.cashierName}', style: Theme.of(context).textTheme.bodySmall),
+                if (r.status != 'finalized')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Chip(label: Text(statusLabel(r.status))),
+                  ),
                 if (r.customerName != null) Text('Customer: ${r.customerName}', style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
@@ -138,18 +152,29 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 : const Icon(Icons.print),
             label: const Text('Print receipt'),
           ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _voiding ? null : _void,
-            icon: _voiding
-                ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.undo),
-            label: const Text('Void this sale'),
-          ),
+          if (widget.onReturn != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              key: const Key('receipt-return'),
+              onPressed: widget.onReturn,
+              icon: const Icon(Icons.assignment_return_outlined),
+              label: const Text('Return items'),
+            ),
+          ],
+          if (!widget.fromHistory) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _voiding ? null : _void,
+              icon: _voiding
+                  ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.undo),
+              label: const Text('Void this sale'),
+            ),
+          ],
           const SizedBox(height: 8),
           FilledButton.tonal(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('New sale'),
+            child: Text(widget.fromHistory ? 'Close' : 'New sale'),
           ),
         ],
       ),

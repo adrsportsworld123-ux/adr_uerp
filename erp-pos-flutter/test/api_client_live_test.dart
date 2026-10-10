@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -17,7 +18,9 @@ import 'package:erp_pos_app/api/api_client.dart';
 /// Skipped automatically (not failed) if nothing is listening on
 /// localhost:8080, so this doesn't break `flutter test` in an
 /// environment without the docker-compose stack running.
-const _baseUrl = 'http://localhost:8080';
+// ERP_API_URL points the suite at another instance (e.g. a throwaway API
+// built from a branch, on :8081) without touching the developer's own.
+final _baseUrl = Platform.environment['ERP_API_URL'] ?? 'http://localhost:8080';
 
 void main() {
   late ApiClient api;
@@ -238,5 +241,42 @@ void main() {
       PaymentInput(method: 'cash', amount: double.parse(recalled.order.grandTotal)),
     ]);
     expect(order.status, 'finalized');
+  });
+
+  test('Phase 13: history lists a new sale, and a partial return is approved, refunded and replay-safe', () async {
+    if (!serverUp) return;
+
+    const branchId = '22222222-2222-2222-2222-222222222222';
+    const terminalId = '33333333-3333-3333-3333-333333333333';
+    const variantId = '99999999-9999-9999-9999-999999999999';
+    var order = await api.createOrder(
+        branchId: branchId, posTerminalId: terminalId, idempotencyKey: 'flutter-live-p13-${DateTime.now().microsecondsSinceEpoch}');
+    order = await api.addLine(orderId: order.orderId, variantId: variantId, quantity: 2);
+    order = await api.checkout(orderId: order.orderId, payments: [PaymentInput(method: 'cash', amount: double.parse(order.grandTotal))]);
+
+    final page = await api.listSalesOrders(terminalId: terminalId, limit: 5);
+    expect(page.orders.first.orderId, order.orderId, reason: 'newest first');
+    expect(page.orders.first.paymentMethods, ['cash']);
+    final summary = await api.salesSummary(terminalId: terminalId);
+    expect(summary.orderCount, greaterThanOrEqualTo(1));
+
+    final returnable = await api.getReturnable(order.orderId);
+    expect(returnable.returnable, isTrue);
+    expect(returnable.lines.single.returnableQuantity, '2.000');
+
+    final req = ReturnRequest(
+      quantities: {returnable.lines.single.lineId: 1},
+      reason: 'flutter live test',
+      refundMethod: 'cash',
+      approverCode: 'EMP003',
+      approverPin: '1234',
+      idempotencyKey: 'flutter-live-ret-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    final r1 = await api.createReturn(orderId: order.orderId, posTerminalId: terminalId, req: req);
+    expect(r1.orderStatus, 'partially_refunded');
+    expect(double.parse(r1.refundAmount), closeTo(double.parse(order.grandTotal) / 2, 0.011));
+    final r2 = await api.createReturn(orderId: order.orderId, posTerminalId: terminalId, req: req);
+    expect(r2.returnNumber, r1.returnNumber, reason: 'same idempotency key -> same return');
+    expect((await api.getReturnable(order.orderId)).lines.single.returnableQuantity, '1.000');
   });
 }

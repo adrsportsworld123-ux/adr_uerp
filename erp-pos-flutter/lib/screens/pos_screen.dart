@@ -10,6 +10,7 @@ import '../ui/approval_pin_pad.dart';
 import '../ui/format.dart';
 import '../ui/theme.dart';
 import 'held_orders_screen.dart';
+import 'orders_screen.dart';
 import 'printer_settings_screen.dart';
 import 'product_search_screen.dart';
 import 'receipt_screen.dart';
@@ -309,11 +310,20 @@ class _PosScreenState extends State<PosScreen> {
             : '${session.pendingSyncCount} sale(s) still waiting to sync');
   }
 
+  /// Phase 13: history works offline too (it then shows this device's
+  /// queued sales only); returns inside it need the server.
+  Future<void> _openSalesHistory() async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const OrdersScreen())));
+    _refocusScan();
+  }
+
   Future<void> _onMenu(_MenuAction action) async {
     final session = context.read<AppSession>();
     switch (action) {
       case _MenuAction.heldOrders:
         await _openHeldOrders();
+      case _MenuAction.salesHistory:
+        await _openSalesHistory();
       case _MenuAction.productSearch:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen()));
         _refocusScan();
@@ -352,6 +362,7 @@ class _PosScreenState extends State<PosScreen> {
         const SingleActivator(LogicalKeyboardKey.f4): _pickCustomer,
         const SingleActivator(LogicalKeyboardKey.f7): _applyDiscount,
         const SingleActivator(LogicalKeyboardKey.f8): _holdOrder,
+        const SingleActivator(LogicalKeyboardKey.f6): _openSalesHistory,
         const SingleActivator(LogicalKeyboardKey.f9): _openHeldOrders,
         const SingleActivator(LogicalKeyboardKey.f12): _pay,
         const SingleActivator(LogicalKeyboardKey.numpadAdd): () => _stepSelected(1),

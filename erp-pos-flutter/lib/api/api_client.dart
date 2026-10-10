@@ -472,6 +472,200 @@ class ReceiptData {
       );
 }
 
+/// One row of GET /sales/orders (Phase 13 sales history).
+class SalesHistoryOrder {
+  final String orderId;
+  final String orderNumber;
+  final String status;
+  final String? finalizedAt;
+  final String terminalName;
+  final String cashierName;
+  final String? customerName;
+  final String itemCount;
+  final String grandTotal;
+  final List<String> paymentMethods;
+
+  SalesHistoryOrder({
+    required this.orderId,
+    required this.orderNumber,
+    required this.status,
+    required this.finalizedAt,
+    required this.terminalName,
+    required this.cashierName,
+    required this.customerName,
+    required this.itemCount,
+    required this.grandTotal,
+    required this.paymentMethods,
+  });
+
+  factory SalesHistoryOrder.fromJson(Map<String, dynamic> json) => SalesHistoryOrder(
+        orderId: json['order_id'] as String,
+        orderNumber: json['order_number'] as String,
+        status: json['status'] as String,
+        finalizedAt: json['finalized_at'] as String?,
+        terminalName: json['terminal_name'] as String? ?? '',
+        cashierName: json['cashier_name'] as String? ?? '',
+        customerName: json['customer_name'] as String?,
+        itemCount: json['item_count'] as String? ?? '0',
+        grandTotal: json['grand_total'] as String,
+        paymentMethods: (json['payment_methods'] as List<dynamic>? ?? const []).cast<String>(),
+      );
+}
+
+class SalesHistoryPage {
+  final List<SalesHistoryOrder> orders;
+  final int total;
+  SalesHistoryPage(this.orders, this.total);
+}
+
+/// GET /sales/summary — counts and money for the same filters as the list.
+class SalesSummaryData {
+  final int orderCount;
+  final int voidedCount;
+  final int refundedCount;
+  final String netSales;
+  final String discountTotal;
+  final String taxTotal;
+  final Map<String, String> byMethod;
+
+  SalesSummaryData({
+    required this.orderCount,
+    required this.voidedCount,
+    required this.refundedCount,
+    required this.netSales,
+    required this.discountTotal,
+    required this.taxTotal,
+    required this.byMethod,
+  });
+
+  factory SalesSummaryData.fromJson(Map<String, dynamic> json) => SalesSummaryData(
+        orderCount: json['order_count'] as int? ?? 0,
+        voidedCount: json['voided_count'] as int? ?? 0,
+        refundedCount: json['refunded_count'] as int? ?? 0,
+        netSales: json['net_sales'] as String? ?? '0',
+        discountTotal: json['discount_total'] as String? ?? '0',
+        taxTotal: json['tax_total'] as String? ?? '0',
+        byMethod: {
+          for (final m in (json['by_payment_method'] as List<dynamic>? ?? const []))
+            (m as Map<String, dynamic>)['method'] as String: m['amount'] as String,
+        },
+      );
+}
+
+/// One line of GET /sales/orders/{id}/returnable.
+class ReturnableLine {
+  final String lineId;
+  final String productName;
+  final String sku;
+  final String soldQuantity;
+  final String returnedQuantity;
+  final String returnableQuantity;
+  final String unitRefund;
+
+  ReturnableLine({
+    required this.lineId,
+    required this.productName,
+    required this.sku,
+    required this.soldQuantity,
+    required this.returnedQuantity,
+    required this.returnableQuantity,
+    required this.unitRefund,
+  });
+
+  factory ReturnableLine.fromJson(Map<String, dynamic> json) => ReturnableLine(
+        lineId: json['line_id'] as String,
+        productName: json['product_name'] as String,
+        sku: json['sku'] as String,
+        soldQuantity: json['sold_quantity'] as String,
+        returnedQuantity: json['returned_quantity'] as String,
+        returnableQuantity: json['returnable_quantity'] as String,
+        unitRefund: json['unit_refund'] as String,
+      );
+}
+
+class ReturnableOrder {
+  final String orderId;
+  final String orderNumber;
+  final String status;
+  final bool returnable;
+  final bool windowOpen;
+  final bool requiresApproval;
+  final String creditOutstanding;
+  final List<ReturnableLine> lines;
+
+  ReturnableOrder({
+    required this.orderId,
+    required this.orderNumber,
+    required this.status,
+    required this.returnable,
+    required this.windowOpen,
+    required this.requiresApproval,
+    required this.creditOutstanding,
+    required this.lines,
+  });
+
+  factory ReturnableOrder.fromJson(Map<String, dynamic> json) => ReturnableOrder(
+        orderId: json['order_id'] as String,
+        orderNumber: json['order_number'] as String,
+        status: json['status'] as String,
+        returnable: json['returnable'] as bool? ?? false,
+        windowOpen: json['window_open'] as bool? ?? true,
+        requiresApproval: json['requires_approval'] as bool? ?? true,
+        creditOutstanding: json['credit_outstanding'] as String? ?? '0.00',
+        lines: (json['lines'] as List<dynamic>? ?? const [])
+            .map((e) => ReturnableLine.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+/// What a return asks for; [idempotencyKey] stays the same across retries
+/// of the same return so a lost response never refunds twice.
+class ReturnRequest {
+  final Map<String, double> quantities; // line_id -> quantity
+  final String reason;
+  final String refundMethod;
+  final String? refundReference;
+  final bool restock;
+  final String? approverCode;
+  final String? approverPin;
+  final String idempotencyKey;
+
+  ReturnRequest({
+    required this.quantities,
+    required this.reason,
+    required this.refundMethod,
+    this.refundReference,
+    this.restock = true,
+    this.approverCode,
+    this.approverPin,
+    required this.idempotencyKey,
+  });
+}
+
+class ReturnResult {
+  final String returnNumber;
+  final String orderStatus;
+  final String refundAmount;
+  final String refundMethod;
+  final bool restocked;
+
+  ReturnResult({
+    required this.returnNumber,
+    required this.orderStatus,
+    required this.refundAmount,
+    required this.refundMethod,
+    required this.restocked,
+  });
+
+  factory ReturnResult.fromJson(Map<String, dynamic> json) => ReturnResult(
+        returnNumber: json['return_number'] as String,
+        orderStatus: json['order_status'] as String,
+        refundAmount: json['refund_amount'] as String,
+        refundMethod: json['refund_method'] as String,
+        restocked: json['restocked'] as bool? ?? true,
+      );
+}
+
 /// Talks to erp-core-go's /api/v1 surface, exactly as specified in
 /// phase0_1_design.md §3 and implemented (and verified against live
 /// Postgres) in internal/authn, internal/catalog, internal/sales.
@@ -956,6 +1150,74 @@ class ApiClient {
       body: jsonEncode({'orders': orders}),
     );
     return _decode(resp);
+  }
+
+  // ---------------------------------------------------------------- Phase 13
+
+  /// GET /sales/orders — sales history, newest first. Dates are the
+  /// branch's local calendar day (YYYY-MM-DD).
+  Future<SalesHistoryPage> listSalesOrders({
+    String? terminalId,
+    String? branchId,
+    String? status,
+    String? query,
+    String? from,
+    String? to,
+    int page = 1,
+    int limit = 25,
+  }) async {
+    final uri = Uri.parse('$baseUrl/api/v1/sales/orders').replace(queryParameters: {
+      if (terminalId != null) 'terminal_id': terminalId,
+      if (branchId != null) 'branch_id': branchId,
+      if (status != null && status.isNotEmpty) 'status': status,
+      if (query != null && query.isNotEmpty) 'q': query,
+      if (from != null) 'from': from,
+      if (to != null) 'to': to,
+      'page': '$page',
+      'limit': '$limit',
+    });
+    final body = _decode(await _http.get(uri, headers: _authHeaders));
+    return SalesHistoryPage(
+      (body['orders'] as List<dynamic>).map((e) => SalesHistoryOrder.fromJson(e as Map<String, dynamic>)).toList(),
+      body['total'] as int? ?? 0,
+    );
+  }
+
+  Future<SalesSummaryData> salesSummary({String? terminalId, String? branchId, String? from, String? to}) async {
+    final uri = Uri.parse('$baseUrl/api/v1/sales/summary').replace(queryParameters: {
+      if (terminalId != null) 'terminal_id': terminalId,
+      if (branchId != null) 'branch_id': branchId,
+      if (from != null) 'from': from,
+      if (to != null) 'to': to,
+    });
+    return SalesSummaryData.fromJson(_decode(await _http.get(uri, headers: _authHeaders)));
+  }
+
+  Future<ReturnableOrder> getReturnable(String orderId) async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/returnable'), headers: _authHeaders);
+    return ReturnableOrder.fromJson(_decode(resp));
+  }
+
+  Future<ReturnResult> createReturn({required String orderId, required String posTerminalId, required ReturnRequest req}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/returns'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'lines': [
+          for (final e in req.quantities.entries)
+            if (e.value > 0) {'line_id': e.key, 'quantity': e.value},
+        ],
+        'reason': req.reason,
+        'refund_method': req.refundMethod,
+        if (req.refundReference != null && req.refundReference!.isNotEmpty) 'refund_reference': req.refundReference,
+        'restock': req.restock,
+        if (req.approverCode != null && req.approverCode!.isNotEmpty) 'approver_code': req.approverCode,
+        if (req.approverPin != null && req.approverPin!.isNotEmpty) 'approver_pin': req.approverPin,
+        'idempotency_key': req.idempotencyKey,
+        'pos_terminal_id': posTerminalId,
+      }),
+    );
+    return ReturnResult.fromJson(_decode(resp));
   }
 
   Map<String, dynamic> _decode(http.Response resp) {

@@ -788,9 +788,14 @@ class AppSession extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    return printReceiptFor(currentOrder!.orderId, printer);
+  }
+
+  /// Reprints any server sale (Phase 13 history), not just the current one.
+  Future<bool> printReceiptFor(String orderId, PrinterService printer) async {
     _lastError = null;
     try {
-      final bytes = await api.printReceiptBytes(currentOrder!.orderId);
+      final bytes = await api.printReceiptBytes(orderId);
       await printer.printBytes(bytes);
       return true;
     } catch (e) {
@@ -811,6 +816,60 @@ class AppSession extends ChangeNotifier {
     loyaltyAvailablePoints = null;
     notifyListeners();
   }
+
+  // ---------------------------------------------------------------------
+  // Phase 13: sales history and returns. History and returns are
+  // server-only. The device's own unsynced sales come from SQLite and are
+  // shown as "queued"; they can't be returned until they've synced,
+  // because until then the server has no order to return against.
+  // ---------------------------------------------------------------------
+
+  Future<List<QueuedSale>> queuedSales() => _offline.listQueuedSales();
+
+  /// Runs a live-only call; a network failure flips the terminal into
+  /// offline mode (as every other live call does) and rethrows.
+  Future<T> _live<T>(Future<T> Function() call) async {
+    try {
+      return await call();
+    } catch (e) {
+      if (_isNetworkError(e) && !offlineMode) {
+        offlineMode = true;
+        notifyListeners();
+      }
+      rethrow;
+    }
+  }
+
+  Future<SalesHistoryPage> salesHistory({
+    bool thisTerminalOnly = true,
+    String? status,
+    String? query,
+    String? from,
+    String? to,
+    int page = 1,
+  }) =>
+      _live(() => api.listSalesOrders(
+            terminalId: thisTerminalOnly ? posTerminalId : null,
+            branchId: branchId,
+            status: status,
+            query: query,
+            from: from,
+            to: to,
+            page: page,
+          ));
+
+  Future<SalesSummaryData> salesSummary({bool thisTerminalOnly = true, String? from, String? to}) =>
+      _live(() => api.salesSummary(terminalId: thisTerminalOnly ? posTerminalId : null, branchId: branchId, from: from, to: to));
+
+  Future<ReceiptData> receiptFor(String orderId) => _live(() => api.getReceipt(orderId));
+
+  Future<ReturnableOrder> returnableFor(String orderId) => _live(() => api.getReturnable(orderId));
+
+  Future<ReturnResult> createReturn(String orderId, ReturnRequest req) =>
+      _live(() => api.createReturn(orderId: orderId, posTerminalId: posTerminalId, req: req));
+
+  /// One key per return attempt; the return screen keeps it across retries.
+  String newIdempotencyKey() => _newIdempotencyKey();
 
   bool _isNetworkError(Object e) =>
       e is SocketException || e is TimeoutException || e is http.ClientException;

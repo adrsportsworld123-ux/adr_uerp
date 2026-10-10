@@ -35,3 +35,14 @@ String formatQty(String qty) {
   if (v == null) return qty;
   return v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
 }
+
+/// Order status as cashiers say it.
+String statusLabel(String status) => switch (status) {
+      'finalized' => 'Completed',
+      'voided' => 'Voided',
+      'refunded' => 'Refunded',
+      'partially_refunded' => 'Partly refunded',
+      'held' => 'On hold',
+      'cart' => 'In progress',
+      _ => status,
+    };
