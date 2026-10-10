@@ -127,6 +127,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Building2,
     items: [
       { href: "/branches", label: "Branches" },
+      { href: "/terminals", label: "POS Terminals" },
       { href: "/hr/employees", label: "Employees" },
       { href: "/hr/shifts", label: "Shifts" },
       { href: "/hr/statutory-config", label: "Statutory Config" },

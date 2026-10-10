@@ -19,6 +19,15 @@ class CachedProduct {
 
 /// Everything needed to POST one order to /sync/push, read back out of
 /// pending_orders/lines/payments.
+/// A cached catalog row plus its cached available stock (null when the
+/// stock cache has no row for it yet).
+class CachedCatalogItem {
+  final CachedProduct product;
+  final double? available;
+
+  CachedCatalogItem(this.product, this.available);
+}
+
 class PendingOrderForSync {
   final String id;
   final String idempotencyKey;
@@ -104,6 +113,47 @@ class OfflineStore {
       r['cess_rate'] as double,
       priceIncludesTax: (r['price_includes_tax'] as int? ?? 0) == 1,
     );
+  }
+
+  /// Name/SKU search over the cached catalog (Phase 12) — what lets the
+  /// POS product grid and search keep working offline. One row per
+  /// variant (the cache is keyed by barcode, so a variant with two
+  /// barcodes appears twice there), with its cached available stock.
+  /// An empty query returns the first [limit] products by name.
+  Future<List<CachedCatalogItem>> searchCatalog(String query, {int limit = 40}) async {
+    final db = await LocalDb.instance.db;
+    final q = query.trim().toLowerCase();
+    // instr() rather than LIKE: a typed % or _ is matched literally, with
+    // no escaping rules to get wrong.
+    final rows = await db.rawQuery(
+      'SELECT c.*, s.available AS available '
+      'FROM catalog c LEFT JOIN stock_cache s ON s.variant_id = c.variant_id '
+      "WHERE (? = '' OR instr(lower(c.product_name), ?) > 0 OR instr(lower(c.sku), ?) > 0 OR c.barcode = ?) "
+      'GROUP BY c.variant_id '
+      'ORDER BY c.product_name, c.sku '
+      'LIMIT ?',
+      [q, q, q, query.trim(), limit],
+    );
+    return rows
+        .map((r) => CachedCatalogItem(
+              CachedProduct(
+                ProductLookup(
+                  productId: r['product_id'] as String,
+                  productName: r['product_name'] as String,
+                  variantId: r['variant_id'] as String,
+                  sku: r['sku'] as String,
+                  sellingPrice: r['selling_price'] as String,
+                  mrp: r['mrp'] as String,
+                ),
+                r['cgst_rate'] as double,
+                r['sgst_rate'] as double,
+                r['igst_rate'] as double,
+                r['cess_rate'] as double,
+                priceIncludesTax: (r['price_includes_tax'] as int? ?? 0) == 1,
+              ),
+              double.tryParse(r['available'] as String? ?? ''),
+            ))
+        .toList();
   }
 
   Future<String> createPendingOrder(String branchId, String posTerminalId) async {

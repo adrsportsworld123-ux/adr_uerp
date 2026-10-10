@@ -33,6 +33,7 @@ import (
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
 	"erp-core-go/internal/sync"
+	"erp-core-go/internal/terminals"
 )
 
 func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int) http.Handler {
@@ -52,6 +53,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	barcodeAssign := &catalog.BarcodeAssignHandler{DB: database}
 	taxonomy := &catalog.TaxonomyHandler{DB: database}
 	deps := &dependencies.Handler{DB: database}
+	terms := &terminals.Handler{DB: database}
 	me := &authn.MeHandler{DB: database}
 	label := &catalog.LabelHandler{DB: database}
 	productList := &catalog.ListHandler{DB: database, Search: searchClient}
@@ -98,6 +100,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		api.Post("/auth/refresh", refresh.ServeHTTP)
 		api.Post("/auth/forgot-password", passwordReset.ForgotPassword)
 		api.Post("/auth/reset-password", passwordReset.ResetPassword)
+		// Phase 12: a fresh device pairs itself with merchant code + a
+		// single-use code an admin issued — no session exists yet.
+		api.Post("/pos-terminals/pair", terms.Pair)
 
 		// Authenticated — everything below requires a valid Bearer token,
 		// and every handler inside this group gets its tenant from
@@ -110,6 +115,17 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			// record?" counts for master data.
 			protected.Get("/me/permissions", me.Permissions)
 			protected.Get("/dependencies/{entity}/{id}", deps.Get)
+
+			// Phase 12: POS terminal management (migrations/037).
+			protected.Get("/pos-terminals", terms.List)
+			protected.With(authn.RequirePermission(database, "terminal.manage")).
+				Post("/pos-terminals", terms.Create)
+			protected.With(authn.RequirePermission(database, "terminal.manage")).
+				Patch("/pos-terminals/{id}", terms.Update)
+			protected.With(authn.RequirePermission(database, "terminal.manage")).
+				Post("/pos-terminals/{id}/pairing-code", terms.IssuePairingCode)
+			protected.With(authn.RequirePermission(database, "terminal.manage")).
+				Post("/pos-terminals/{id}/reset-device", terms.ResetDevice)
 
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
 			protected.Post("/products/variants/{id}/barcodes", barcodeAssign.AssignBarcode)

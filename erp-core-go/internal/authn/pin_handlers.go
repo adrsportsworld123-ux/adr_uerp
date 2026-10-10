@@ -68,6 +68,20 @@ func (h *PinLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "DEVICE_MISMATCH", "this terminal is bound to a different device")
 		return
 	}
+	// Phase 12: an inactive branch closes its terminals too — this is what
+	// deactivating a branch actually does (branches has RLS, so the lookup
+	// runs in the terminal's own tenant).
+	var branchStatus string
+	if err := h.DB.WithTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT status FROM branches WHERE id = $1`, branchID).Scan(&branchStatus)
+	}); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not resolve branch")
+		return
+	}
+	if branchStatus != "active" {
+		httpx.Error(w, http.StatusForbidden, "TERMINAL_UNAVAILABLE", "this terminal's branch is not active")
+		return
+	}
 
 	type userRow struct {
 		id                  string

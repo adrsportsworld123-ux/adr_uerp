@@ -293,6 +293,33 @@ class HeldOrderSummary {
       );
 }
 
+class PairingResult {
+  final String terminalId;
+  final String terminalName;
+  final String branchId;
+  final String branchName;
+  final String merchantCode;
+  final String merchantName;
+
+  PairingResult({
+    required this.terminalId,
+    required this.terminalName,
+    required this.branchId,
+    required this.branchName,
+    required this.merchantCode,
+    required this.merchantName,
+  });
+
+  factory PairingResult.fromJson(Map<String, dynamic> json) => PairingResult(
+        terminalId: json['terminal_id'] as String,
+        terminalName: json['terminal_name'] as String,
+        branchId: json['branch_id'] as String,
+        branchName: json['branch_name'] as String,
+        merchantCode: json['merchant_code'] as String,
+        merchantName: json['merchant_name'] as String,
+      );
+}
+
 class PaymentInput {
   final String method; // 'cash' | 'card' | 'upi' | 'credit'
   final double amount;
@@ -588,6 +615,26 @@ class ApiClient {
     return result;
   }
 
+  /// Phase 12 device pairing (POST /pos-terminals/pair) — unauthenticated
+  /// by design: the device presents the merchant code plus a single-use
+  /// code an admin issued on the POS Terminals screen.
+  Future<PairingResult> pairTerminal({
+    required String merchantCode,
+    required String pairingCode,
+    required String deviceFingerprint,
+  }) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/pos-terminals/pair'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'merchant_code': merchantCode,
+        'pairing_code': pairingCode,
+        'device_fingerprint': deviceFingerprint,
+      }),
+    );
+    return PairingResult.fromJson(_decode(resp));
+  }
+
   Future<ProductLookup> lookupBarcode(String code) async {
     final resp = await _http.get(
       Uri.parse('$baseUrl/api/v1/products/barcode/$code'),
@@ -597,7 +644,9 @@ class ApiClient {
   }
 
   Future<List<CatalogCategory>> listCategories() async {
-    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/categories'), headers: _authHeaders);
+    // Active only: since Phase 11 the endpoint also lists deactivated
+    // categories, which must not appear as chips at the till.
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/categories?status=active&sort=path'), headers: _authHeaders);
     final body = _decode(resp);
     return (body['categories'] as List<dynamic>)
         .map((e) => CatalogCategory.fromJson(e as Map<String, dynamic>))
@@ -746,6 +795,7 @@ class ApiClient {
     required String orderId,
     required double valuePercent,
     String authorizedBy = '',
+    String authorizedByCode = '',
     String authorizedPin = '',
     required String reason,
   }) async {
@@ -756,6 +806,9 @@ class ApiClient {
         'type': 'manual',
         'value': valuePercent,
         'authorized_by': authorizedBy,
+        // Phase 12: the approver's employee code (what staff know); the
+        // server resolves it to authorized_by.
+        'authorized_by_code': authorizedByCode,
         'authorized_pin': authorizedPin,
         'reason': reason,
       }),

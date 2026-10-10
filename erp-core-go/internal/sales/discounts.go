@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -39,7 +40,11 @@ type discountRequest struct {
 	ValuePercent  float64 `json:"value"`
 	AuthorizedBy  string  `json:"authorized_by"`  // user id of the approving manager/admin; empty for the 0-5% tier
 	AuthorizedPIN string  `json:"authorized_pin"` // required alongside authorized_by for tiers above 5%
-	Reason        string  `json:"reason"`
+	// AuthorizedByCode (Phase 12) names the approver by employee code — what
+	// staff actually know, unlike a user id — for the POS's approval PIN pad.
+	// Resolved to authorized_by server-side; ignored if authorized_by is set.
+	AuthorizedByCode string `json:"authorized_by_code"`
+	Reason           string `json:"reason"`
 }
 
 // ApplyDiscount: POST /sales/orders/{id}/discounts — the discount
@@ -93,6 +98,17 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 			return errDiscountOutOfRange // nothing to discount against
 		}
 
+		if req.AuthorizedBy == "" && strings.TrimSpace(req.AuthorizedByCode) != "" {
+			// Unknown code: leave AuthorizedBy empty, so authorizerPermits
+			// refuses with the same DISCOUNT_NOT_AUTHORIZED as a wrong PIN.
+			var uid string
+			if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE employee_code = $1 AND status = 'active'`,
+				strings.TrimSpace(req.AuthorizedByCode)).Scan(&uid); err == nil {
+				req.AuthorizedBy = uid
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
 		var authorizerID *string
 		if req.ValuePercent > discountTierNoApproval {
 			ok, err := authorizerPermits(ctx, tx, req, req.ValuePercent)

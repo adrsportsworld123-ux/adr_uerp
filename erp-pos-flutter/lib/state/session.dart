@@ -28,15 +28,22 @@ import 'device_id.dart';
 class AppSession extends ChangeNotifier {
   final ApiClient api;
 
-  // TODO(phase 2): these belong to a terminal-registration/device-binding
-  // flow (FRD §18 device binding), not a hardcoded constant. Wired to the
-  // seed data in migrations/002_seed.sql for this walking skeleton.
+  // Phase 12: come from the device's pairing (TerminalConfig, see
+  // main.dart), not hardcoded seed ids. Names are for display only.
   final String branchId;
   final String posTerminalId;
+  final String terminalName;
+  final String branchName;
 
   final OfflineStore _offline = OfflineStore();
 
-  AppSession({required this.api, required this.branchId, required this.posTerminalId}) {
+  AppSession({
+    required this.api,
+    required this.branchId,
+    required this.posTerminalId,
+    this.terminalName = 'POS terminal',
+    this.branchName = '',
+  }) {
     api.canRefresh = () => !_isIdle;
     api.onSessionExpired = _endSession;
   }
@@ -340,6 +347,40 @@ class AppSession extends ChangeNotifier {
     }
   }
 
+  /// Phase 12 product grid source. Online: the server's search (fuzzy,
+  /// category-filtered). Offline — or if the search service is down —
+  /// the local catalog cache by name/SKU, with cached stock, so a cashier
+  /// can still find and sell an item without its barcode. Offline items are
+  /// registered for addToCart's offline path, the same way scanBarcode's
+  /// cache fallback does.
+  Future<List<GridProduct>> browseProducts({String query = '', String? categoryId}) async {
+    _lastError = null;
+    if (!offlineMode) {
+      try {
+        final results = await api.searchProducts(query: query, categoryId: categoryId);
+        return results
+            .map((r) => GridProduct(lookup: r.toProductLookup(), categoryName: r.categoryName, available: null))
+            .toList();
+      } on ApiException catch (e) {
+        if (e.code != 'SEARCH_UNAVAILABLE') {
+          _lastError = e.message;
+          notifyListeners();
+          return [];
+        }
+        // Search service down: fall through to the local cache.
+      } catch (e) {
+        if (!_isNetworkError(e)) rethrow;
+        offlineMode = true;
+        notifyListeners();
+      }
+    }
+    final items = await _offline.searchCatalog(query);
+    for (final i in items) {
+      _offlineCatalogByVariant[i.product.lookup.variantId] = i.product;
+    }
+    return items.map((i) => GridProduct(lookup: i.product.lookup, categoryName: null, available: i.available)).toList();
+  }
+
   Future<bool> addToCart(ProductLookup product, double quantity) async {
     _lastError = null;
     if (offlineMode) {
@@ -535,6 +576,7 @@ class AppSession extends ChangeNotifier {
   }
 
   Future<bool> applyManualDiscount({
+    String authorizedByCode = '',
     required double valuePercent,
     String authorizedBy = '',
     String authorizedPin = '',
@@ -551,6 +593,7 @@ class AppSession extends ChangeNotifier {
         orderId: currentOrder!.orderId,
         valuePercent: valuePercent,
         authorizedBy: authorizedBy,
+        authorizedByCode: authorizedByCode,
         authorizedPin: authorizedPin,
         reason: reason,
       );
@@ -769,4 +812,15 @@ class AppSession extends ChangeNotifier {
     final rand = Random().nextInt(1 << 31).toRadixString(16);
     return '${DateTime.now().microsecondsSinceEpoch}-$rand';
   }
+}
+
+/// One tile in the POS product grid (Phase 12). [available] is the cached
+/// stock when the grid was filled from the offline catalog, null when it
+/// came from the live search (which doesn't carry stock).
+class GridProduct {
+  final ProductLookup lookup;
+  final String? categoryName;
+  final double? available;
+
+  GridProduct({required this.lookup, required this.categoryName, required this.available});
 }
