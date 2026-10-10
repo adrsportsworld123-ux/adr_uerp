@@ -129,7 +129,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text('${line.productName}\n${line.sku} · ${line.quantity} × ₹${line.unitPrice}'),
+                    child: Text([
+                      '${line.productName}\n${line.sku} · ${line.quantity} × ₹${line.unitPrice}',
+                      if (line.openPrice) line.priceApprovedBy == null ? ' · open price' : ' · open price, approved by ${line.priceApprovedBy}',
+                    ].join()),
                   ),
                   Text('₹${line.lineTotal}'),
                 ],

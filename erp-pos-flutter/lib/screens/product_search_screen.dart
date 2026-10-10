@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
 import '../state/session.dart';
+import '../ui/open_price_dialog.dart';
 
 /// Name/category/subcategory product lookup, pushed from PosScreen's AppBar
 /// alongside the barcode field — the barcode field stays the fast path for
@@ -73,9 +74,10 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
   Future<void> _addToCart(ProductSearchResult r) async {
     setState(() => _addingVariantId = r.variantId);
     final session = context.read<AppSession>();
-    final ok = await session.addToCart(r.toProductLookup(), 1);
+    final ok = await addProductToCart(context, session, r.toProductLookup(), 1);
     if (!mounted) return;
     setState(() => _addingVariantId = null);
+    if (!ok && session.lastError == null) return; // price entry cancelled
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(ok ? 'Added ${r.name}' : (session.lastError ?? 'Could not add to cart'))),
     );

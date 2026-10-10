@@ -265,6 +265,7 @@ class AppSession extends ChangeNotifier {
                           'tax_amount': l['tax_amount'],
                           'line_total': l['line_total'],
                           'price_includes_tax': (l['price_includes_tax'] as int? ?? 0) == 1,
+                          'open_price': (l['open_price'] as int? ?? 0) == 1,
                         })
                     .toList(),
                 'payments': o.payments
@@ -388,10 +389,22 @@ class AppSession extends ChangeNotifier {
     return items.map((i) => GridProduct(lookup: i.product.lookup, categoryName: null, available: i.available)).toList();
   }
 
-  Future<bool> addToCart(ProductLookup product, double quantity) async {
+  /// Set when an item needs its price typed (Phase 13 open price): the
+  /// screen shows the price keypad and calls [addToCart] again with an
+  /// [OpenPriceEntry]. Cleared on every [addToCart].
+  OpenPricePrompt? openPricePrompt;
+
+  Future<bool> addToCart(ProductLookup product, double quantity, {OpenPriceEntry? openPrice}) async {
     _lastError = null;
+    openPricePrompt = null;
+    // Known open-price item and no price yet: ask before any round trip.
+    if (product.openPrice != null && openPrice == null) {
+      openPricePrompt = OpenPricePrompt(product: product, range: product.openPrice!, suggestedPrice: product.sellingPrice);
+      notifyListeners();
+      return false;
+    }
     if (offlineMode) {
-      return _addToCartOffline(product, quantity);
+      return _addToCartOffline(product, quantity, openPrice);
     }
     try {
       currentOrder ??= await api.createOrder(
@@ -403,15 +416,33 @@ class AppSession extends ChangeNotifier {
         orderId: currentOrder!.orderId,
         variantId: product.variantId,
         quantity: quantity,
+        unitPrice: openPrice?.price,
+        approverCode: openPrice?.approverCode,
+        approverPin: openPrice?.approverPin,
       );
       currentOrder = updated;
       _currentOrderIsLocal = false;
       notifyListeners();
       return true;
     } on ApiException catch (e) {
-      _lastError = e.code == 'STOCK_UNAVAILABLE'
-          ? 'Not enough stock available for that quantity'
-          : e.message;
+      // The server knows an item is open-price even when this lookup
+      // didn't say so (a search hit carries no range): it answers with
+      // the range, and the keypad opens with it.
+      final range = OpenPriceRange.fromJson(e.details?['open_price']);
+      if (e.code == 'OPEN_PRICE_REQUIRED' && range != null) {
+        openPricePrompt = OpenPricePrompt(
+          product: product,
+          range: range,
+          suggestedPrice: e.details?['suggested_price'] as String? ?? product.sellingPrice,
+        );
+        notifyListeners();
+        return false;
+      }
+      _lastError = switch (e.code) {
+        'STOCK_UNAVAILABLE' => 'Not enough stock available for that quantity',
+        'OPEN_PRICE_NOT_APPROVED' => 'Approval failed. Check the manager\'s employee code and PIN.',
+        _ => e.message,
+      };
       notifyListeners();
       return false;
     } catch (e) {
@@ -421,16 +452,36 @@ class AppSession extends ChangeNotifier {
       // reached the server — start a fresh local order rather than risk
       // adding this line to an order the server never actually saw.
       currentOrder = null;
-      return _addToCartOffline(product, quantity);
+      return _addToCartOffline(product, quantity, openPrice);
     }
   }
 
-  Future<bool> _addToCartOffline(ProductLookup product, double quantity) async {
+  Future<bool> _addToCartOffline(ProductLookup product, double quantity, OpenPriceEntry? openPrice) async {
     final cached = _offlineCatalogByVariant[product.variantId];
     if (cached == null) {
       _lastError = 'This item was not in the offline catalog cache — cannot add it while offline';
       notifyListeners();
       return false;
+    }
+    // Offline, the device enforces the range itself; a price that needs a
+    // manager's approval can't be checked without the server.
+    final range = cached.lookup.openPrice;
+    if (range != null) {
+      if (openPrice == null) {
+        openPricePrompt = OpenPricePrompt(product: product, range: range, suggestedPrice: cached.lookup.sellingPrice);
+        notifyListeners();
+        return false;
+      }
+      if (!range.allows(openPrice.price)) {
+        _lastError = 'The price must be between ₹${range.min} and ₹${range.max}';
+        notifyListeners();
+        return false;
+      }
+      if (range.needsApproval(openPrice.price)) {
+        _lastError = 'Prices above ₹${range.approvalAbove} need a manager\'s approval, which needs a connection';
+        notifyListeners();
+        return false;
+      }
     }
     if (!_currentOrderIsLocal || currentOrder == null) {
       final localId = await _offline.createPendingOrder(branchId, posTerminalId);
@@ -445,7 +496,7 @@ class AppSession extends ChangeNotifier {
       );
       _currentOrderIsLocal = true;
     }
-    currentOrder = await _offline.addLine(currentOrder!.orderId, cached, quantity);
+    currentOrder = await _offline.addLine(currentOrder!.orderId, cached, quantity, unitPrice: range == null ? null : openPrice?.price);
     notifyListeners();
     return true;
   }
@@ -878,6 +929,24 @@ class AppSession extends ChangeNotifier {
     final rand = Random().nextInt(1 << 31).toRadixString(16);
     return '${DateTime.now().microsecondsSinceEpoch}-$rand';
   }
+}
+
+/// An open-price item waiting for its price (Phase 13).
+class OpenPricePrompt {
+  final ProductLookup product;
+  final OpenPriceRange range;
+  final String suggestedPrice;
+
+  OpenPricePrompt({required this.product, required this.range, required this.suggestedPrice});
+}
+
+/// The price the cashier typed, and the approver when it needs one.
+class OpenPriceEntry {
+  final double price;
+  final String? approverCode;
+  final String? approverPin;
+
+  OpenPriceEntry(this.price, {this.approverCode, this.approverPin});
 }
 
 /// One tile in the POS product grid (Phase 12). [available] is the cached

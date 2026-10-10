@@ -10,8 +10,11 @@ class ApiException implements Exception {
   final int statusCode;
   final String code;
   final String message;
+  // The error's `details` object, when the server sends one (e.g.
+  // OPEN_PRICE_REQUIRED carries the item's allowed price range).
+  final Map<String, dynamic>? details;
 
-  ApiException(this.statusCode, this.code, this.message);
+  ApiException(this.statusCode, this.code, this.message, [this.details]);
 
   @override
   String toString() => 'ApiException($statusCode, $code): $message';
@@ -50,6 +53,41 @@ class LoginResult {
       );
 }
 
+/// Phase 13 open-price range (erp-core-go catalog.OpenPrice). The cashier
+/// types a price between [min] and [max]; above [approvalAbove] a manager
+/// approves with employee code + PIN (null = never).
+class OpenPriceRange {
+  final String min;
+  final String max;
+  final String? approvalAbove;
+
+  const OpenPriceRange({required this.min, required this.max, this.approvalAbove});
+
+  static OpenPriceRange? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    return OpenPriceRange(
+      min: json['min'] as String,
+      max: json['max'] as String,
+      approvalAbove: json['approval_above'] as String?,
+    );
+  }
+
+  double get minValue => double.parse(min);
+  double get maxValue => double.parse(max);
+  double? get approvalAboveValue => approvalAbove == null ? null : double.parse(approvalAbove!);
+
+  // Compared in paise, the same way the server does.
+  bool allows(double price) {
+    final p = (price * 100).round();
+    return p >= (minValue * 100).round() && p <= (maxValue * 100).round();
+  }
+
+  bool needsApproval(double price) {
+    final above = approvalAboveValue;
+    return above != null && (price * 100).round() > (above * 100).round();
+  }
+}
+
 class ProductLookup {
   final String productId;
   final String productName;
@@ -57,6 +95,9 @@ class ProductLookup {
   final String sku;
   final String sellingPrice; // kept as the backend's string form — see money-as-string note below
   final String mrp;
+  // Phase 13: non-null for an open-price item; sellingPrice is then only
+  // the suggested price.
+  final OpenPriceRange? openPrice;
 
   ProductLookup({
     required this.productId,
@@ -65,6 +106,7 @@ class ProductLookup {
     required this.sku,
     required this.sellingPrice,
     required this.mrp,
+    this.openPrice,
   });
 
   factory ProductLookup.fromJson(Map<String, dynamic> json) => ProductLookup(
@@ -74,6 +116,7 @@ class ProductLookup {
         sku: json['sku'] as String,
         sellingPrice: json['selling_price'] as String,
         mrp: json['mrp'] as String,
+        openPrice: OpenPriceRange.fromJson(json['open_price']),
       );
 }
 
@@ -165,6 +208,8 @@ class OrderLine {
   final String discountAmount;
   final String taxAmount;
   final String lineTotal;
+  // Phase 13: unitPrice was typed at the till (an open-price item).
+  final bool openPrice;
 
   OrderLine({
     required this.lineId,
@@ -176,6 +221,7 @@ class OrderLine {
     required this.discountAmount,
     required this.taxAmount,
     required this.lineTotal,
+    this.openPrice = false,
   });
 
   factory OrderLine.fromJson(Map<String, dynamic> json) => OrderLine(
@@ -188,6 +234,7 @@ class OrderLine {
         discountAmount: json['discount_amount'] as String,
         taxAmount: json['tax_amount'] as String,
         lineTotal: json['line_total'] as String,
+        openPrice: json['open_price'] as bool? ?? false,
       );
 }
 
@@ -383,6 +430,9 @@ class ReceiptLineData {
   final String quantity;
   final String unitPrice;
   final String lineTotal;
+  // Phase 13: a price typed at the till, and who approved it if needed.
+  final bool openPrice;
+  final String? priceApprovedBy;
 
   ReceiptLineData({
     required this.productName,
@@ -390,6 +440,8 @@ class ReceiptLineData {
     required this.quantity,
     required this.unitPrice,
     required this.lineTotal,
+    this.openPrice = false,
+    this.priceApprovedBy,
   });
 
   factory ReceiptLineData.fromJson(Map<String, dynamic> json) => ReceiptLineData(
@@ -398,6 +450,8 @@ class ReceiptLineData {
         quantity: json['quantity'] as String,
         unitPrice: json['unit_price'] as String,
         lineTotal: json['line_total'] as String,
+        openPrice: json['open_price'] as bool? ?? false,
+        priceApprovedBy: json['price_approved_by'] as String?,
       );
 }
 
@@ -882,15 +936,26 @@ class ApiClient {
     return OrderSummary.fromJson(_decode(resp));
   }
 
+  /// [unitPrice] only for an open-price item (Phase 13), with the
+  /// approver's code + PIN when the price is above its threshold.
   Future<OrderSummary> addLine({
     required String orderId,
     required String variantId,
     required double quantity,
+    double? unitPrice,
+    String? approverCode,
+    String? approverPin,
   }) async {
     final resp = await _http.post(
       Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/lines'),
       headers: _authHeaders,
-      body: jsonEncode({'variant_id': variantId, 'quantity': quantity}),
+      body: jsonEncode({
+        'variant_id': variantId,
+        'quantity': quantity,
+        if (unitPrice != null) 'unit_price': unitPrice,
+        if (approverCode != null && approverCode.isNotEmpty) 'approver_code': approverCode,
+        if (approverPin != null && approverPin.isNotEmpty) 'approver_pin': approverPin,
+      }),
     );
     return OrderSummary.fromJson(_decode(resp));
   }
@@ -1230,6 +1295,7 @@ class ApiClient {
       resp.statusCode,
       err['code'] as String? ?? 'UNKNOWN_ERROR',
       err['message'] as String? ?? 'request failed with status ${resp.statusCode}',
+      err['details'] as Map<String, dynamic>?,
     );
   }
 }

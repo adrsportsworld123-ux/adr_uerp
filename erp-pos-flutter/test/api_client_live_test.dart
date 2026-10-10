@@ -279,4 +279,48 @@ void main() {
     expect(r2.returnNumber, r1.returnNumber, reason: 'same idempotency key -> same return');
     expect((await api.getReturnable(order.orderId)).lines.single.returnableQuantity, '1.000');
   });
+
+  test('Phase 13: an open-price item needs a typed price within its range', () async {
+    if (!serverUp) return;
+
+    const branchId = '22222222-2222-2222-2222-222222222222';
+    const terminalId = '33333333-3333-3333-3333-333333333333';
+    const barcode = '2000000000039'; // an accumulated E2E grocery variant with stock
+    final variantId = (await api.lookupBarcode(barcode)).variantId;
+
+    final login = await http.post(
+      Uri.parse('$_baseUrl/api/v1/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'merchant_code': 'acme-sports', 'email': 'arjun@acme-sports.test', 'password': 'Passw0rd!'}),
+    );
+    final token = (jsonDecode(login.body) as Map<String, dynamic>)['access_token'] as String;
+    Future<int> setOpenPrice(Map<String, dynamic> op) async => (await http.patch(
+          Uri.parse('$_baseUrl/api/v1/products/variants/$variantId'),
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+          body: jsonEncode({'open_price': op}),
+        ))
+            .statusCode;
+
+    expect(await setOpenPrice({'enabled': true, 'min': 10, 'max': 500, 'approval_above': 200}), 200);
+    try {
+      final lookup = await api.lookupBarcode(barcode);
+      expect(lookup.openPrice?.max, '500.00');
+
+      var order = await api.createOrder(
+          branchId: branchId, posTerminalId: terminalId, idempotencyKey: 'flutter-live-op-${DateTime.now().microsecondsSinceEpoch}');
+      try {
+        await api.addLine(orderId: order.orderId, variantId: variantId, quantity: 1);
+        fail('expected OPEN_PRICE_REQUIRED');
+      } on ApiException catch (e) {
+        expect(e.code, 'OPEN_PRICE_REQUIRED');
+        expect(OpenPriceRange.fromJson(e.details?['open_price'])?.approvalAbove, '200.00');
+      }
+      order = await api.addLine(orderId: order.orderId, variantId: variantId, quantity: 1, unitPrice: 150);
+      expect(order.lines.single.unitPrice, '150.00');
+      expect(order.lines.single.openPrice, isTrue);
+      await api.deleteLine(orderId: order.orderId, lineId: order.lines.single.lineId);
+    } finally {
+      expect(await setOpenPrice({'enabled': false}), 200);
+    }
+  });
 }

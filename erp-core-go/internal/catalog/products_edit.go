@@ -34,9 +34,10 @@ var (
 	// errInactiveReference: the category/brand/tax slab exists but was
 	// deactivated (migrations/036) — fine for a product that already
 	// points at it, refused for a new link.
-	errInactiveReference = errors.New("referenced record is inactive")
-	errVariantHasStock   = errors.New("variant has stock")
-	errPricesElsewhere   = errors.New("prices are changed via PATCH /pricing/variants/{id}")
+	errInactiveReference  = errors.New("referenced record is inactive")
+	errVariantHasStock    = errors.New("variant has stock")
+	errOpenPriceForbidden = errors.New("open price needs pricing.manage")
+	errPricesElsewhere    = errors.New("prices are changed via PATCH /pricing/variants/{id}")
 )
 
 // SellablePredicate is the one definition of "this variant can be sold":
@@ -61,6 +62,7 @@ type productDetailVariant struct {
 	OriginalBarcode  *string        `json:"original_barcode"`
 	GeneratedBarcode *string        `json:"generated_barcode"`
 	OnHandTotal      string         `json:"on_hand_total"` // across all branches — why track_batch may be locked
+	OpenPrice        *OpenPrice     `json:"open_price"`    // Phase 13; nil = fixed price
 }
 
 type productDetail struct {
@@ -105,7 +107,8 @@ func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (produc
 		       pv.track_serial, pv.track_batch, pv.plu_code, pv.status,
 		       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'original' ORDER BY created_at LIMIT 1),
 		       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'generated' ORDER BY created_at LIMIT 1),
-		       COALESCE((SELECT SUM(on_hand) FROM stock_levels WHERE variant_id = pv.id), 0)::text
+		       COALESCE((SELECT SUM(on_hand) FROM stock_levels WHERE variant_id = pv.id), 0)::text,
+		       `+OpenPriceColumns+`
 		FROM product_variants pv
 		WHERE pv.product_id = $1
 		ORDER BY pv.sku`, productID)
@@ -117,10 +120,14 @@ func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (produc
 	for rows.Next() {
 		var v productDetailVariant
 		var combo []byte
+		var opEnabled bool
+		var opMin, opMax, opAbove *string
 		if err := rows.Scan(&v.VariantID, &v.SKU, &combo, &v.CostPrice, &v.MRP, &v.SellingPrice, &v.TrackSerial, &v.TrackBatch,
-			&v.PLUCode, &v.Status, &v.OriginalBarcode, &v.GeneratedBarcode, &v.OnHandTotal); err != nil {
+			&v.PLUCode, &v.Status, &v.OriginalBarcode, &v.GeneratedBarcode, &v.OnHandTotal,
+			&opEnabled, &opMin, &opMax, &opAbove); err != nil {
 			return d, err
 		}
+		v.OpenPrice = NewOpenPrice(opEnabled, opMin, opMax, opAbove)
 		v.AttributeCombo = map[string]any{}
 		if len(combo) > 0 {
 			if err := json.Unmarshal(combo, &v.AttributeCombo); err != nil {
@@ -335,6 +342,9 @@ type updateVariantRequest struct {
 	Status         *string        `json:"status"`          // active | inactive | discontinued
 	TrackSerial    *bool          `json:"track_serial"`
 	TrackBatch     *bool          `json:"track_batch"`
+	// Phase 13: open-price range. A pricing decision, so it also needs
+	// pricing.manage (the route itself is catalog.manage).
+	OpenPrice *OpenPriceInput `json:"open_price"`
 	// Present only to refuse them with a pointer to the right endpoint,
 	// rather than silently ignoring a price the caller meant to change.
 	CostPrice    *float64 `json:"cost_price"`
@@ -375,6 +385,12 @@ func (h *ListHandler) UpdateVariant(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be active, inactive, or discontinued")
 		return
 	}
+	if req.OpenPrice != nil {
+		if err := req.OpenPrice.validate(); err != nil {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+	}
 
 	var d productDetail
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -410,6 +426,30 @@ func (h *ListHandler) UpdateVariant(w http.ResponseWriter, r *http.Request) {
 			}
 			if stocked {
 				return errVariantHasStock
+			}
+		}
+
+		if req.OpenPrice != nil {
+			perms, err := authn.FetchPermissions(ctx, tx, claims.UserID)
+			if err != nil {
+				return err
+			}
+			if !authn.HasPermission(perms, "pricing.manage") {
+				return errOpenPriceForbidden
+			}
+			op := req.OpenPrice
+			var min, max *float64
+			above := op.ApprovalAbove
+			if op.Enabled {
+				min, max = &op.Min, &op.Max
+			} else {
+				above = nil
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE product_variants SET open_price = $1, open_price_min = $2, open_price_max = $3,
+				       open_price_approval_above = $4, updated_at = now()
+				WHERE id = $5`, op.Enabled, min, max, above, variantID); err != nil {
+				return err
 			}
 		}
 
@@ -458,7 +498,7 @@ func (h *ListHandler) UpdateVariant(w http.ResponseWriter, r *http.Request) {
 func variantAuditView(v productDetailVariant) map[string]any {
 	return map[string]any{
 		"sku": v.SKU, "attribute_combo": v.AttributeCombo, "plu_code": v.PLUCode, "status": v.Status,
-		"track_serial": v.TrackSerial, "track_batch": v.TrackBatch,
+		"track_serial": v.TrackSerial, "track_batch": v.TrackBatch, "open_price": v.OpenPrice,
 	}
 }
 
@@ -528,6 +568,8 @@ func respondProductEditError(w http.ResponseWriter, err error, internalMsg strin
 		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_REQUIRED", err.Error())
 	case errors.Is(err, errAttributeInvalidValue):
 		httpx.Error(w, http.StatusBadRequest, "ATTRIBUTE_INVALID_VALUE", err.Error())
+	case errors.Is(err, errOpenPriceForbidden):
+		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", "setting an open-price range needs the pricing.manage permission")
 	case errors.Is(err, errVariantHasStock):
 		httpx.Error(w, http.StatusConflict, "VARIANT_HAS_STOCK", "batch tracking can only be switched while the variant holds no stock — bring it to zero first")
 	case errors.Is(err, errInvalidBarcode):

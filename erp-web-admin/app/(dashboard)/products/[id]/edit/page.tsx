@@ -16,6 +16,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
+import { missingPermissionHint, usePermissions } from "@/lib/permissions";
 import {
   CatalogBrand,
   Category,
@@ -453,9 +454,109 @@ function VariantSection({
             Save prices
           </Button>
         </div>
+        <OpenPriceSection variant={variant} onSaved={onSaved} />
         {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
+  );
+}
+
+// Phase 13 open price: the cashier types the price at the till, within a
+// range; above the approval amount a Branch Manager / Merchant Admin
+// approves with code + PIN. A pricing decision, so it needs pricing.manage.
+function OpenPriceSection({ variant, onSaved }: { variant: ProductDetailVariant; onSaved: (p: ProductDetail) => void }) {
+  const { can } = usePermissions();
+  const allowed = can("pricing.manage");
+  const op = variant.open_price;
+  const [enabled, setEnabled] = useState(op != null);
+  const [min, setMin] = useState(op?.min ?? "0");
+  const [max, setMax] = useState(op?.max ?? variant.mrp);
+  const [approval, setApproval] = useState(op?.approval_above ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const id = variant.variant_id;
+
+  const minN = Number(min);
+  const maxN = Number(max);
+  const approvalN = approval.trim() === "" ? null : Number(approval);
+  const problem = !enabled
+    ? null
+    : min.trim() === "" || max.trim() === "" || Number.isNaN(minN) || Number.isNaN(maxN)
+      ? "Enter a minimum and a maximum"
+      : minN < 0 || maxN <= 0 || minN > maxN
+        ? "The minimum must be 0 or more and not above the maximum"
+        : approvalN != null && (Number.isNaN(approvalN) || approvalN < minN || approvalN > maxN)
+          ? "The approval amount must be between the minimum and maximum"
+          : null;
+  const dirty =
+    enabled !== (op != null) ||
+    (enabled && (minN !== Number(op?.min ?? NaN) || maxN !== Number(op?.max ?? NaN) || approvalN !== (op?.approval_above == null ? null : Number(op.approval_above))));
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const body = enabled ? { enabled, min: minN, max: maxN, approval_above: approvalN } : { enabled: false };
+      const p = await api.patch<ProductDetail>(`/api/v1/products/variants/${id}`, { open_price: body });
+      toast.success(enabled ? "Open price saved" : "Open price turned off");
+      onSaved(p);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not save open price");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <fieldset className="border-t pt-4 flex flex-col gap-3" disabled={!allowed} aria-describedby={allowed ? undefined : `op-perm-${id}`}>
+      <legend className="sr-only">Open price</legend>
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        Open price at the till
+      </label>
+      <p className="text-xs text-muted-foreground -mt-2">
+        The cashier types the price when selling (alterations, loose goods, one-off deals). Stock is tracked as usual; the selling price above is shown as
+        the suggestion.
+      </p>
+      {enabled && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`op-min-${id}`}>Lowest price</Label>
+            <Input id={`op-min-${id}`} type="number" min="0" step="0.01" value={min} onChange={(e) => setMin(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`op-max-${id}`}>Highest price</Label>
+            <Input id={`op-max-${id}`} type="number" min="0" step="0.01" value={max} onChange={(e) => setMax(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`op-approval-${id}`}>Manager approval above</Label>
+            <Input
+              id={`op-approval-${id}`}
+              type="number"
+              min="0"
+              step="0.01"
+              value={approval}
+              placeholder="never"
+              onChange={(e) => setApproval(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+      {problem && (
+        <p className="text-sm text-destructive" role="alert">
+          {problem}
+        </p>
+      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {!allowed && (
+        <p id={`op-perm-${id}`} className="text-xs text-muted-foreground">
+          {missingPermissionHint("pricing.manage")}
+        </p>
+      )}
+      <Button variant="outline" className="w-fit" disabled={busy || !dirty || problem != null} onClick={save}>
+        Save open price
+      </Button>
+    </fieldset>
   );
 }
 

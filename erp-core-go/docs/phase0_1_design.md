@@ -166,6 +166,10 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `RETURN_NOT_APPROVED` | 403 | `POST /sales/orders/{id}/returns` | Approval is required and the approver code/PIN is missing, wrong, or not a Branch Manager/Merchant Admin — one answer for all (§3.34) |
 | `RETURN_QUANTITY_EXCEEDED` | 409 | `POST /sales/orders/{id}/returns` | A line isn't on the order, or more than sold minus already returned (§3.34) |
 | `CREDIT_REFUND_EXCEEDED` | 409 | `POST /sales/orders/{id}/returns` | `refund_method: credit` beyond the sale's unpaid credit, or no customer (§3.34) |
+| `OPEN_PRICE_REQUIRED` | 422 | `POST /sales/orders/{id}/lines` | Open-price item added without `unit_price`; `details.open_price` (`min`, `max`, `approval_above`) and `details.suggested_price` let the till open its keypad (§3.35) |
+| `OPEN_PRICE_OUT_OF_RANGE` | 422 | `POST /sales/orders/{id}/lines` | `unit_price` outside the variant's min/max, compared in paise; same `details` (§3.35) |
+| `OPEN_PRICE_NOT_APPROVED` | 403 | `POST /sales/orders/{id}/lines` | Price above `approval_above` and the approver code/PIN is missing, wrong, or not a Branch Manager/Merchant Admin (§3.35) |
+| `PRICE_NOT_EDITABLE` | 409 | `POST /sales/orders/{id}/lines` | `unit_price` sent for a fixed-price item (§3.35) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -1013,6 +1017,52 @@ New error codes: `INVALID_PAIRING_CODE` (401), `BRANCH_INACTIVE`, `TERMINAL_INAC
 - the return window is enforced (409)
 
 New error codes: `ORDER_NOT_RETURNABLE`, `RETURN_WINDOW_CLOSED`, `RETURN_QUANTITY_EXCEEDED`, `CREDIT_REFUND_EXCEEDED` (409), `RETURN_NOT_APPROVED` (403).
+
+### 3.35 Phase 13: open-price items (`internal/catalog/open_price.go`, `internal/sales/open_price.go`, `migrations/039_open_price.sql`, 2026-10-10)
+
+An open-price variant is sold at a price the cashier types: alterations, loose goods, a one-off deal. It is an ordinary stocked variant, so reservation, FIFO batch allocation, stock decrement, returns and journal postings are unchanged. Only the price source differs. Its `selling_price` stays required and is shown as the suggested price.
+
+| Where | What |
+|---|---|
+| `PATCH /products/variants/{id}` `{open_price: {enabled, min, max, approval_above?}}` | Set or clear the range. Needs `pricing.manage` in addition to the route's `catalog.manage` (403 `FORBIDDEN` otherwise). Requires 0 ≤ min ≤ max, max > 0, and `approval_above` (null = never) between them; the DB `CHECK` enforces the same rule. `enabled: false` clears all three. The change is audited with the variant |
+| `GET /products/{id}`, `GET /products/barcode/{code}`, `GET /sync/pull` | Each variant/entry carries `open_price: {min, max, approval_above} \| null` |
+| `POST /sales/orders/{id}/lines` `{variant_id, quantity, unit_price?, approver_code?, approver_pin?}` | See below |
+| Order lines and receipts | `open_price: true`, and `price_approved_by` (the approver's name) when one was needed |
+| `POST /sync/push` | Line field `open_price` is recorded on the line |
+
+**Adding a line.** For an open-price variant, `unit_price` is required (`422 OPEN_PRICE_REQUIRED`) and must be within min/max (`422 OPEN_PRICE_OUT_OF_RANGE`). The comparison is in paise, and both bounds are inclusive. A price strictly above `approval_above` needs an active Branch Manager or Merchant Admin's employee code and PIN (`403 OPEN_PRICE_NOT_APPROVED`, the same check returns use). The approver is stored on the line (`price_approved_by`).
+
+The price is in the product's own tax basis (`price_includes_tax`). Every open-price line writes an `audit_logs` entry with the entered price, the catalog's suggested price and the approver. A refused request reserves nothing.
+
+For a fixed-price variant, sending `unit_price` is refused (`409 PRICE_NOT_EDITABLE`), so the field can't be used to reprice ordinary items. Quantity changes keep the entered price, and a return refunds the price actually charged.
+
+**Offline.** The device enforces min/max from its cached catalog and refuses any price that would need approval, because approval needs the server. `POST /sync/push` records the line's `open_price` flag but never re-validates it: the sale was already paid for, the same rule as `NEGATIVE_STOCK`.
+
+**Search.** OpenSearch hits don't carry the range, and the index was deliberately not changed. When a search hit is added without a price, the server's `OPEN_PRICE_REQUIRED` details give the POS the range instead.
+
+**Verified live** (throwaway API on the compose seed DB, 28 checks):
+- **Configuration:**
+  - a POS user can't configure it (403)
+  - an invalid range is refused (400)
+  - the range appears in the detail, barcode lookup and pull, and is audited
+- **Validation:** missing, below-min and above-max prices are refused (422).
+- **Approval:**
+  - above the threshold with no approver, a wrong PIN, or a POS-user approver gives 403
+  - refused attempts reserve nothing
+  - an approved line records the approver
+  - a price exactly at the threshold needs no approval
+- **Stock:** normal reservation and FIFO batch allocation.
+- **Fixed-price items:** sending a price gives 409.
+- **Audit:** an entry per line, with the approver and the catalog price.
+- **After the sale:**
+  - a quantity change keeps the entered price
+  - checkout works, and the receipt shows the flag and the approver
+  - a return refunds the entered price
+- **Sync and disabling:** sync push records the flag, and disabling the range clears all of it.
+
+`internal/catalog/open_price_test.go` pins the paise comparison, the threshold boundary and range validation.
+
+New error codes: `OPEN_PRICE_REQUIRED`, `OPEN_PRICE_OUT_OF_RANGE` (422), `OPEN_PRICE_NOT_APPROVED` (403), `PRICE_NOT_EDITABLE` (409).
 
 ---
 

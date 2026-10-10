@@ -80,6 +80,9 @@ class OfflineStore {
         'igst_rate': (e['igst_rate'] as num).toDouble(),
         'cess_rate': (e['cess_rate'] as num).toDouble(),
         'price_includes_tax': (e['price_includes_tax'] as bool? ?? false) ? 1 : 0,
+        'open_price_min': (e['open_price'] as Map<String, dynamic>?)?['min'],
+        'open_price_max': (e['open_price'] as Map<String, dynamic>?)?['max'],
+        'open_price_approval_above': (e['open_price'] as Map<String, dynamic>?)?['approval_above'],
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
@@ -116,6 +119,12 @@ class OfflineStore {
     final rows = await db.query('catalog', where: 'barcode = ?', whereArgs: [code]);
     if (rows.isEmpty) return null;
     final r = rows.first;
+    return _productFromRow(r);
+  }
+
+  static CachedProduct _productFromRow(Map<String, Object?> r) {
+    final min = r['open_price_min'] as String?;
+    final max = r['open_price_max'] as String?;
     return CachedProduct(
       ProductLookup(
         productId: r['product_id'] as String,
@@ -124,6 +133,9 @@ class OfflineStore {
         sku: r['sku'] as String,
         sellingPrice: r['selling_price'] as String,
         mrp: r['mrp'] as String,
+        openPrice: min == null || max == null
+            ? null
+            : OpenPriceRange(min: min, max: max, approvalAbove: r['open_price_approval_above'] as String?),
       ),
       r['cgst_rate'] as double,
       r['sgst_rate'] as double,
@@ -153,24 +165,7 @@ class OfflineStore {
       [q, q, q, query.trim(), limit],
     );
     return rows
-        .map((r) => CachedCatalogItem(
-              CachedProduct(
-                ProductLookup(
-                  productId: r['product_id'] as String,
-                  productName: r['product_name'] as String,
-                  variantId: r['variant_id'] as String,
-                  sku: r['sku'] as String,
-                  sellingPrice: r['selling_price'] as String,
-                  mrp: r['mrp'] as String,
-                ),
-                r['cgst_rate'] as double,
-                r['sgst_rate'] as double,
-                r['igst_rate'] as double,
-                r['cess_rate'] as double,
-                priceIncludesTax: (r['price_includes_tax'] as int? ?? 0) == 1,
-              ),
-              double.tryParse(r['available'] as String? ?? ''),
-            ))
+        .map((r) => CachedCatalogItem(_productFromRow(r), double.tryParse(r['available'] as String? ?? '')))
         .toList();
   }
 
@@ -188,9 +183,12 @@ class OfflineStore {
     return id;
   }
 
-  Future<OrderSummary> addLine(String pendingOrderId, CachedProduct product, double quantity) async {
+  /// [unitPrice] is a typed open price (Phase 13); the caller has already
+  /// checked it against the item's range.
+  Future<OrderSummary> addLine(String pendingOrderId, CachedProduct product, double quantity, {double? unitPrice}) async {
     final db = await LocalDb.instance.db;
-    final unitPrice = double.parse(product.lookup.sellingPrice);
+    final openPrice = unitPrice != null;
+    unitPrice ??= double.parse(product.lookup.sellingPrice);
     final taxRatePct = product.cgstRate + product.sgstRate + product.igstRate + product.cessRate;
     // Mirrors erp-core-go's internal/taxcalc.ComputeLine exactly, so a sale
     // rung up offline bills the same total the server would have:
@@ -220,6 +218,7 @@ class OfflineStore {
       'tax_amount': taxAmount,
       'line_total': lineTotal,
       'price_includes_tax': product.priceIncludesTax ? 1 : 0,
+      'open_price': openPrice ? 1 : 0,
     });
 
     return _recalcAndLoad(pendingOrderId);
@@ -341,6 +340,7 @@ class OfflineStore {
         discountAmount: discountAmount.toStringAsFixed(2),
         taxAmount: taxAmount.toStringAsFixed(2),
         lineTotal: lineTotal.toStringAsFixed(2),
+        openPrice: (r['open_price'] as int? ?? 0) == 1,
       ));
     }
 

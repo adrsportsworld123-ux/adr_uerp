@@ -714,13 +714,22 @@ Done so far:
   - manager code plus PIN on the shared pad when the policy requires it
   - one idempotency key per screen, so a retry never refunds twice
 - **Admin Return Policy page** (`sales.settings`): approval on or off, and an optional return window.
+- **Open-price items** (`migrations/039`, §3.35):
+  - a per-variant min/max and an optional manager-approval threshold, set on the admin product edit page (`pricing.manage`)
+  - the till's price keypad opens from scan, grid or search; the range comes from the lookup, or from `OPEN_PRICE_REQUIRED` for search hits
+  - approval by manager code and PIN, reopening the keypad after a failed PIN
+  - the approver is recorded on the line, and each line is audited
+  - offline sales are enforced on the device and can't go above the threshold
+  - normal stock and batch handling
 - **Tests:**
   - 32 live API checks
   - Flutter widget tests for history plus an approval-retry return and for offline queued sales, and a live client test
   - `e2e/phase13-return-policy.spec.ts`
   - the a11y sweep now covers Terminals and Return Policy
 
-Still to do in this phase: open-price items, shifts (open, cash in/out, X/Z close), the sync queue screen, product lookup and labels from the POS. **Migration `038` must be applied to the host database.**
+Open-price tests: 28 live API checks, Go unit tests, 2 Flutter widget tests plus a live client test, and `e2e/phase13-open-price.spec.ts`.
+
+Still to do in this phase: shifts (open, cash in/out, X/Z close), the sync queue screen, product lookup and labels from the POS. **Migrations `038` and `039` must be applied to the host database.**
 
 **Size: XL | Goal: The POS covers the counter's whole day, from open shift to close, not just a single sale.**
 

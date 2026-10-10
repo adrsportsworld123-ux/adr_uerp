@@ -1141,6 +1141,15 @@ export interface ProductDetailVariant {
   generated_barcode: string | null;
   // Stock across all branches — batch tracking can only be switched at 0.
   on_hand_total: string;
+  // Phase 13: null = fixed price; otherwise the cashier types a price in
+  // [min, max], and above approval_above a manager approves.
+  open_price: OpenPrice | null;
+}
+
+export interface OpenPrice {
+  min: string;
+  max: string;
+  approval_above: string | null;
 }
 
 export interface ProductDetail {

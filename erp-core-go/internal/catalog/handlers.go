@@ -38,6 +38,9 @@ type barcodeResponse struct {
 	// as the cart line's quantity, not 1, so the line prices correctly
 	// for what was actually weighed.
 	ComputedWeightKg *string `json:"computed_weight_kg,omitempty"`
+	// Phase 13: non-nil for an open-price variant — the cashier enters
+	// the price; SellingPrice is only the suggestion.
+	OpenPrice *OpenPrice `json:"open_price"`
 }
 
 // ServeHTTP is the ≤6-second POS flow's first hop: scan a barcode, get back
@@ -65,6 +68,8 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var resp barcodeResponse
 	var sellable bool
+	var opEnabled bool
+	var opMin, opMax, opAbove *string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if isWeighed {
 			row := tx.QueryRow(ctx, `
@@ -72,7 +77,7 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 				       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
-				       `+SellablePredicate+`
+				       `+SellablePredicate+`, `+OpenPriceColumns+`
 				FROM product_variants pv
 				JOIN products p ON p.id = pv.product_id
 				LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
@@ -81,9 +86,11 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 				&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
 				&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax, &sellable,
+				&opEnabled, &opMin, &opMax, &opAbove,
 			); err != nil {
 				return err
 			}
+			resp.OpenPrice = NewOpenPrice(opEnabled, opMin, opMax, opAbove)
 			weightStr := strconv.FormatFloat(weightKg, 'f', 3, 64)
 			resp.ComputedWeightKg = &weightStr
 			return nil
@@ -94,17 +101,22 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
-			       `+SellablePredicate+`
+			       `+SellablePredicate+`, `+OpenPriceColumns+`
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 			WHERE b.code = $1`, code)
-		return row.Scan(
+		if err := row.Scan(
 			&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 			&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
 			&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax, &sellable,
-		)
+			&opEnabled, &opMin, &opMax, &opAbove,
+		); err != nil {
+			return err
+		}
+		resp.OpenPrice = NewOpenPrice(opEnabled, opMin, opMax, opAbove)
+		return nil
 	})
 
 	if err == pgx.ErrNoRows {

@@ -80,6 +80,10 @@ type orderLine struct {
 	// always the pre-tax amount, for either mode.
 	TaxableValue     string `json:"taxable_value"`
 	PriceIncludesTax bool   `json:"price_includes_tax"`
+	// Phase 13: UnitPrice was typed at the till (an open-price item).
+	OpenPrice bool `json:"open_price"`
+	// PriceApprovedBy: the approver's name when the open price needed one.
+	PriceApprovedBy *string `json:"price_approved_by,omitempty"`
 }
 
 // ---------------------------------------------------------------------
@@ -197,6 +201,11 @@ func CreateCart(ctx context.Context, tx pgx.Tx, branchID, posTerminalID, cashier
 type addLineRequest struct {
 	VariantID string  `json:"variant_id"`
 	Quantity  float64 `json:"quantity"`
+	// Phase 13 open-price items only (open_price.go): the price the
+	// cashier entered, and the approver when it's above the threshold.
+	UnitPrice    *float64 `json:"unit_price"`
+	ApproverCode string   `json:"approver_code"`
+	ApproverPIN  string   `json:"approver_pin"`
 }
 
 func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
@@ -217,14 +226,35 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.UnitPrice != nil && *req.UnitPrice < 0 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "unit_price can't be negative")
+		return
+	}
+
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var err error
-		resp, err = AddLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity)
-		return err
+		override, err := resolveOpenPrice(ctx, tx, req.VariantID, req)
+		if err != nil {
+			return err
+		}
+		if override == nil {
+			resp, err = AddLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity)
+			return err
+		}
+		if resp, err = addLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity, override); err != nil {
+			return err
+		}
+		return auditOpenPriceLine(ctx, tx, orderID, req.VariantID, claims.UserID, *override)
 	})
 
+	var ope *openPriceError
+	if errors.As(err, &ope) {
+		ope.write(w)
+		return
+	}
 	switch {
+	case errors.Is(err, errPriceNotEditable):
+		httpx.Error(w, http.StatusConflict, "PRICE_NOT_EDITABLE", err.Error())
 	case errors.Is(err, ErrInsufficientStock):
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "requested quantity exceeds available stock")
 	case errors.Is(err, inventory.ErrExpiredOrUntrackedStock):
@@ -254,6 +284,10 @@ func AddLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 type LinePriceOverride struct {
 	UnitPrice        float64
 	PriceIncludesTax bool
+	// Phase 13: set for a cashier-entered open price (open_price.go);
+	// ApprovedBy is the approving user's id when one was needed.
+	OpenPrice  bool
+	ApprovedBy string
 }
 
 // AddLineToCartAtPrice is AddLineToCart with the price fixed by the
@@ -309,7 +343,10 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 	// as price_rule_id. pricing.ResolveLinePriceAt owns that precedence.
 	var sellingPrice float64
 	var priceRuleID *string
+	var openPrice bool
+	var approvedBy string
 	if override != nil {
+		openPrice, approvedBy = override.OpenPrice, override.ApprovedBy
 		sellingPrice = override.UnitPrice
 		priceIncludesTax = override.PriceIncludesTax
 	} else {
@@ -369,10 +406,10 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 
 	var lineID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, price_rule_id)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8)
+		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, price_rule_id, open_price, price_approved_by)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid)
 		RETURNING id`,
-		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax, priceRuleID).Scan(&lineID); err != nil {
+		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax, priceRuleID, openPrice, approvedBy).Scan(&lineID); err != nil {
 		return resp, err
 	}
 	if trackBatch {
@@ -830,10 +867,11 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 	rows, err := tx.Query(ctx, `
 		SELECT sol.id, sol.variant_id, pv.sku, p.name, sol.quantity::text,
 		       sol.unit_price::text, sol.discount_amount::text, sol.tax_amount::text, sol.line_total::text,
-		       sol.taxable_value::text, sol.price_includes_tax
+		       sol.taxable_value::text, sol.price_includes_tax, sol.open_price, au.name
 		FROM sales_order_lines sol
 		JOIN product_variants pv ON pv.id = sol.variant_id
 		JOIN products p ON p.id = pv.product_id
+		LEFT JOIN users au ON au.id = sol.price_approved_by
 		WHERE sol.sales_order_id = $1
 		ORDER BY sol.created_at`, orderID)
 	if err != nil {
@@ -846,7 +884,7 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 		var l orderLine
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity,
 			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal,
-			&l.TaxableValue, &l.PriceIncludesTax); err != nil {
+			&l.TaxableValue, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

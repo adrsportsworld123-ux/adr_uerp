@@ -25,7 +25,9 @@ class LocalDb {
       // v2 (erp-core-go migrations/033): catalog.price_includes_tax and
       // pending_order_lines.price_includes_tax, so an offline sale prices
       // a GST-inclusive product exactly like the server would.
-      version: 2,
+      // v3 (erp-core-go migrations/039): open-price range on the cached
+      // catalog, and pending_order_lines.open_price for a typed price.
+      version: 3,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
@@ -34,6 +36,14 @@ class LocalDb {
           // cached before this column existed would never be re-sent and
           // would keep defaulting to exclusive. Forget the watermark to
           // force one full re-pull.
+          await db.delete('sync_meta', where: 'key = ?', whereArgs: ['last_pull_at']);
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE catalog ADD COLUMN open_price_min TEXT');
+          await db.execute('ALTER TABLE catalog ADD COLUMN open_price_max TEXT');
+          await db.execute('ALTER TABLE catalog ADD COLUMN open_price_approval_above TEXT');
+          await db.execute('ALTER TABLE pending_order_lines ADD COLUMN open_price INTEGER NOT NULL DEFAULT 0');
+          // Same reason as v2: re-pull once so cached rows get the range.
           await db.delete('sync_meta', where: 'key = ?', whereArgs: ['last_pull_at']);
         }
       },
@@ -52,7 +62,10 @@ class LocalDb {
             sgst_rate REAL NOT NULL,
             igst_rate REAL NOT NULL,
             cess_rate REAL NOT NULL,
-            price_includes_tax INTEGER NOT NULL DEFAULT 0
+            price_includes_tax INTEGER NOT NULL DEFAULT 0,
+            open_price_min TEXT,
+            open_price_max TEXT,
+            open_price_approval_above TEXT
           )
         ''');
         await db.execute('''
@@ -98,6 +111,7 @@ class LocalDb {
             tax_amount REAL NOT NULL,
             line_total REAL NOT NULL,
             price_includes_tax INTEGER NOT NULL DEFAULT 0,
+            open_price INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (pending_order_id) REFERENCES pending_orders (id)
           )
         ''');

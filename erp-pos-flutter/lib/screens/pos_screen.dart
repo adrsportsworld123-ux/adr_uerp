@@ -8,6 +8,7 @@ import '../api/api_client.dart';
 import '../state/session.dart';
 import '../ui/approval_pin_pad.dart';
 import '../ui/format.dart';
+import '../ui/open_price_dialog.dart';
 import '../ui/theme.dart';
 import 'held_orders_screen.dart';
 import 'orders_screen.dart';
@@ -112,8 +113,8 @@ class _PosScreenState extends State<PosScreen> {
     final session = context.read<AppSession>();
     await _withBusy(() async {
       final product = await session.scanBarcode(trimmed);
-      if (product != null) {
-        if (await session.addToCart(product, 1)) {
+      if (product != null && mounted) {
+        if (await addProductToCart(context, session, product, 1)) {
           _selectLast(session);
           _scanController.clear();
         }
@@ -125,7 +126,7 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _addFromGrid(GridProduct item) async {
     final session = context.read<AppSession>();
-    final ok = await _withBusy(() => session.addToCart(item.lookup, 1));
+    final ok = await _withBusy(() => addProductToCart(context, session, item.lookup, 1));
     if (ok == true) {
       _selectLast(session);
     } else if (session.lastError != null) {

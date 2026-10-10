@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/httpx"
 )
 
@@ -28,6 +29,10 @@ type catalogEntry struct {
 	// (migrations/033). An offline device must price a line the same way
 	// the server would — see erp-pos-flutter's OfflineStore.addLine.
 	PriceIncludesTax bool `json:"price_includes_tax"`
+	// Phase 13: an open-price variant's range; nil = fixed price. Offline,
+	// the device enforces min/max and refuses any price that would need
+	// approval (approval needs the server).
+	OpenPrice *catalog.OpenPrice `json:"open_price"`
 }
 
 type stockEntry struct {
@@ -69,7 +74,8 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			SELECT b.code, p.id, p.name, COALESCE(p.hsn_code, ''),
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
-			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax
+			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
+			       `+catalog.OpenPriceColumns+`
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
@@ -83,11 +89,15 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 		resp.Catalog = []catalogEntry{}
 		for catalogRows.Next() {
 			var c catalogEntry
+			var opEnabled bool
+			var opMin, opMax, opAbove *string
 			if err := catalogRows.Scan(&c.Barcode, &c.ProductID, &c.ProductName, &c.HSNCode,
 				&c.VariantID, &c.SKU, &c.SellingPrice, &c.MRP,
-				&c.CGSTRate, &c.SGSTRate, &c.IGSTRate, &c.CessRate, &c.PriceIncludesTax); err != nil {
+				&c.CGSTRate, &c.SGSTRate, &c.IGSTRate, &c.CessRate, &c.PriceIncludesTax,
+				&opEnabled, &opMin, &opMax, &opAbove); err != nil {
 				return err
 			}
+			c.OpenPrice = catalog.NewOpenPrice(opEnabled, opMin, opMax, opAbove)
 			resp.Catalog = append(resp.Catalog, c)
 		}
 		if err := catalogRows.Err(); err != nil {

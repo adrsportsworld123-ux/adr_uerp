@@ -121,6 +121,12 @@ Returns are online-only, and an offline sale can't be returned until it has sync
 
 `test/orders_returns_test.dart` uses its own SQLite directory, because test files run concurrently and share the default one. `api_client_live_test.dart` honours `ERP_API_URL` for running against a throwaway API.
 
+**Open-price items (Phase 13).** Always add items through `addProductToCart` in `lib/ui/open_price_dialog.dart`, never through `session.addToCart` directly. It opens the price keypad (`OpenPriceDialog`) when `AppSession.openPricePrompt` is set, which happens in two cases:
+- the lookup carried `open_price`
+- the server answered `OPEN_PRICE_REQUIRED`, which is what happens for search hits, since they carry no range
+
+It also reopens the keypad after a failed approval PIN. Offline, the device enforces the cached range (local DB v3 adds the range columns and `pending_order_lines.open_price`) and refuses prices that need approval.
+
 **Known gap, still real:** `GET /sales/orders/{id}` doesn't yet return
 line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second

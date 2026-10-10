@@ -40,6 +40,10 @@ type pushLine struct {
 	// priced this line with (see Pull). Absent from older clients, which
 	// only ever priced tax-exclusive — false is the correct default.
 	PriceIncludesTax bool `json:"price_includes_tax"`
+	// OpenPrice: the cashier typed UnitPrice (Phase 13). Recorded, never
+	// re-validated: the sale already happened and was paid for offline,
+	// the same rule NEGATIVE_STOCK follows.
+	OpenPrice bool `json:"open_price"`
 }
 
 type pushPayment struct {
@@ -141,10 +145,10 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 		for _, l := range o.Lines {
 			var lineID string
 			if err := tx.QueryRow(ctx, `
-				INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)
+				INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, open_price)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
 				RETURNING id`,
-				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal, l.PriceIncludesTax).Scan(&lineID); err != nil {
+				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal, l.PriceIncludesTax, l.OpenPrice).Scan(&lineID); err != nil {
 				return err
 			}
 
