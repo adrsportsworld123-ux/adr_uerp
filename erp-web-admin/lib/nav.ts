@@ -127,7 +127,10 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "reports",
     label: "Reports",
     icon: ChartColumn,
-    items: [{ href: "/reports", label: "Reports" }],
+    items: [
+      { href: "/reports", label: "Reports" },
+      { href: "/reports/builder", label: "Report Builder", feature: "custom_report_builder" },
+    ],
   },
   {
     id: "organization",

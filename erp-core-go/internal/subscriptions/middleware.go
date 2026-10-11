@@ -23,7 +23,7 @@ var featureRoutes = []struct {
 	{regexp.MustCompile(`^/gst/`), FeatureGSTCompliance},
 	{regexp.MustCompile(`^/sales/orders/[^/]+/(e-invoice|e-way-bill)`), FeatureGSTCompliance},
 	{regexp.MustCompile(`^/ai/`), FeatureAdvancedReports},
-	{regexp.MustCompile(`^/report-templates`), FeatureCustomReportBuilder},
+	{regexp.MustCompile(`^/report-builder/`), FeatureCustomReportBuilder},
 	{regexp.MustCompile(`^/loyalty/`), FeatureLoyaltyCRM},
 	{regexp.MustCompile(`^/sales/orders/[^/]+/loyalty/`), FeatureLoyaltyCRM},
 	{regexp.MustCompile(`^/payroll/`), FeaturePayroll},
@@ -44,7 +44,7 @@ func FeatureFor(path string) string {
 // limits. Invoices, sales, purchases, ledgers, GST and the audit log are
 // statutory records and are deliberately not here: every plan reads and
 // exports them in full.
-var retentionRoutes = []string{"/reports/", "/ai/", "/cash-reconciliation/history", "/inventory/reconciliation/history", "/report-templates"}
+var retentionRoutes = []string{"/reports/", "/ai/", "/cash-reconciliation/history", "/inventory/reconciliation/history"}
 
 var dateParams = []string{"date", "from", "from_date", "start_date", "start"}
 

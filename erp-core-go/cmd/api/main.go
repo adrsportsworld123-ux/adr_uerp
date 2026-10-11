@@ -23,6 +23,7 @@ import (
 	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/purchase"
 	"erp-core-go/internal/quotations"
+	"erp-core-go/internal/reportbuilder"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
 	"erp-core-go/internal/subscriptions"
@@ -111,10 +112,13 @@ func main() {
 	go (&pricing.Handler{DB: database, Search: searchClient}).RunScheduledPriceSweeper(ctx, time.Minute)
 	// Phase 16: subscription lifecycle transitions and renewal invoices.
 	go subscriptions.RunSweeper(ctx, database, time.Hour)
+	// Phase 16: background report exports (and pick-up after a restart).
+	reportRunner := reportbuilder.NewRunner(database)
+	go reportRunner.Run(ctx, 30*time.Second)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify, einv, llmClient, cfg.HoldDurationMinutes),
+		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify, einv, llmClient, cfg.HoldDurationMinutes, reportRunner),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

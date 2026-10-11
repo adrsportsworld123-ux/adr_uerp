@@ -30,6 +30,7 @@ import (
 	"erp-core-go/internal/purchase"
 	"erp-core-go/internal/quotations"
 	"erp-core-go/internal/rbac"
+	"erp-core-go/internal/reportbuilder"
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
@@ -38,7 +39,7 @@ import (
 	"erp-core-go/internal/terminals"
 )
 
-func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int) http.Handler {
+func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int, reportRunner *reportbuilder.Runner) http.Handler {
 	r := chi.NewRouter()
 	r.Use(CORS)
 	r.Use(middleware.RequestID)
@@ -141,6 +142,24 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "subscription.manage")).Get("/subscription", subH.Get)
 			protected.With(authn.RequirePermission(database, "subscription.manage")).Post("/subscription/change", subH.Change)
 			protected.With(authn.RequirePermission(database, "subscription.manage")).Post("/subscription/invoices/{id}/pay", subH.Pay)
+
+			// Phase 16: the custom report builder (internal/reportbuilder);
+			// the whole /report-builder prefix needs the plan feature.
+			rb := &reportbuilder.Handler{DB: database, Runner: reportRunner}
+			build := authn.RequirePermission(database, "reports.build")
+			protected.Get("/report-builder/datasets", rb.Datasets)
+			protected.With(build).Post("/report-builder/query", rb.Query)
+			protected.Get("/report-builder/templates", rb.ListTemplates)
+			protected.With(build).Post("/report-builder/templates", rb.CreateTemplate)
+			protected.Get("/report-builder/templates/{id}", rb.GetTemplate)
+			protected.With(build).Put("/report-builder/templates/{id}", rb.UpdateTemplate)
+			protected.With(build).Delete("/report-builder/templates/{id}", rb.DeleteTemplate)
+			protected.With(build).Post("/report-builder/templates/{id}/duplicate", rb.DuplicateTemplate)
+			protected.Post("/report-builder/templates/{id}/run", rb.RunTemplate)
+			protected.Post("/report-builder/runs", rb.StartRun)
+			protected.Get("/report-builder/runs", rb.ListRuns)
+			protected.Get("/report-builder/runs/{id}", rb.GetRun)
+			protected.Get("/report-builder/runs/{id}/download", rb.Download)
 			protected.Post("/auth/logout", logout.ServeHTTP)
 			// Phase 11: the caller's permission codes (a UI hint — every
 			// gate below still enforces on its own), and "what uses this

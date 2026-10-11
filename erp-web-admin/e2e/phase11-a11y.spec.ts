@@ -25,6 +25,7 @@ const SCREENS = [
   "/rbac/data-access",
   "/rbac/approval-policies",
   "/subscription",
+  "/reports/builder",
 ];
 
 async function login(page: Page) {
