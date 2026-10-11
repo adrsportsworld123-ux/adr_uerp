@@ -130,7 +130,10 @@ void main() {
     order = await api.addLine(orderId: order.orderId, variantId: variantId, quantity: 1);
 
     final walkInName = 'Flutter Credit Test ${DateTime.now().microsecondsSinceEpoch}';
-    final customerId = await api.attachCustomer(orderId: order.orderId, name: walkInName, phone: '9999911111');
+    // A fresh phone per run: attach-by-phone reuses an existing customer,
+    // whose unpaid credit from earlier runs would push it over the limit.
+    final phone = '9${DateTime.now().millisecondsSinceEpoch % 1000000000}'.padRight(10, '0');
+    final customerId = await api.attachCustomer(orderId: order.orderId, name: walkInName, phone: phone);
 
     // Setting a credit limit is an admin/back-office action (erp-web-admin's
     // Credit section on the customer page, gated by credit.manage) — not
@@ -148,7 +151,8 @@ void main() {
     final creditPatchResp = await http.patch(
       Uri.parse('$_baseUrl/api/v1/customers/$customerId/credit'),
       headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $adminToken'},
-      body: jsonEncode({'credit_limit': 5000}),
+      // Above this cart's total: other suites reprice the seed bat.
+      body: jsonEncode({'credit_limit': (double.parse(order.grandTotal) + 1000).ceil()}),
     );
     expect(creditPatchResp.statusCode, 200);
 

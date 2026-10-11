@@ -190,6 +190,17 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `DISCOUNT_ABOVE_POLICY` | 400 | `POST /sales/orders/{id}/discounts` | Above the last tier of the merchant's discount policy (§3.43) |
 | `ADJUSTMENT_NOT_APPROVED` | 403 | `POST /inventory/adjustments` | Worth more than the policy's stock threshold (quantity × cost) without a valid approver code + PIN (§3.43) |
 | `BELOW_COST_NOT_ALLOWED` | 403 | `PATCH /pricing/variants/{id}` (`override: true`) | The policy limits below-cost prices to a higher role (§3.43) |
+| `SUBSCRIPTION_EXPIRED` | 402 | any write on a tenant route while the subscription is expired or cancelled (reads, exports, sign-out, `/subscription/*` and `/sync/push` still work) | The account is read-only until renewed (§3.44) |
+| `FEATURE_NOT_IN_PLAN` | 403 | `/gst/*`, e-invoice and e-way bill, `/ai/*`, `/loyalty/*`, loyalty redemption, `/payroll/*`, statutory config and salary structures, `/report-builder/*` | The plan lacks the feature; `details.available_in` names the first plan with it (§3.44) |
+| `PLAN_LIMIT_REACHED` | 403 | `POST /branches`, `POST /pos-terminals`, `POST /products`, the same `PATCH`es setting `status: active`, `POST /sales/orders`, `POST /quotations/{id}/convert` | One more would exceed the plan's limit; `details` has `limit_kind`, `used`, `limit`, `upgrade_to` (§3.44) |
+| `RETENTION_LIMIT` | 403 | `/reports/*`, `/ai/*`, cash and inventory reconciliation history, report builder | A date before the plan's report history; statutory records are never limited (§3.44) |
+| `SAME_PLAN` / `PLAN_NOT_OFFERED` | 409 | `POST /subscription/change` | Already on that plan (and not lapsed) / the plan is retired (§3.44) |
+| `INVOICE_NOT_DUE` | 409 | `POST /subscription/invoices/{id}/pay`, console invoice actions | The invoice was voided (§3.44) |
+| `MERCHANT_CODE_TAKEN` | 409 | `POST /platform/merchants` | The merchant code is in use (§3.45) |
+| `INVALID_REPORT` | 400 | `/report-builder/*` | The spec names an unknown field, a wrong operator or aggregation, no or over-long date range (§3.46) |
+| `REPORT_TOO_HEAVY` | 422 | `POST /report-builder/query`, `.../templates/{id}/run` | The preview hit its 15 s limit: narrow it or export it (§3.46) |
+| `NOT_OWNER` | 403 | `PUT`/`DELETE /report-builder/templates/{id}` | Only the template's owner can change it; duplicate it instead (§3.46) |
+| `RUN_NOT_READY` | 409 | `GET /report-builder/runs/{id}/download` | The export is still queued or running, or failed (§3.46) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
 | `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
@@ -1468,6 +1479,210 @@ It checks that the user is active, the PIN matches, a role meets the level, and 
 - **Journal vouchers:** with approval on and a ₹500 threshold, a ₹100 voucher posts directly; a ₹1,000 one gives `JV_APPROVAL_REQUIRED` and defaults to submitted.
 
 All earlier suites pass again: returns, shifts, back-office sales, JV, labels, open price, Stock Review and lookup. In the admin, `e2e/phase15-data-access.spec.ts` and `e2e/phase15-approval-policies.spec.ts` cover both pages and check each change against what the server then allows. `test/approval_policy_test.dart` covers the POS tier lookup and threshold parsing.
+
+### 3.44 Phase 16: plans, entitlements and the subscription lifecycle (`internal/subscriptions`, `migrations/046_subscriptions.sql`, 2026-10-11)
+
+**Decisions on record (2026-10-11):**
+- The four FRD §19 tiers, as written, are the plans.
+- A plan's retention limits only how far back reports reach. It never deletes anything.
+- Existing merchants are grandfathered on Enterprise with no expiry.
+
+**Plans are data** (`plans`, no tenant, edited from the SaaS console):
+
+| Plan | Price per POS / month | Branches | Tills | Products | Sales / month | Report history | Features beyond basic reports |
+|---|---|---|---|---|---|---|---|
+| Freemium | ₹0 | 1 | 1 | 100 | 500 | 30 days | none |
+| Starter | ₹999 | 3 | 5 | 5,000 | unlimited | 1 year | GST compliance |
+| Professional | ₹1,999 | 10 | 25 | unlimited | unlimited | 3 years | + advanced reports (AI), custom report builder, loyalty/CRM, API access |
+| Enterprise | ₹3,999 | unlimited | unlimited | unlimited | unlimited | lifetime | + payroll, multi-currency, white-label, custom integrations |
+
+Paid plans have a 14-day trial and 7 days' grace. Multi-currency, white-label, API access and custom integrations are recorded on plans but have nothing to gate yet. A merchant with no `subscriptions` row is treated as Freemium, active.
+
+**Lifecycle, computed on every read.** `Effective()` works out the status from the stored dates and the plan's grace period, so enforcement never waits for a sweeper:
+- trial until `trial_ends_at`, then grace, then expired;
+- active until `current_period_end` (none = forever), then grace, then expired;
+- grace until `grace_ends_at`, then expired.
+
+**Expired means read-only, never deletion.** Writes get `402 SUBSCRIPTION_EXPIRED`. Reads and exports work in full, and so do signing out, the `/subscription` endpoints and sync push. An offline sale made before the expiry is still accepted, because it happened; one made after is refused per sale. The hourly sweeper saves the transitions and raises one renewal invoice per period (unique per period start, so a retry can't bill twice). The entitlement is cached for 30 seconds and cleared on every change.
+
+**What the middleware enforces** (`subscriptions.Middleware`, after RequireAuth and the branch scope):
+- **Platform tokens:** a token with no tenant is refused (401).
+- **Read-only:** writes on an expired or cancelled account are refused (402).
+- **Features:** routes the plan doesn't include get 403 `FEATURE_NOT_IN_PLAN`. Only management and reporting surfaces are gated, never anything a cashier needs to finish a sale already under way.
+- **Retention:** on analytical reports, a `date`, `from`, `from_date`, `start_date` or `start` before the plan's horizon (midnight IST, *n* days back) gets 403 `RETENTION_LIMIT`. Sales, purchases, ledgers, GST and the audit log are not on that list, so every plan reads and exports them in full.
+
+**Limits** (`subscriptions.Limit` on the route) count across the whole merchant (`db.Unrestricted`, so a Branch Manager's scope can't hide usage):
+- active branches, active products, and active tills (the per-branch back-office and online terminals don't count);
+- finalized sales this calendar month (IST).
+
+A create, or a PATCH setting `status: active` (not counting the row itself), that would exceed the limit gets 403 `PLAN_LIMIT_REACHED`. The sales limit is checked when a cart opens, never at payment, so a cashier is never stopped mid-sale. Offline sales sync over the limit. A downgrade deactivates nothing: it only stops new creation above the new limits. The check runs just before the handler's transaction, so two simultaneous creates can both take the last free place; one over is an accepted bound for a plan limit.
+
+**Billing** goes through a `Provider` interface. Today it is `StubProvider`, which records a `stub_…` reference with no network call (a real gateway is a vendor decision, like the GSP). A plan is priced per POS: active tills, at least one. `POST /subscription/change`:
+- to a free plan: switches at once;
+- to a paid plan from a free one, when the merchant hasn't had a trial: starts that plan's trial;
+- otherwise: raises a plan-change invoice, and the plan switches when it's paid.
+
+Paying a renewal before the account went read-only continues the period exactly where it ended; anything else runs a month from now. Paying a paid invoice replays the result without charging again. `merchants.subscription_tier` is kept in step for older code.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /me/entitlements` | Any user: plan, effective status, dates, read-only, features, limits, retention (for locks and banners) |
+| `GET /plans` | The plans on offer |
+| `GET /subscription` | `subscription.manage` (Merchant Admin): plan, status, usage against every limit, billable tills, invoices, plans |
+| `POST /subscription/change` `{plan_code}` | `subscription.manage`: switched, trial started, or invoice due |
+| `POST /subscription/invoices/{id}/pay` | `subscription.manage`: charge through the provider and apply |
+
+**Verified live** (`p16_subs.py`, 68 checks):
+- **Platform staff:** platform login and lockout; a platform token is refused on tenant routes and a tenant token on platform routes.
+- **Onboarding:** provisioning in full, and a duplicate code refused.
+- **Entitlements and features:** Freemium entitlements; acme-sports grandfathered on Enterprise. GST and payroll are locked on Freemium, with the plan that has them named, and open on Enterprise.
+- **Plan editing:** a plan edit, an unknown feature refused, a missing reason refused.
+- **Limits:**
+  - Branch limit.
+  - Till limit: deactivating frees a place, reactivating over the limit is refused, re-saving an active till isn't counted against itself.
+  - Product limit.
+  - Monthly sales: the third cart is refused; an offline sale over the limit is accepted.
+- **Retention:** 40 days back refused on Freemium; today allowed; sales never cut; Enterprise unlimited.
+- **Trial:** free to Starter starts the trial, which opens GST and a second branch; staying on the same plan gives 409.
+- **Lapse:** the console ends the trial, so grace (writes work), then expired:
+  - writes give 402;
+  - products, sales, GST and the journal CSV still read;
+  - an offline sale from before the expiry is accepted, a later one refused;
+  - sign-out still works.
+- **Renewal:** an invoice priced per active till, paid through the stub, replayed without a second charge; active for a month, and writes work again.
+- **Sweeper:** after the period ended, a restart's sweep saved grace and raised exactly one renewal invoice, and a second sweep didn't bill again. Paying it continued the period from the old end exactly.
+- **Upgrade and downgrade:** an upgrade invoice marked paid by the console; then a downgrade to Freemium deactivated nothing but refused a new branch. `subscription_tier` stayed in step.
+- **Audit:** the merchant's audit log and the platform log both record the changes. A POS user can't see billing but sees entitlements.
+
+The Phase 15 scope sweep and approvals, and every earlier suite, pass again with the middleware in place (acme-sports is on Enterprise).
+
+**Found on the way:**
+- The branch-scope middleware gave a 500 on a token without a tenant; it now refuses it (401).
+- Platform date changes kept a stale grace end from an earlier lapse, expiring the merchant at once. New trial or period dates now restart the lapse clock.
+- Two pgx parameter-type ambiguities (`$3 IS NOT NULL`, `$7 * $6`) were fixed with casts.
+
+### 3.45 Phase 16: the SaaS console and merchant onboarding (`internal/subscriptions/platform.go`, `provision.go`; admin `/platform`)
+
+**Platform staff are not merchant users.** They sign in at `POST /platform/auth/login` against `platform_staff` (bcrypt, five failures lock the account for 15 minutes, one-hour token). Their token carries no tenant, so every tenant route refuses it, and every `/platform` route refuses a tenant token. Reading a merchant still goes through that merchant's own `WithTenant` transaction, so RLS applies to every tenant table. Every console change needs a reason and goes to `platform_audit_log`; changes to a merchant also go to that merchant's audit log. The seeded operator `ops@adrsw.com` has a placeholder hash. In development, set it with `POST /dev/set-platform-password` (only when `DEV_AUTH_TOOLS_ENABLED`).
+
+**Onboarding** (`POST /platform/merchants`) creates, in one transaction:
+- the merchant;
+- its 15 system accounts (the ones the automatic postings use; migrations 007, 016, 017 and 040 had seeded them only for the merchants that existed then);
+- three roles: Merchant Admin with every permission, and Branch Manager (own branch) and POS User from `role_templates` (captured from the oldest merchant's roles by migration 046);
+- the first branch with its online and back-office terminals;
+- the owner's Merchant Admin login;
+- the subscription: the plan's trial, or active with no expiry for a sales-led deal.
+
+A failure removes the merchant row, so the code can be used again. A later migration that grants Branch Manager or POS User a new permission must add it to `role_templates` too.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /platform/merchants` | Every merchant: plan, effective status, dates, usage, invoices due and amount, last sale |
+| `POST /platform/merchants` | Onboard (above) |
+| `GET /platform/merchants/{id}` | Subscription summary, usage and invoices |
+| `PATCH /platform/merchants/{id}/subscription` | `{plan_code?, status?, trial_ends_at?, current_period_end?, clear_period_end?, grace_ends_at?, notes?, reason}` |
+| `POST /platform/merchants/{id}/invoices/{invoice_id}/mark-paid \| void` | An offline payment (with its reference) or a void, with a reason |
+| `GET /platform/plans`, `PATCH /platform/plans/{code}` | Edit price, limits, features, retention, trial, grace and offered; applies within 30 seconds |
+| `GET /platform/audit-log` | The latest 200 console actions |
+
+**Admin:**
+- **Subscription & Billing** (Access & Audit, `subscription.manage`): plan and status, usage bars, plan cards with trial, upgrade or switch, due invoices with Pay, and billing history.
+- **Lock icons:** the permissions provider also loads `/me/entitlements`. Sidebar items whose feature isn't in the plan show a lock. Opening one shows a preview naming the plan that includes it, never a 404.
+- **Banner:** for a trial ending within a week, an unpaid period, or a read-only account.
+- **The console** (`/platform`) has its own sign-in and session: merchants, onboarding, merchant detail with lifecycle edits and invoice actions, the plans editor and the audit log.
+
+`e2e/phase16-subscriptions.spec.ts` drives the console end to end:
+- onboard a Freemium merchant;
+- the merchant sees GST locked and its preview;
+- starts the Starter trial, which unlocks GST;
+- the console expires it, so the banner shows and a write gets 402 while reads work;
+- the console restores it, and the change is in the audit log.
+
+It also checks acme-sports shows Enterprise with no expiry and no locks, and runs axe on every console page.
+
+### 3.46 Phase 16: the custom report builder (`internal/reportbuilder`, `migrations/047_report_builder.sql`)
+
+**No user SQL.** A report is a JSON spec over a fixed semantic layer of seven datasets: sales, items sold, payments, stock on hand, stock movements, products and journal lines. Each field is a reviewed SQL expression, typed text, number, money, date or yes/no.
+
+**What a spec can choose:**
+- columns: a field, or its sum, average, lowest, highest, count or distinct count; the plain columns become the group-by;
+- typed filters: equals, not, one of, none of, contains, comparisons, between, empty, yes or no;
+- sort;
+- a date range, on the datasets that have one.
+
+The compiler accepts fields only by key and sends every value as a parameter. Money comes back as exact text.
+
+**Cost limits:**
+- a range of at most 366 days;
+- previews: 1,000 rows and a 15-second statement timeout (`REPORT_TOO_HEAVY` beyond it);
+- exports: 100,000 rows and two minutes;
+- 20 columns and 20 filters;
+- dates before the plan's retention horizon are refused.
+
+**Branch scope is RLS.** The query runs in the caller's `WithTenant` transaction with their branch scope, so a shared template shows each person only their branches. Filtering on another branch's name returns nothing. This meets the Definition of Done item that "a report template can't return data outside the caller's branch scope".
+
+**Templates and runs.** Templates are private or shared:
+- **Building:** creating, editing (owner only), deleting and duplicating need `reports.build` (Merchant Admin, Branch Manager).
+- **Using a shared one:** anyone who can see it can run it, with their own dates, and export it.
+
+**Exports run in the background** (`report_runs`, two at a time per API process). A run re-resolves the requester's branch scope and plan when it executes, fails if they've been deactivated, is picked up again after a restart, and downloads only to the requester.
+- **CSV:** UTF-8 with BOM; cells that would start a formula are prefixed with a quote.
+- **XLSX:** a minimal workbook written with the standard library (inline strings; money and numbers as numeric cells).
+- **PDF:** the admin prints the preview.
+
+| Method & Path | Purpose |
+|---|---|
+| `GET /report-builder/datasets` | Fields with their aggregations and filter operators, and the limits |
+| `POST /report-builder/query` `{spec}` | `reports.build`: preview |
+| `GET/POST /report-builder/templates`, `GET/PUT/DELETE .../{id}`, `POST .../{id}/duplicate` | Templates |
+| `POST /report-builder/templates/{id}/run` `{date_from?, date_to?}` | Preview a visible template |
+| `POST /report-builder/runs` `{template_id \| spec, format: csv \| xlsx, name?, date_from?, date_to?}` | 202: queue an export |
+| `GET /report-builder/runs`, `GET .../{id}`, `GET .../{id}/download` | The caller's exports |
+
+**Verified:**
+- **Unit tests:** parameterisation (an SQL-looking value never reaches the SQL text), every refusal case, every field in every dataset compiles, CSV formula guarding and the XLSX package.
+- **Live** (`p16_reports.py`, 32 checks):
+  - totals per branch match SQL to the paisa;
+  - unknown fields, injection-looking field names, over-long ranges and missing dates are refused;
+  - a POS user can't build ad hoc, but can run and export shared templates;
+  - the Branch Manager running the admin's shared template sees only MG Road, and the admin sees both branches;
+  - non-owners can't edit but can duplicate;
+  - XLSX and CSV exports finish in the background; the XLSX holds only the requester's branch, and someone else's download gives 404;
+  - widening the Branch Manager's scope applies to the next run;
+  - Starter is gated (`available_in: professional`), and Professional refuses a range 1,200 days back.
+- **Browser:** `e2e/phase16-report-builder.spec.ts` builds, saves shared, runs as the Branch Manager, and exports and downloads Excel.
+
+### 3.47 Phase 16: the load-test gate (`loadtest/k6/pos_load.js`)
+
+FRD Part A's targets are k6 thresholds:
+- a whole POS transaction (open cart, scan two items, add both lines, pay) at p95 under 6 s;
+- the till's barcode lookup at p95 under 100 ms;
+- the dashboard report at p95 under 3 s;
+- under 1% HTTP errors, and over 99% of sales completed.
+
+**Setup.** `setup()` onboards fresh Enterprise tenants through the console, so each run is isolated and plan limits never interfere. Each has four tills, two products and stock.
+
+**Load:**
+- checkout at 10,000 transactions an hour (2.78/s) for five minutes;
+- a one-minute ramp to twice that, then two minutes held;
+- alongside: 2 lookups/s (barcode plus OpenSearch product search) and 12 dashboard loads a minute.
+
+**Results** (one laptop: the API container, Postgres 16, Redis and OpenSearch in Docker Desktop, three tenants with twelve tills):
+
+| Run | Load | Sales | Transaction p50 / p95 / max | Lookup p95 | Search p95 | Dashboard p95 | HTTP errors |
+|---|---|---|---|---|---|---|---|
+| Gate (2026-10-11) | 10,000/h for 5 min, then a ramp to 20,000/h held 2 min | 1,751, none failed | 48 / 90 / 1,577 ms | 4 ms | 15 ms | 8 ms | 0% of 11,803 |
+| Headroom | 100,000/h for 2 min | 3,892, none failed | 39 / 63 / 1,572 ms | 3 ms | 8 ms | 10 ms | 0% of 23,890 (160 req/s) |
+
+Every threshold passed in both runs. The roughly 1.6 s maximum is a single first-request warm-up per run, not a trend.
+
+To re-run (from `erp-core-go`, with the platform operator's password):
+
+```
+docker run --rm -i --network erp-core-go_default -e BASE=http://<api>:8080 -e OPS_PASSWORD=... grafana/k6 run - < loadtest/k6/pos_load.js
+```
+
+**Not measured here:** a production-like database size, multiple API replicas, and the POS on a real network. The gate shows the API and schema hold FRD Part A's rate with wide margins on one machine, not production capacity.
 
 ---
 

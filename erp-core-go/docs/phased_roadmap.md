@@ -891,6 +891,38 @@ Part 2: **approval policies** (`migrations/045`, §3.43):
 
 ### Phase 16 — SaaS Subscriptions, Entitlements & Report Builder (design UI-5)
 
+**Status: done (2026-10-11).** Decisions 1 and 2 above were settled with the user: the FRD §19 tiers as written, and retention that limits report reach only. Existing merchants are grandfathered on Enterprise.
+
+Part 1: **plans, entitlements and lifecycle** (`migrations/046`, `phase0_1_design.md` §3.44):
+- **Plans as data**, with limits, features, retention, a price per POS, trial and grace.
+- **Lifecycle:** worked out on every read, so expiry is read-only at once, and never deletion.
+- **Enforcement:** feature gates, report retention, and limits on create and reactivation (cart open, never at payment). A downgrade deactivates nothing; offline sales always sync.
+- **Billing:** through a provider interface with a stub.
+
+Part 2: **the SaaS console and onboarding** (§3.45):
+- Platform staff have their own login; tokens without a tenant are refused by every tenant route.
+- Onboarding a merchant in one transaction: chart of accounts, roles, branch, owner and subscription.
+- Lifecycle and invoice actions with audited reasons, a plans editor and an audit log.
+- Admin: Subscription & Billing, lock icons with plan previews, and an expiry banner.
+
+Part 3: **the custom report builder** (`migrations/047`, §3.46):
+- An allow-listed semantic layer of seven datasets: no user SQL, everything parameterised.
+- Aggregations, filters, sort and dates, with cost limits.
+- Shared templates that show each person only their branches (the Definition of Done item, verified live and in the browser).
+- Background CSV and XLSX exports that re-check scope and plan when they run; print to PDF.
+
+Part 4: **the load-test gate** (§3.47): k6 at 10,000 transactions an hour, then twice that, across three tenants and twelve tills. All FRD Part A thresholds pass.
+
+**Definition of Done:**
+- Plan limits are refused server-side with an upgrade message.
+- An expired tenant still reads and exports everything.
+- A report template can't leave the caller's branch scope.
+- The load test meets the targets, with results recorded in §3.47.
+
+**Not built (nothing to gate yet):** API keys (`api_access`), multi-currency, white-label, and a real payment gateway (a vendor decision).
+
+**Migrations:** `046` and `047` must be applied to the host database. 046 grandfathers every existing merchant on Enterprise.
+
 **Size: XL | Goal: FRD §19's tiered subscription model is enforced by the backend, and FRD §15's custom builder exists for the tiers that include it.**
 
 **In:**
@@ -948,4 +980,4 @@ A few honest calls worth making as you execute this, given it's 1-2 people:
 | 13    | New POS flows                                        | XL      | Done (2026-10-10) — sales history + returns/refunds, open price, shifts with X/Z close feeding cash recon, sync queue + Stock Review, POS product lookup + Detailed/QR labels; on-device printing not verifiable here, see above |
 | 14    | Admin sales, label studio, JV workflow               | L       | Done (2026-10-10) — back-office sales on the till's code (paisa parity), sale detail/void/return/payment correction, label studio (ZPL/TSPL/ESC-POS, exact-size print, A4 sheet, scannability), JV workflow with maker-checker, period lock, append-only ledger; real-printer scan check environment-blocked |
 | 15    | Data-scoped RBAC, approval policies                  | M       | Done (2026-10-10) — branch data scope enforced by RLS on every branch-owned table (74-route leak sweep clean), extra branches per user, `BRANCH_FORBIDDEN`; per-merchant approval policies (discount tiers, refund/stock/JV thresholds, below-cost level) with branch-scoped approvers; admin Data Access + Approval Policies pages, POS follows the policy |
-| 16    | SaaS subscriptions, entitlements, report builder     | XL      | Planned — FRD §19 tiers enforced server-side, read-only on expiry (never delete), SaaS console, report template engine, load-test gate; 7 open decisions listed above |
+| 16    | SaaS subscriptions, entitlements, report builder     | XL      | Done (2026-10-11) — FRD §19 plans as data with limits/features/retention, lifecycle (trial → grace → read-only, never delete), stub billing, SaaS console with onboarding, plan locks and banner in admin, custom report builder (allow-listed, branch-scoped, background CSV/XLSX), k6 gate at 10k and 20k txn/h passing FRD Part A |

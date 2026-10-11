@@ -59,4 +59,9 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
     - `forgot-password.spec.ts` resets Ravi's password as part of what it tests.
   - **Super admin:** the a11y sweep logs in as `admin@adrsw.com` / `Idontsay3#`, so restore that password too after a seed reset.
   - **Branch scope (Phase 15):** Branch Manager is own-branch by default, so Meera sees only MG Road. Specs that change a role's data scope, a user's extra branches or the approval policy restore them in `finally`. Branch pickers fetch `/api/v1/branches?scope=mine`.
+  - **Plans and the SaaS console (Phase 16):**
+    - acme-sports is grandfathered on Enterprise, so no screen is plan-locked for it.
+    - `phase16-subscriptions.spec.ts` signs in to the console as `ops@adrsw.com` / `Platf0rm!`. Set that password with `POST /dev/set-platform-password` after a seed reset.
+    - That spec and the k6 load test onboard throwaway merchants (`e2e-p16-*`, `lt-*`), which accumulate in the compose database. That's harmless.
+    - The console (`/platform`) keeps its own session in localStorage, so signing in as a merchant in the same browser (which clears storage) signs the console out.
   - **Specs create their own data:** a spec that needs a product, slab or till creates it through the API instead of hard-coding an id or barcode, because generated barcodes are reused after other specs reset data.
