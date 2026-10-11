@@ -3,8 +3,11 @@
 // more hardcoded seed terminal).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:erp_pos_app/api/api_client.dart';
 import 'package:erp_pos_app/main.dart';
 import 'package:erp_pos_app/state/terminal_config.dart';
 
@@ -63,5 +66,47 @@ void main() {
       return TerminalConfig.load();
     });
     expect(afterClear, isNull);
+  });
+
+  // The pairing screen and the paired app are different widget trees.
+  // Completing pairing must land on the login screen, and unpairing must
+  // land back on pairing, without restarting the app.
+  testWidgets('pairing leads straight to login, and unpairing back to pairing', (WidgetTester tester) async {
+    SharedPreferences.resetStatic();
+    SharedPreferences.setMockInitialValues({});
+    final server = MockClient((req) async {
+      if (req.url.path.endsWith('/pos-terminals/pair')) {
+        return http.Response(
+          '{"terminal_id":"t-1","terminal_name":"Till 7","branch_id":"b-1","branch_name":"Koramangala",'
+          '"merchant_code":"acme-sports","merchant_name":"Acme Sports"}',
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return http.Response('{"error":{"code":"NOT_FOUND","message":"not found"}}', 404);
+    });
+    await tester.pumpWidget(PosApp(api: ApiClient(baseUrl: 'http://test', httpClient: server)));
+    await tester.pumpAndSettle();
+    expect(find.text('Pair this terminal'), findsOneWidget);
+
+    await tester.enterText(find.widgetWithText(TextField, 'Merchant code'), 'acme-sports');
+    await tester.enterText(find.byKey(const Key('pairing-code')), 'AB3K9XQ2');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Pair terminal'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pair this terminal'), findsNothing, reason: 'the pairing screen must go away');
+    expect(find.text('Log in'), findsOneWidget, reason: 'the login screen must show');
+    expect(find.text('Till 7 · Koramangala'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'acme-sports'), findsOneWidget);
+    expect((await TerminalConfig.load())?.terminalId, 't-1', reason: 'the pairing is stored for the next start');
+
+    await tester.tap(find.text('Unpair this device'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Unpair'));
+    await tester.pumpAndSettle();
+    expect(find.text('Log in'), findsNothing);
+    expect(find.text('Pair this terminal'), findsOneWidget);
+    expect(await TerminalConfig.load(), isNull);
   });
 }

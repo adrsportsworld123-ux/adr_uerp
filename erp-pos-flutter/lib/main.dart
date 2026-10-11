@@ -34,18 +34,20 @@ void main() {
 
 /// Boots into the pairing screen until this device knows which terminal it
 /// is (Phase 12), then into login/POS for that terminal. [initialConfig]
-/// lets tests start already paired without touching device storage.
+/// lets tests start already paired without touching device storage; [api]
+/// lets them talk to a fake server.
 class PosApp extends StatefulWidget {
   final TerminalConfig? initialConfig;
+  final ApiClient? api;
 
-  const PosApp({super.key, this.initialConfig});
+  const PosApp({super.key, this.initialConfig, this.api});
 
   @override
   State<PosApp> createState() => _PosAppState();
 }
 
 class _PosAppState extends State<PosApp> {
-  final ApiClient _api = ApiClient(baseUrl: kApiBaseUrl);
+  late final ApiClient _api = widget.api ?? ApiClient(baseUrl: kApiBaseUrl);
   TerminalConfig? _config;
   bool _loading = true;
 
@@ -83,9 +85,14 @@ class _PosAppState extends State<PosApp> {
     if (mounted) setState(() => _config = null);
   }
 
-  MaterialApp _app(Widget home) => MaterialApp(
+  // Only the paired app owns kNavigatorKey. The loading, pairing and paired
+  // apps sit at different places in the tree; sharing one GlobalKey made
+  // Flutter carry the old Navigator (and its pairing-screen route) over to
+  // the paired app, so pairing never reached the login screen and
+  // unpairing never left it.
+  MaterialApp _app(Widget home, {bool paired = false}) => MaterialApp(
         title: 'ERP POS',
-        navigatorKey: kNavigatorKey,
+        navigatorKey: paired ? kNavigatorKey : null,
         theme: posTheme(Brightness.light),
         darkTheme: posTheme(Brightness.dark),
         themeMode: ThemeMode.light,
@@ -112,7 +119,7 @@ class _PosAppState extends State<PosApp> {
         branchName: config.branchName,
         merchantCode: config.merchantCode,
       )..onUnpairDevice = _unpair,
-      child: _ActivityTracker(child: _app(const RootScreen())),
+      child: _ActivityTracker(child: _app(const RootScreen(), paired: true)),
     );
   }
 }
