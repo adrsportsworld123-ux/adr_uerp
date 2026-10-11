@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { PricingSettings, Product, ProductVariant } from "@/lib/types";
+import { CatalogBrand, Category, PricingSettings, Product, ProductVariant } from "@/lib/types";
+import { SearchOption, SearchSelect, categoryOption } from "@/components/data/search-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,21 +18,57 @@ function marginClass(pct: number | null) {
   return pct < 0 ? "text-destructive font-medium" : "text-foreground";
 }
 
+const PAGE_SIZE = 50;
+
+// Category and brand options for the filters on this page, loaded once.
+function useCatalogFilters() {
+  const [categories, setCategories] = useState<SearchOption[]>([]);
+  const [brands, setBrands] = useState<SearchOption[]>([]);
+  useEffect(() => {
+    api.get<{ categories: Category[] }>("/api/v1/categories?status=active&sort=path").then((d) => setCategories(d.categories.map(categoryOption))).catch(() => {});
+    api.get<{ brands: CatalogBrand[] }>("/api/v1/brands?status=active").then((d) => setBrands(d.brands.map((b) => ({ value: b.brand_id, label: b.name })))).catch(() => {});
+  }, []);
+  return { categories, brands };
+}
+
 export default function PricingPage() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // Server-side search and paging: the list used to load the first 200
+  // products only, so on a larger catalogue the rest could never be
+  // priced from here.
+  const [query, setQuery] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [brandId, setBrandId] = useState("");
+  const [page, setPage] = useState(1);
+  const [reloadKey, setReloadKey] = useState(0);
+  const filters = useCatalogFilters();
 
-  function load() {
-    // limit=200 (the backend's own cap) rather than the default 50 —
-    // found live: as the catalog grows (many e2e specs each creating
-    // real products), a brand-new product can sort alphabetically past
-    // the default page-1 window and never appear here at all.
-    api
-      .get<{ products: Product[] }>("/api/v1/products?limit=200")
-      .then((d) => setProducts(d.products))
-      .catch((e) => setError(e.message));
-  }
-  useEffect(load, []);
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(() => {
+      const p = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(page), sort: "name" });
+      if (query.trim()) p.set("q", query.trim());
+      if (categoryId) p.set("category_id", categoryId);
+      if (brandId) p.set("brand_id", brandId);
+      api
+        .get<{ products: Product[]; total: number }>(`/api/v1/products?${p.toString()}`)
+        .then((d) => {
+          if (cancelled) return;
+          setProducts(d.products);
+          setTotal(d.total);
+          setError(null);
+        })
+        .catch((e) => !cancelled && setError(e.message));
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, categoryId, brandId, page, reloadKey]);
+  const load = () => setReloadKey((k) => k + 1);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
@@ -46,8 +83,49 @@ export default function PricingPage() {
       <TaxPricingSettings />
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Products</CardTitle>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
+          <CardTitle className="text-base">
+            Products <span className="font-normal text-muted-foreground">({total})</span>
+          </CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search name, SKU or barcode"
+              aria-label="Search products"
+              className="h-9 w-60 rounded-lg border bg-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+            />
+            <div className="w-52">
+              <SearchSelect
+                ariaLabel="Filter by category"
+                value={categoryId}
+                onChange={(v) => {
+                  setCategoryId(v);
+                  setPage(1);
+                }}
+                options={filters.categories}
+                noneLabel="All categories"
+                placeholder="All categories"
+              />
+            </div>
+            <div className="w-44">
+              <SearchSelect
+                ariaLabel="Filter by brand"
+                value={brandId}
+                onChange={(v) => {
+                  setBrandId(v);
+                  setPage(1);
+                }}
+                options={filters.brands}
+                noneLabel="All brands"
+                placeholder="All brands"
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <Table>
@@ -71,13 +149,33 @@ export default function PricingPage() {
                   <VariantRow key={v.variant_id} product={p} variant={v} onSaved={load} />
                 ))
               )}
+              {products.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={10} className="py-6 text-center text-sm text-muted-foreground">
+                    {query || categoryId || brandId ? "No product matches these filters" : "No products yet"}
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
+          {total > PAGE_SIZE && (
+            <div className="mt-3 flex items-center justify-end gap-2 text-sm">
+              <span className="text-muted-foreground">
+                Page {page} of {pages}
+              </span>
+              <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                Previous
+              </Button>
+              <Button size="sm" variant="outline" disabled={page >= pages} onClick={() => setPage(page + 1)}>
+                Next
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
       <Calculator />
-      <BulkUpdate onApplied={load} />
+      <BulkUpdate onApplied={load} categories={filters.categories} brands={filters.brands} />
     </div>
   );
 }
@@ -425,7 +523,9 @@ interface BulkItem {
   status: "would_update" | "updated" | "scheduled" | "skipped_negative_margin";
 }
 
-function BulkUpdate({ onApplied }: { onApplied: () => void }) {
+function BulkUpdate({ onApplied, categories, brands }: { onApplied: () => void; categories: SearchOption[]; brands: SearchOption[] }) {
+  const [categoryId, setCategoryId] = useState("");
+  const [brandId, setBrandId] = useState("");
   const [method, setMethod] = useState<"percent" | "fixed" | "set">("percent");
   const [value, setValue] = useState("");
   const [roundTo, setRoundTo] = useState("");
@@ -440,7 +540,7 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
 
   function buildBody() {
     return {
-      filter: {},
+      filter: { category_id: categoryId, brand_id: brandId },
       method,
       value: Number(value) || 0,
       round_to: Number(roundTo) || 0,
@@ -481,8 +581,40 @@ function BulkUpdate({ onApplied }: { onApplied: () => void }) {
         <CardTitle className="text-base">Bulk price update</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-muted-foreground">Applies to every product (no category/brand filter in this UI yet). Preview before applying.</p>
+        <p className="text-xs text-muted-foreground">
+          Applies to every product in the chosen category and brand (leave both empty for the whole catalogue). Preview before applying.
+        </p>
         <form onSubmit={preview} className="flex gap-2 items-end flex-wrap">
+          <div className="flex w-56 flex-col gap-2">
+            <Label htmlFor="bulkCategory">Category</Label>
+            <SearchSelect
+              id="bulkCategory"
+              ariaLabel="Bulk update category"
+              value={categoryId}
+              onChange={(v) => {
+                setCategoryId(v);
+                setItems(null);
+              }}
+              options={categories}
+              noneLabel="All categories"
+              placeholder="All categories"
+            />
+          </div>
+          <div className="flex w-44 flex-col gap-2">
+            <Label htmlFor="bulkBrand">Brand</Label>
+            <SearchSelect
+              id="bulkBrand"
+              ariaLabel="Bulk update brand"
+              value={brandId}
+              onChange={(v) => {
+                setBrandId(v);
+                setItems(null);
+              }}
+              options={brands}
+              noneLabel="All brands"
+              placeholder="All brands"
+            />
+          </div>
           <div className="flex flex-col gap-2">
             <Label>Method</Label>
             <Select

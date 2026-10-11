@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,13 +76,8 @@ func (h *Handler) CreateCoupon(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
 		return
 	}
-	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
-	if req.Code == "" || (req.PromoType != "percent" && req.PromoType != "fixed") || req.Value <= 0 {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "code, promo_type (percent|fixed), and a positive value are required")
-		return
-	}
-	if req.PromoType == "percent" && req.Value > 100 {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "a percent coupon's value must be 100 or less")
+	if msg := validateCoupon(&req); msg != "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", msg)
 		return
 	}
 
@@ -155,15 +151,32 @@ func (h *Handler) ListCoupons(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------
-// PATCH /coupons/{id} — gated by promotions.manage. Same PATCH-only
-// (no DELETE) precedent as promotions, for the same reason (past
-// coupon_redemptions rows reference this id).
+// PATCH /coupons/{id} — gated by promotions.manage. Every field is
+// editable (absent = unchanged; "" clears an optional one), validated
+// with create's rules. Past redemptions keep the amount they were given
+// (coupon_redemptions.discount_amount), so an edit changes only future
+// sales. DELETE /coupons/{id} (crud.go) removes a coupon never redeemed.
 // ---------------------------------------------------------------------
 
 type updateCouponRequest struct {
-	Active     *bool   `json:"active"`
-	ValidUntil *string `json:"valid_until"`
+	Code                  *string   `json:"code"`
+	PromoType             *string   `json:"promo_type"`
+	Value                 *float64  `json:"value"`
+	MinPurchaseAmount     *float64  `json:"min_purchase_amount"`
+	UsageLimitTotal       *int      `json:"usage_limit_total"`
+	UsageLimitPerCustomer *int      `json:"usage_limit_per_customer"`
+	ValidFrom             *string   `json:"valid_from"`
+	ValidUntil            *string   `json:"valid_until"`
+	Channels              *[]string `json:"channels"`
+	BranchID              *string   `json:"branch_id"`
+	Active                *bool     `json:"active"`
+	// ClearUsageLimitTotal/ClearUsageLimitPerCustomer remove a limit (a
+	// JSON null can't be told apart from "absent" on an *int).
+	ClearUsageLimitTotal       bool `json:"clear_usage_limit_total"`
+	ClearUsageLimitPerCustomer bool `json:"clear_usage_limit_per_customer"`
 }
+
+var errCouponInvalid = errors.New("invalid coupon")
 
 func (h *Handler) UpdateCoupon(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
@@ -179,28 +192,131 @@ func (h *Handler) UpdateCoupon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var invalid string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
+		cur, err := scanCoupon(tx.QueryRow(ctx, `SELECT `+couponColumns+` FROM coupons WHERE id = $1 FOR UPDATE`, couponID))
+		if err != nil {
+			return err
+		}
+		m := createCouponRequest{
+			Code: cur.Code, PromoType: cur.PromoType, Value: parseMoney(&cur.Value), MinPurchaseAmount: parseMoney(cur.MinPurchaseAmount),
+			UsageLimitTotal: cur.UsageLimitTotal, UsageLimitPerCustomer: cur.UsageLimitPerCustomer,
+			ValidFrom: rfc3339(cur.ValidFrom), ValidUntil: rfc3339(cur.ValidUntil),
+			Channels: cur.Channels, BranchID: derefOr(cur.BranchID, ""),
+		}
+		for _, f := range []struct{ dst, src *string }{
+			{&m.Code, req.Code}, {&m.PromoType, req.PromoType}, {&m.ValidFrom, req.ValidFrom},
+			{&m.ValidUntil, req.ValidUntil}, {&m.BranchID, req.BranchID},
+		} {
+			if f.src != nil {
+				*f.dst = *f.src
+			}
+		}
+		if req.Value != nil {
+			m.Value = *req.Value
+		}
+		if req.MinPurchaseAmount != nil {
+			m.MinPurchaseAmount = *req.MinPurchaseAmount
+		}
+		if req.UsageLimitTotal != nil {
+			m.UsageLimitTotal = req.UsageLimitTotal
+		}
+		if req.ClearUsageLimitTotal {
+			m.UsageLimitTotal = nil
+		}
+		if req.UsageLimitPerCustomer != nil {
+			m.UsageLimitPerCustomer = req.UsageLimitPerCustomer
+		}
+		if req.ClearUsageLimitPerCustomer {
+			m.UsageLimitPerCustomer = nil
+		}
+		if req.Channels != nil {
+			m.Channels = *req.Channels
+		}
+		if invalid = validateCoupon(&m); invalid != "" {
+			return errCouponInvalid
+		}
+		_, err = tx.Exec(ctx, `
 			UPDATE coupons SET
-				active = COALESCE($1, active),
-				valid_until = CASE WHEN $2 THEN NULLIF($3,'')::timestamptz ELSE valid_until END
-			WHERE id = $4`,
-			req.Active, req.ValidUntil != nil, derefOr(req.ValidUntil, ""), couponID)
+				code = $1, promo_type = $2, value = $3, min_purchase_amount = NULLIF($4,0),
+				usage_limit_total = $5, usage_limit_per_customer = $6,
+				valid_from = NULLIF($7,'')::timestamptz, valid_until = NULLIF($8,'')::timestamptz,
+				channels = NULLIF($9,'{}'::text[]), branch_id = NULLIF($10,'')::uuid,
+				active = COALESCE($11, active)
+			WHERE id = $12`,
+			m.Code, m.PromoType, m.Value, m.MinPurchaseAmount, m.UsageLimitTotal, m.UsageLimitPerCustomer,
+			m.ValidFrom, m.ValidUntil, m.Channels, m.BranchID, req.Active, couponID)
 		return err
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, errCouponInvalid):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", invalid)
+		return
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "coupon not found")
+		return
+	case isUniqueViolation(err):
+		httpx.Error(w, http.StatusConflict, "COUPON_CODE_EXISTS", "a coupon with this code already exists")
+		return
+	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update coupon")
 		return
 	}
 	coupon, err := h.fetchCouponByID(r.Context(), claims.TenantID, couponID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "coupon not found")
-		return
-	} else if err != nil {
+	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "coupon updated but could not be reloaded")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, coupon)
+}
+
+// validateCoupon normalises the code and returns a client-facing message,
+// or "" when valid. Create and edit share it.
+func validateCoupon(req *createCouponRequest) string {
+	req.Code = strings.ToUpper(strings.TrimSpace(req.Code))
+	switch {
+	case req.Code == "" || (req.PromoType != "percent" && req.PromoType != "fixed") || req.Value <= 0:
+		return "code, promo_type (percent|fixed), and a positive value are required"
+	case req.PromoType == "percent" && req.Value > 100:
+		return "a percent coupon's value must be 100 or less"
+	case req.MinPurchaseAmount < 0:
+		return "min_purchase_amount can't be negative"
+	case req.UsageLimitTotal != nil && *req.UsageLimitTotal < 1, req.UsageLimitPerCustomer != nil && *req.UsageLimitPerCustomer < 1:
+		return "a usage limit must be at least 1 (leave it empty for unlimited)"
+	}
+	for _, c := range req.Channels {
+		if c != "pos" && c != "online" && c != "backoffice" {
+			return "channels may only contain pos, online and backoffice"
+		}
+	}
+	from, okFrom := parseWhen(req.ValidFrom)
+	until, okUntil := parseWhen(req.ValidUntil)
+	if (req.ValidFrom != "" && !okFrom) || (req.ValidUntil != "" && !okUntil) {
+		return "valid_from/valid_until must be RFC3339 timestamps or YYYY-MM-DD dates"
+	}
+	if okFrom && okUntil && !from.Before(until) {
+		return "valid_from must be before valid_until"
+	}
+	return ""
+}
+
+func parseWhen(s string) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, true
+	}
+	t, err := time.Parse("2006-01-02", s)
+	return t, err == nil
+}
+
+func parseMoney(s *string) float64 {
+	if s == nil {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(*s, 64)
+	return v
 }
 
 func (h *Handler) fetchCouponByID(ctx context.Context, tenantID, couponID string) (couponResponse, error) {

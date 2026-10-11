@@ -24,11 +24,11 @@ test("creating a product with a category/brand/tax slab makes it real and sellab
   await test.step("create a new category and brand inline, then fill out the product", async () => {
     await page.fill("input[placeholder='New category']", `E2E Category ${unique}`);
     await page.getByRole("button", { name: "Add" }).first().click();
-    await expect(page.getByRole("combobox").first()).toContainText(`E2E Category ${unique}`);
+    await expect(page.locator("#productCategory")).toContainText(`E2E Category ${unique}`);
 
     await page.fill("input[placeholder='New brand']", `E2E Brand ${unique}`);
     await page.getByRole("button", { name: "Add" }).nth(1).click();
-    await expect(page.getByRole("combobox").nth(1)).toContainText(`E2E Brand ${unique}`);
+    await expect(page.locator("#productBrand")).toContainText(`E2E Brand ${unique}`);
 
     await page.fill("#name", productName);
     await page.fill("#hsnCode", "9506");

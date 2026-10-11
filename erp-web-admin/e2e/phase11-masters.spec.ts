@@ -225,18 +225,17 @@ test("Phase 11: a category-scoped promotion is created from the category picker 
   const promo = `E2E Cat Promo ${unique}`;
   await login(page, "meera@acme-sports.test", "9999");
   await page.goto("/promotions");
+  await page.getByRole("button", { name: "New promotion" }).click();
   await page.fill("#promoName", promo);
   await page.fill("#valuePercent", "5");
-  // Comboboxes in the form, in order: Type, Applies to.
-  await page.getByRole("combobox").nth(1).click();
+  await page.getByRole("combobox", { name: "Applies to" }).click();
   await page.getByRole("option", { name: "One category" }).click();
-  const category = page.locator("#categoryId");
-  const firstReal = await category.locator("option").nth(1).getAttribute("value");
-  expect(firstReal).toBeTruthy();
-  await category.selectOption(firstReal!);
+  // The category picker is a type-to-search list: open it, narrow it, pick.
+  await page.locator("#promoCategory").click();
+  await page.getByRole("listbox", { name: "Category" }).getByRole("option").first().click();
   await page.click('button[type="submit"]:has-text("Create promotion")');
   await expect(page.getByText("Promotion created")).toBeVisible();
-  await expect(page.getByRole("row", { name: new RegExp(promo) })).toContainText("category");
+  await expect(page.getByRole("row", { name: new RegExp(promo) })).toContainText("Category:");
 });
 
 test("Phase 11: RBAC groups permissions and guards unsaved ticks when switching roles", async ({ page }) => {

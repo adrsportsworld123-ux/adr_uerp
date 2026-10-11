@@ -9,7 +9,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Branch, Customer, Product, Quotation, QuotationSummary } from "@/lib/types";
+import { Branch, Customer, Quotation, QuotationSummary } from "@/lib/types";
+import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,12 +29,11 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "dest
   expired: "destructive",
 };
 
-type DraftLine = { variantId: string; quantity: string };
+type DraftLine = { variantId: string; option: VariantOption | null; quantity: string };
 
 export default function QuotationsPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [quotations, setQuotations] = useState<QuotationSummary[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
 
@@ -41,7 +41,7 @@ export default function QuotationsPage() {
   const [customerId, setCustomerId] = useState("");
   const [validUntil, setValidUntil] = useState("");
   const [notes, setNotes] = useState("");
-  const [lines, setLines] = useState<DraftLine[]>([{ variantId: "", quantity: "1" }]);
+  const [lines, setLines] = useState<DraftLine[]>([{ variantId: "", option: null, quantity: "1" }]);
   const [creating, setCreating] = useState(false);
 
   const [selected, setSelected] = useState<Quotation | null>(null);
@@ -56,7 +56,6 @@ export default function QuotationsPage() {
   useEffect(() => {
     api.get<{ branches: Branch[] }>("/api/v1/branches?scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
     api.get<{ customers: Customer[] }>("/api/v1/customers?limit=200").then((d) => setCustomers(d.customers)).catch(() => {});
-    api.get<{ products: Product[] }>("/api/v1/products?limit=200").then((d) => setProducts(d.products)).catch(() => {});
     fetchQuotations().then((d) => setQuotations(d.quotations)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -75,7 +74,7 @@ export default function QuotationsPage() {
   }
 
   function addLine() {
-    setLines([...lines, { variantId: "", quantity: "1" }]);
+    setLines([...lines, { variantId: "", option: null, quantity: "1" }]);
   }
   function removeLine(i: number) {
     setLines(lines.filter((_, idx) => idx !== i));
@@ -104,7 +103,7 @@ export default function QuotationsPage() {
       setCustomerId("");
       setValidUntil("");
       setNotes("");
-      setLines([{ variantId: "", quantity: "1" }]);
+      setLines([{ variantId: "", option: null, quantity: "1" }]);
       refreshList();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not create quotation");
@@ -147,7 +146,6 @@ export default function QuotationsPage() {
     }
   }
 
-  const variantOptions = products.flatMap((p) => p.variants.map((v) => ({ id: v.variant_id, label: `${p.name} (${v.sku})` })));
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
@@ -203,14 +201,7 @@ export default function QuotationsPage() {
             {lines.map((l, i) => (
               <div key={i} className="flex items-end gap-2">
                 <div className="flex-1">
-                  <Select value={l.variantId} onValueChange={(v) => updateLine(i, { variantId: v ?? "" })} items={Object.fromEntries(variantOptions.map((o) => [o.id, o.label]))}>
-                    <SelectTrigger><SelectValue placeholder="Select a product" /></SelectTrigger>
-                    <SelectContent>
-                      {variantOptions.map((o) => (
-                        <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <ProductPicker ariaLabel={`Line ${i + 1} product`} value={l.option} onChange={(o) => updateLine(i, { variantId: o.variantId, option: o })} />
                 </div>
                 <Input className="w-28" type="number" min="1" value={l.quantity} onChange={(e) => updateLine(i, { quantity: e.target.value })} placeholder="Qty" />
                 <Button variant="outline" onClick={() => removeLine(i)} disabled={lines.length === 1}>Remove</Button>
@@ -287,7 +278,6 @@ export default function QuotationsPage() {
             {selected.status === "draft" ? (
               <DraftEditor
                 quotation={selected}
-                variantOptions={variantOptions}
                 onChanged={(q) => {
                   setSelected(q);
                   refreshList();
@@ -354,15 +344,14 @@ export default function QuotationsPage() {
 // unit price set here is exactly what the converted order bills.
 function DraftEditor({
   quotation,
-  variantOptions,
   onChanged,
 }: {
   quotation: Quotation;
-  variantOptions: { id: string; label: string }[];
   onChanged: (q: Quotation) => void;
 }) {
   const [edits, setEdits] = useState<Record<string, { quantity: string; unitPrice: string }>>({});
-  const [newVariant, setNewVariant] = useState("");
+  const [newOption, setNewOption] = useState<VariantOption | null>(null);
+  const newVariant = newOption?.variantId ?? "";
   const [newQty, setNewQty] = useState("1");
   const [newPrice, setNewPrice] = useState("");
   const [validUntil, setValidUntil] = useState(quotation.valid_until);
@@ -408,7 +397,7 @@ function DraftEditor({
       quantity: Number(newQty),
       ...(newPrice ? { unit_price: Number(newPrice) } : {}),
     });
-    setNewVariant("");
+    setNewOption(null);
     setNewQty("1");
     setNewPrice("");
     return q;
@@ -487,19 +476,10 @@ function DraftEditor({
 
       <div className="flex items-end gap-2 flex-wrap border rounded-md p-3 bg-muted/50">
         <div className="flex-1 min-w-56">
-          <Label className="mb-2 block">Add a line</Label>
-          <Select value={newVariant} onValueChange={(v) => setNewVariant(v ?? "")} items={Object.fromEntries(variantOptions.map((o) => [o.id, o.label]))}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select a product" />
-            </SelectTrigger>
-            <SelectContent>
-              {variantOptions.map((o) => (
-                <SelectItem key={o.id} value={o.id}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label htmlFor="quoteNewLine" className="mb-2 block">
+            Add a line
+          </Label>
+          <ProductPicker id="quoteNewLine" ariaLabel="Add a line: product" value={newOption} onChange={setNewOption} />
         </div>
         <Input aria-label="New line quantity" className="w-20" type="number" min="0.001" step="0.001" value={newQty} onChange={(e) => setNewQty(e.target.value)} />
         <Input aria-label="New line price" className="w-32" type="number" min="0" step="0.01" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} placeholder="Auto price" />

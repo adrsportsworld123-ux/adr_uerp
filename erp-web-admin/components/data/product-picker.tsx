@@ -8,7 +8,18 @@ import { Product } from "@/lib/types";
 
 export type VariantOption = { variantId: string; productId: string; productName: string; sku: string; sellingPrice: string; label: string; trackBatch: boolean };
 
-function toOptions(products: Product[]): VariantOption[] {
+function toOptions(products: Product[], mode: "variant" | "product"): VariantOption[] {
+  if (mode === "product") {
+    return products.map((p) => ({
+      variantId: p.product_id,
+      productId: p.product_id,
+      productName: p.name,
+      sku: p.variants.length === 1 ? p.variants[0].sku : `${p.variants.length} variants`,
+      sellingPrice: p.variants[0]?.selling_price ?? "",
+      label: p.name,
+      trackBatch: false,
+    }));
+  }
   return products.flatMap((p) =>
     p.variants.map((v) => ({
       variantId: v.variant_id,
@@ -32,11 +43,18 @@ export function ProductPicker({
   onChange,
   placeholder = "Select a product",
   status = "active",
+  mode = "variant",
+  id,
+  ariaLabel,
 }: {
   value: VariantOption | null;
   onChange: (option: VariantOption) => void;
   placeholder?: string;
   status?: "active" | "all";
+  /** "product" lists each product once (for a choice that applies to the whole product). */
+  mode?: "variant" | "product";
+  id?: string;
+  ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -60,7 +78,7 @@ export function ProductPicker({
         .get<{ products: Product[] }>(`/api/v1/products?${params.toString()}`)
         .then((d) => {
           if (cancelled) return;
-          setOptions(toOptions(d.products));
+          setOptions(toOptions(d.products, mode));
           setActive(0);
         })
         .catch(() => !cancelled && setOptions([]))
@@ -70,7 +88,7 @@ export function ProductPicker({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [open, query, status]);
+  }, [open, query, status, mode]);
 
   function choose(o: VariantOption | undefined) {
     if (!o) return;
@@ -81,7 +99,7 @@ export function ProductPicker({
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger className="flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border bg-card px-3 text-left text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30">
+      <Popover.Trigger id={id} aria-label={ariaLabel} className="flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border bg-card px-3 text-left text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30">
         <span className={`truncate ${value ? "" : "text-muted-foreground"}`}>{value ? value.label : placeholder}</span>
         <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       </Popover.Trigger>
@@ -129,6 +147,7 @@ export function ProductPicker({
                 >
                   <span className="min-w-0">
                     <span className="block truncate">{o.label}</span>
+                    {mode === "product" && <span className="block truncate text-xs text-muted-foreground">{o.sku}</span>}
                   </span>
                   <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                     <span className="tabular">₹{o.sellingPrice}</span>

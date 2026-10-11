@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlertModal } from "@/components/ui/dialog";
+import { EditDialog } from "@/components/data/edit-dialog";
 import { PageHeader } from "@/components/data/page-header";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
@@ -29,6 +30,7 @@ export default function PriceListsPage() {
   const [variant, setVariant] = useState<VariantOption | null>(null);
   const variantId = variant?.variantId ?? "";
   const [deleting, setDeleting] = useState<PriceListSummary | null>(null);
+  const [renaming, setRenaming] = useState<PriceListSummary | null>(null);
   const [price, setPrice] = useState("");
   const [savingItem, setSavingItem] = useState(false);
 
@@ -93,6 +95,20 @@ export default function PriceListsPage() {
     }
   }
 
+  async function renameList(l: PriceListSummary, name: string) {
+    // EditDialog shows a thrown error in the dialog and keeps it open.
+    await api.patch(`/api/v1/pricing/price-lists/${l.price_list_id}`, { name });
+    toast.success("Price list renamed");
+    if (l.price_list_id === selectedId) await loadDetail(selectedId);
+    loadLists();
+  }
+
+  // Editing an item reuses the add form: same variant, its current price.
+  function editItem(it: { variant_id: string; sku: string; product_name: string; price: string }) {
+    setVariant({ variantId: it.variant_id, productId: "", productName: it.product_name, sku: it.sku, sellingPrice: "", label: `${it.product_name} (${it.sku})`, trackBatch: false });
+    setPrice(String(Number(it.price)));
+  }
+
   async function deleteList(id: string) {
     setDeleting(null);
     try {
@@ -137,28 +153,40 @@ export default function PriceListsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Name</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead></TableHead>
+                <TableHead className="text-right">Items</TableHead>
+                <TableHead className="text-right">Customers</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {lists.map((l) => (
                 <TableRow key={l.price_list_id} className={l.price_list_id === selectedId ? "bg-primary-soft" : ""}>
                   <TableCell>{l.name}</TableCell>
-                  <TableCell>{l.item_count}</TableCell>
-                  <TableCell className="flex gap-2">
-                    <Button variant="outline" onClick={() => loadDetail(l.price_list_id)}>
-                      View / edit
-                    </Button>
-                    <Button variant="destructive" onClick={() => setDeleting(l)}>
-                      Delete
-                    </Button>
+                  <TableCell className="tabular text-right">{l.item_count}</TableCell>
+                  <TableCell className="tabular text-right">{l.customer_count}</TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" onClick={() => loadDetail(l.price_list_id)}>
+                        View / edit
+                      </Button>
+                      <Button variant="outline" onClick={() => setRenaming(l)}>
+                        Rename
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        disabled={l.customer_count > 0}
+                        title={l.customer_count > 0 ? `${l.customer_count} customer(s) use this list. Move them to another list on their Customers page first.` : undefined}
+                        onClick={() => setDeleting(l)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
               {lists.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center text-sm text-muted-foreground py-6">
+                  <TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-6">
                     No price lists yet
                   </TableCell>
                 </TableRow>
@@ -176,8 +204,8 @@ export default function PriceListsPage() {
           <CardContent className="flex flex-col gap-4">
             <div className="flex items-end gap-2 flex-wrap">
               <div className="flex flex-col gap-2 w-64">
-                <Label>Product</Label>
-                <ProductPicker value={variant} onChange={setVariant} />
+                <Label htmlFor="itemProduct">Product</Label>
+                <ProductPicker id="itemProduct" ariaLabel="Product" value={variant} onChange={setVariant} />
               </div>
               <div className="flex flex-col gap-2 w-36">
                 <Label htmlFor="itemPrice">Price</Label>
@@ -186,6 +214,9 @@ export default function PriceListsPage() {
               <Button onClick={saveItem} disabled={savingItem || !variantId || !price}>
                 {savingItem ? "Saving..." : "Set price"}
               </Button>
+              {variant && detail.items.some((it) => it.variant_id === variant.variantId) && (
+                <span className="text-xs text-muted-foreground">Already on this list — Set price replaces it.</span>
+              )}
             </div>
 
             <Table>
@@ -202,7 +233,14 @@ export default function PriceListsPage() {
                     <TableCell>{it.product_name} <span className="text-xs text-muted-foreground">({it.sku})</span></TableCell>
                     <TableCell>₹{it.price}</TableCell>
                     <TableCell>
-                      <Button variant="outline" onClick={() => removeItem(it.variant_id)}>Remove</Button>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" onClick={() => editItem(it)}>
+                          Edit price
+                        </Button>
+                        <Button variant="outline" onClick={() => removeItem(it.variant_id)}>
+                          Remove
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -217,6 +255,17 @@ export default function PriceListsPage() {
             </Table>
           </CardContent>
         </Card>
+      )}
+      {renaming && (
+        <EditDialog
+          open
+          onOpenChange={(o) => !o && setRenaming(null)}
+          title={`Rename “${renaming.name}”`}
+          fields={[{ key: "name", label: "Name", required: true }]}
+          initial={{ name: renaming.name }}
+          saveLabel="Rename"
+          onSave={(ch) => renameList(renaming, ch.name)}
+        />
       )}
       <AlertModal
         open={!!deleting}

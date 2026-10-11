@@ -303,7 +303,14 @@ export interface Promotion {
   stacking: "exclusive" | "stackable";
   starts_at: string | null;
   ends_at: string | null;
+  days_of_week: number[] | null; // 0 = Sunday .. 6 = Saturday
+  time_start: string | null; // "HH:MM"
+  time_end: string | null;
   active: boolean;
+  product_name: string | null;
+  category_name: string | null;
+  // Sales this promotion discounted; a used promotion can't be deleted.
+  times_used: number;
 }
 
 export interface Coupon {
@@ -1023,6 +1030,8 @@ export interface PriceListSummary {
   price_list_id: string;
   name: string;
   item_count: number;
+  // Customers on this list; a list with customers can't be deleted.
+  customer_count: number;
 }
 
 export interface PriceListItem {
@@ -1118,6 +1127,8 @@ export interface PriceRule {
   time_end: string | null;
   active: boolean;
   created_at: string;
+  // Sale lines this rule priced; a used rule can be deactivated, not edited or deleted.
+  times_used: number;
 }
 
 export interface EffectivePrice {

@@ -18,7 +18,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Branch, Notification, Product, StockLevel } from "@/lib/types";
+import { Branch, Notification, StockLevel } from "@/lib/types";
+import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -164,9 +165,9 @@ function NotificationLogSection() {
 
 function ReorderPointSection() {
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
   const [branchId, setBranchId] = useState("");
-  const [variantId, setVariantId] = useState("");
+  const [variant, setVariant] = useState<VariantOption | null>(null);
+  const variantId = variant?.variantId ?? "";
   const [stock, setStock] = useState<StockLevel | null>(null);
   const [reorderPoint, setReorderPoint] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -176,14 +177,6 @@ function ReorderPointSection() {
     api
       .get<{ branches: Branch[] }>("/api/v1/branches")
       .then((d) => setBranches(d.branches))
-      .catch(() => {});
-    api
-      // limit=200 (the backend's own cap), not the default 50 — see
-      // inventory-reconciliation/page.tsx's matching comment: a product
-      // picker sourced from the unbounded default page can lose a seed
-      // product off the end as the catalog grows.
-      .get<{ products: Product[] }>("/api/v1/products?limit=200")
-      .then((d) => setProducts(d.products))
       .catch(() => {});
   }, []);
 
@@ -270,25 +263,8 @@ function ReorderPointSection() {
             </Select>
           </div>
           <div className="flex flex-col gap-2 w-64">
-            <Label>Product</Label>
-            <Select
-              value={variantId}
-              onValueChange={(v) => setVariantId(v ?? "")}
-              items={Object.fromEntries(products.flatMap((p) => p.variants.map((v) => [v.variant_id, `${p.name} (${v.sku})`])))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select a product" />
-              </SelectTrigger>
-              <SelectContent>
-                {products.flatMap((p) =>
-                  p.variants.map((v) => (
-                    <SelectItem key={v.variant_id} value={v.variant_id}>
-                      {p.name} ({v.sku})
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="reorderProduct">Product</Label>
+            <ProductPicker id="reorderProduct" ariaLabel="Product" value={variant} onChange={setVariant} />
           </div>
         </div>
 

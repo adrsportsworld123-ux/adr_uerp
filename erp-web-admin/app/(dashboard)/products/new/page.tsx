@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect, categoryOption } from "@/components/data/search-select";
 
 export default function NewProductPage() {
   const router = useRouter();
@@ -207,23 +208,16 @@ export default function NewProductPage() {
 
             <div className="flex items-end gap-2">
               <div className="flex flex-col gap-2 flex-1">
-                <Label>Category (optional)</Label>
-                <Select
+                <Label htmlFor="productCategory">Category (optional)</Label>
+                <SearchSelect
+                  id="productCategory"
+                  ariaLabel="Category"
                   value={categoryId}
-                  onValueChange={(v) => setCategoryId(v ?? "")}
-                  items={Object.fromEntries(categories.map((c) => [c.category_id, c.name]))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="None" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.map((c) => (
-                      <SelectItem key={c.category_id} value={c.category_id}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onChange={setCategoryId}
+                  options={categories.map(categoryOption)}
+                  noneLabel="None"
+                  placeholder="None"
+                />
               </div>
               <Input
                 placeholder="New category"
@@ -276,23 +270,16 @@ export default function NewProductPage() {
 
             <div className="flex items-end gap-2">
               <div className="flex flex-col gap-2 flex-1">
-                <Label>Brand (optional)</Label>
-                <Select
+                <Label htmlFor="productBrand">Brand (optional)</Label>
+                <SearchSelect
+                  id="productBrand"
+                  ariaLabel="Brand"
                   value={brandId}
-                  onValueChange={(v) => setBrandId(v ?? "")}
-                  items={Object.fromEntries(brands.map((b) => [b.brand_id, b.name]))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="None" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {brands.map((b) => (
-                      <SelectItem key={b.brand_id} value={b.brand_id}>
-                        {b.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onChange={setBrandId}
+                  options={brands.map((b) => ({ value: b.brand_id, label: b.name }))}
+                  noneLabel="None"
+                  placeholder="None"
+                />
               </div>
               <Input placeholder="New brand" value={newBrandName} onChange={(e) => setNewBrandName(e.target.value)} className="w-40" />
               <Button type="button" variant="outline" onClick={addBrand} disabled={!newBrandName.trim()}>

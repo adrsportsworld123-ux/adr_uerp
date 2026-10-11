@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/data/search-select";
 
 const STATUS_BADGE: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   active: "default",
@@ -119,22 +120,19 @@ function LinkSelect({
   onChange: (v: string) => void;
   options: { id: string; name: string }[];
 }) {
+  const id = `link-${label.toLowerCase().replace(/\s+/g, "-")}`;
   return (
     <div className="flex flex-col gap-2">
-      <Label>{label}</Label>
-      <Select value={value} onValueChange={(v) => onChange(v ?? "")} items={{ "": "None", ...Object.fromEntries(options.map((o) => [o.id, o.name])) }}>
-        <SelectTrigger aria-label={label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="">None</SelectItem>
-          {options.map((o) => (
-            <SelectItem key={o.id} value={o.id}>
-              {o.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <Label htmlFor={id}>{label}</Label>
+      <SearchSelect
+        id={id}
+        ariaLabel={label}
+        value={value}
+        onChange={onChange}
+        options={options.map((o) => ({ value: o.id, label: o.name.replace(/^\//, "").replace(/\//g, " › ") || o.name }))}
+        noneLabel="None"
+        placeholder="None"
+      />
     </div>
   );
 }

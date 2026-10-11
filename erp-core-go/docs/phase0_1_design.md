@@ -103,11 +103,11 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `DEVICE_MISMATCH` | 403 | `POST /auth/pin-login` | Terminal is already device-bound and the presented `device_fingerprint` doesn't match |
 | `TERMINAL_UNAVAILABLE` | 403 | `POST /auth/pin-login` | `pos_terminals.status != 'active'`, or (Phase 12) the terminal's branch is inactive; also `POST /pos-shifts` for a till that isn't an active POS (`channel = 'pos'`) till of this merchant in an active branch |
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
-| `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}`, `POST /pricing/scheduled-changes`, `POST /pricing/rules` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29). For a rule, `details.below_cost_skus` lists every covered variant it would put below cost (§3.30) |
+| `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}`, `POST /pricing/scheduled-changes`, `PUT /pricing/scheduled-changes/{id}`, `POST /pricing/rules`, `PUT /pricing/rules/{id}` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29). For a rule, `details.below_cost_skus` lists every covered variant it would put below cost (§3.30) |
 | `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
 | `BARCODE_EXISTS` | 409 | `POST /products/variants/{id}/barcodes`, `POST /products` | The supplied `code` (or `variants[].original_barcode`) is already assigned to a different variant (`barcodes` table's `UNIQUE (merchant_id, code)`) |
 | `NO_BARCODE` | 409 | `GET /products/variants/{id}/label` | The variant has no barcode assigned yet — assign one first |
-| `COUPON_CODE_EXISTS` | 409 | `POST /coupons` | The supplied `code` is already in use (`coupons` table's `UNIQUE (merchant_id, code)`) |
+| `COUPON_CODE_EXISTS` | 409 | `POST /coupons`, `PATCH /coupons/{id}` | The supplied `code` is already in use (`coupons` table's `UNIQUE (merchant_id, code)`) |
 | `COUPON_NOT_FOUND` | 404 | `POST /sales/orders/{id}/coupons` | No active coupon with this code |
 | `COUPON_NOT_VALID` | 409 | `POST /sales/orders/{id}/coupons` | Outside the coupon's validity window, branch restriction, or channel restriction |
 | `COUPON_MIN_PURCHASE_NOT_MET` | 409 | `POST /sales/orders/{id}/coupons` | Order subtotal is below the coupon's `min_purchase_amount` |
@@ -153,10 +153,10 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `LLM_ERROR` | 502 | `POST /ai/ask`, `POST /ai/copilot/chat` | The configured provider (Ollama or Anthropic) returned an error or was unreachable — distinct from `INTERNAL_ERROR` since this is the external LLM call failing, not this service's own database/logic |
 | `AI_INTENT_UNRECOGNIZED` | 422 | `POST /ai/ask` | The question didn't map to one of the fixed report intents this endpoint supports, or the model's classification didn't parse — never a reason to guess and run an unrelated report |
 | `AI_BRANCH_REQUIRED` | 422 | `POST /ai/ask` | The matched intent needs a specific branch (`daily_sales`, `stock_summary`, `eod_cash`) but none was named in the question or resolved against this tenant's real branch list |
-| `PRICE_LIST_NAME_EXISTS` | 409 | `POST /pricing/price-lists` | A price list with this name already exists for this merchant |
+| `PRICE_LIST_NAME_EXISTS` | 409 | `POST /pricing/price-lists`, `PATCH /pricing/price-lists/{id}` | A price list with this name already exists for this merchant |
 | `PRICE_LIST_IN_USE` | 409 | `DELETE /pricing/price-lists/{id}` | One or more customers are currently assigned to this price list — reassign them first |
 | `DUPLICATE_NAME` | 409 | `POST`/`PATCH` `/categories`, `/brands`, `/tax-slabs` | Another record of that kind already uses the name (case-insensitive; per parent for categories) — enforced by unique indexes, `migrations/036` (§3.32) |
-| `IN_USE` | 409 | `DELETE /categories/{id}`, `/brands/{id}`, `/tax-slabs/{id}` | Something still references the record; `details.dependencies` lists what and how many (the same list `GET /dependencies/{entity}/{id}` returns) — deactivate instead (§3.32) |
+| `IN_USE` | 409 | `DELETE /categories/{id}`, `/brands/{id}`, `/tax-slabs/{id}`, `/promotions/{id}`, `/coupons/{id}` | Something still references the record; `details.dependencies` lists what and how many (the same list `GET /dependencies/{entity}/{id}` returns) — deactivate instead (§3.32) |
 | `INACTIVE_REFERENCE` | 409 | `POST /products`, `PATCH /products/{id}` | A category/brand/tax slab being newly linked was deactivated. An existing link to a since-deactivated record is left alone (§3.32) |
 | `INVALID_PAIRING_CODE` | 401 | `POST /pos-terminals/pair` | Merchant code or pairing code wrong, expired, already used, or the terminal/branch is inactive — deliberately one answer for all (§3.33) |
 | `BRANCH_INACTIVE` | 409 | `POST /pos-terminals`, `POST /pos-terminals/{id}/pairing-code` | The branch is inactive — reactivate it first (§3.33) |
@@ -203,8 +203,9 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `RUN_NOT_READY` | 409 | `GET /report-builder/runs/{id}/download` | The export is still queued or running, or failed (§3.46) |
 | `QUOTATION_NOT_DRAFT` | 409 | `POST /quotations/{id}/send`, `DELETE /quotations/{id}`, `PATCH /quotations/{id}`, `POST/PATCH/DELETE /quotations/{id}/lines[/{line_id}]` | Only a `draft` quotation can be sent, edited or deleted — once sent, `reject` is the correct next step |
 | `QUOTATION_EMPTY` | 409 | `DELETE /quotations/{id}/lines/{line_id}` | That's the quote's only line — delete the quotation instead |
-| `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) instead |
-| `SCHEDULED_CHANGE_NOT_PENDING` | 409 | `POST /pricing/scheduled-changes/{id}/cancel` | Only a `pending` change can be cancelled — an applied one is history, undone by a new change |
+| `PRICE_RULE_IN_USE` | 409 | `DELETE /pricing/rules/{id}`, `PUT /pricing/rules/{id}` | The rule has priced at least one real sale line — deactivate it (`PATCH {"active": false}`) and create a new rule instead (§3.49) |
+| `SCHEDULED_CHANGE_NOT_PENDING` | 409 | `POST /pricing/scheduled-changes/{id}/cancel`, `PUT /pricing/scheduled-changes/{id}` | Only a `pending` change can be cancelled or edited — an applied one is history, undone by a new change |
+| `SCHEDULED_CHANGE_APPLIED` | 409 | `DELETE /pricing/scheduled-changes/{id}` | An applied change is the variant's price history and can't be deleted (§3.49) |
 | `QUOTATION_NOT_SENT` | 409 | `POST /quotations/{id}/accept`, `.../reject` | Only a `sent` quotation can be accepted or rejected |
 | `QUOTATION_NOT_ACCEPTED` | 409 | `POST /quotations/{id}/convert` | Only an `accepted` quotation can be converted into a real sales order |
 | `INTERNAL_ERROR` | 500 | any handler | Unexpected failure (DB error, etc.) — message is intentionally generic; check server logs for detail |
@@ -1714,6 +1715,52 @@ Migration 048 adds account 5005 Round Off (expense; a credit balance is a gain) 
 - 248 new products with 375 variants;
 - bills of ₹3,64,341, of which ₹90,000 is paid by bank transfer and ₹2,74,341 is due;
 - GST input of ₹8,666.56 and inventory of ₹3,55,674.21, matching the printed invoices.
+
+### 3.49 Pricing & promotions CRUD, typeahead pickers, cart discounts on line edits (2026-10-11)
+
+**Why.** The admin could create promotions, coupons, price rules and scheduled changes, but not edit or delete most of them, and its product/category dropdowns loaded only the first 200 products (`adr_sports_world` already has 254). A sale history check also found a real billing bug (below).
+
+**Endpoints** (all writes gated as before: `promotions.manage` / `pricing.manage`):
+
+| Method & Path | What changed |
+|---|---|
+| `PATCH /promotions/{id}` | Every field editable (type, scope, product/category, segment, config, stacking, dates, days, hours, active); the merged result goes through create's `validatePromotion`. The response adds `days_of_week`, `time_start`, `time_end`, `product_name`, `category_name`, `times_used` |
+| `DELETE /promotions/{id}` | 204, or `409 IN_USE` once a sale carries its discount (`sales_order_discounts.promotion_id`): deactivate instead |
+| `PATCH /coupons/{id}` | Every field editable (code, type, value, min purchase, limits, window, channels, branch, active); `clear_usage_limit_total` / `clear_usage_limit_per_customer` remove a limit; validated by create's `validateCoupon` |
+| `DELETE /coupons/{id}` | 204, or `409 IN_USE` once redeemed on a sale |
+| `PATCH /pricing/price-lists/{id}` | Rename. The list response adds `customer_count` (a list with customers still can't be deleted) |
+| `PUT /pricing/rules/{id}` | Full edit with create's validation and margin guard, **only while unused**: a rule that priced a sale line keeps its terms (`409 PRICE_RULE_IN_USE`). The response adds `times_used` |
+| `PUT /pricing/scheduled-changes/{id}` | Edit a pending change (variant, prices, time, reason, override) |
+| `DELETE /pricing/scheduled-changes/{id}` | 204 for pending, cancelled or failed; `409 SCHEDULED_CHANGE_APPLIED` for an applied one |
+
+`GET /dependencies/promotion/{id}` and `/coupon/{id}` now answer, so the admin's delete dialog explains a refusal the same way it does for masters. Past sales keep the discount they were given (each sale records its own amounts), so editing a promotion or coupon changes future sales only.
+
+**Bug fixed: discounts and cart edits.** Changing a cart line's quantity zeroed that line's discount but left the discount's record on the order, and removing a line dropped its share the same way. The sale was then charged without the discount while its history still listed it (found on a live 2% manual discount). Now `PATCH .../lines/{id}` and `DELETE .../lines/{id}` undo **every** discount layer on the cart first (`clearDiscountLayers`):
+- each line goes back to its undiscounted tax and total;
+- the coupon redemption is removed and its use count given back;
+- loyalty points redeemed against the cart are returned;
+- the discount records are deleted.
+
+The response carries `discounts_cleared: true`, and the POS tells the cashier to apply them again (each layer was sized against the old cart). Adding a line leaves existing discounts as they are.
+
+**Admin UI.**
+- Promotions, coupons, price rules and scheduled changes are list + dialog CRUD with activate/deactivate, search and status filters.
+- Delete uses the dependency dialog (promotions, coupons) or a confirmation, and is disabled with the reason where the API would refuse.
+- Every product, variant, category and brand choice is a typeahead: `ProductPicker` (server search, now with a whole-product mode) or `SearchSelect` (in-memory list, every typed word must match).
+- GRN, purchase return and branch transfer lines can be found by name/SKU as well as by barcode.
+- The Pricing list is searched and paged on the server, with category/brand filters, and bulk update gains category/brand filters.
+- The Sales page refreshes itself every 15 s while visible (with a pause switch), and its summary now honours the status filter. The POS sales history refreshes every 30 s and ignores a stale response.
+
+**Verified live** (`promo_crud_live.py`, 37 checks, on the dev database), including:
+- a 2% discount undone by a quantity change;
+- a coupon's use given back when a line is removed;
+- a finished sale whose discount list matches what was charged;
+- every field of a promotion and a coupon edited;
+- a used promotion/coupon refused deletion with its dependencies;
+- a used rule refused editing but deactivatable;
+- the margin guard on rule and schedule edits.
+
+The admin's browser specs for these screens were updated and pass.
 
 ---
 

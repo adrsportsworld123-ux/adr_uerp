@@ -11,7 +11,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Branch, Product, ReorderSuggestion, Recommendation } from "@/lib/types";
+import { Branch, ReorderSuggestion, Recommendation } from "@/lib/types";
+import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,8 +30,8 @@ export default function AIInsightsPage() {
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [products, setProducts] = useState<Product[]>([]);
-  const [variantId, setVariantId] = useState("");
+  const [variant, setVariant] = useState<VariantOption | null>(null);
+  const variantId = variant?.variantId ?? "";
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [sourceOrderCount, setSourceOrderCount] = useState<number | null>(null);
   const [loadingRecs, setLoadingRecs] = useState(false);
@@ -61,7 +62,6 @@ export default function AIInsightsPage() {
 
   useEffect(() => {
     api.get<{ branches: Branch[] }>("/api/v1/branches?scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
-    api.get<{ products: Product[] }>("/api/v1/products?limit=200").then((d) => setProducts(d.products)).catch(() => {});
     fetchSuggestions()
       .then((data) => setSuggestions(data.suggestions))
       .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load reorder suggestions"));
@@ -84,7 +84,6 @@ export default function AIInsightsPage() {
     }
   }
 
-  const variantOptions = products.flatMap((p) => p.variants.map((v) => ({ id: v.variant_id, label: `${p.name} (${v.sku})` })));
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
@@ -172,15 +171,8 @@ export default function AIInsightsPage() {
         <CardContent className="flex flex-col gap-4">
           <div className="flex items-end gap-4 flex-wrap">
             <div className="flex flex-col gap-2 w-64">
-              <Label>Product</Label>
-              <Select value={variantId} onValueChange={(v) => setVariantId(v ?? "")} items={Object.fromEntries(variantOptions.map((o) => [o.id, o.label]))}>
-                <SelectTrigger><SelectValue placeholder="Select a product" /></SelectTrigger>
-                <SelectContent>
-                  {variantOptions.map((o) => (
-                    <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="recProduct">Product</Label>
+              <ProductPicker id="recProduct" ariaLabel="Product" value={variant} onChange={setVariant} />
             </div>
             <Button onClick={getRecommendations} disabled={!variantId || loadingRecs}>
               {loadingRecs ? "Loading..." : "Get recommendations"}

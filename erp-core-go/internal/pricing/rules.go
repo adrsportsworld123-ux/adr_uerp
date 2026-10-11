@@ -65,12 +65,16 @@ type priceRule struct {
 	TimeEnd      *string `json:"time_end"`
 	Active       bool    `json:"active"`
 	CreatedAt    string  `json:"created_at"`
+	// TimesUsed counts the sale lines this rule priced. A used rule can be
+	// deactivated but not edited or deleted: its terms explain those sales.
+	TimesUsed int `json:"times_used"`
 }
 
 const priceRuleSelect = `
 	SELECT r.id, r.name, r.variant_id::text, pv.sku, p.name, r.category_id::text, c.name, r.branch_id::text,
 	       r.rule_type, r.value::text, r.priority, r.starts_at::text, r.ends_at::text, r.days_of_week,
-	       to_char(r.time_start, 'HH24:MI'), to_char(r.time_end, 'HH24:MI'), r.active, r.created_at::text
+	       to_char(r.time_start, 'HH24:MI'), to_char(r.time_end, 'HH24:MI'), r.active, r.created_at::text,
+	       (SELECT count(*) FROM sales_order_lines l WHERE l.price_rule_id = r.id)::int
 	FROM price_rules r
 	LEFT JOIN product_variants pv ON pv.id = r.variant_id
 	LEFT JOIN products p ON p.id = pv.product_id
@@ -79,7 +83,7 @@ const priceRuleSelect = `
 func scanPriceRule(row pgx.Row, pr *priceRule) error {
 	return row.Scan(&pr.PriceRuleID, &pr.Name, &pr.VariantID, &pr.SKU, &pr.ProductName, &pr.CategoryID, &pr.CategoryName,
 		&pr.BranchID, &pr.RuleType, &pr.Value, &pr.Priority, &pr.StartsAt, &pr.EndsAt, &pr.DaysOfWeek,
-		&pr.TimeStart, &pr.TimeEnd, &pr.Active, &pr.CreatedAt)
+		&pr.TimeStart, &pr.TimeEnd, &pr.Active, &pr.CreatedAt, &pr.TimesUsed)
 }
 
 // validatePriceRule returns a client-facing message, or "" when valid —
@@ -154,40 +158,9 @@ func (h *Handler) CreatePriceRule(w http.ResponseWriter, r *http.Request) {
 	var resp priceRule
 	var belowCost []string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		// Margin guard over every variant the rule covers, on the NET
-		// price — the same rule PATCH /pricing/variants/{id} applies,
-		// just across a category when the rule targets one.
-		rows, err := tx.Query(ctx, `
-			SELECT pv.sku, pv.selling_price, pv.mrp, pv.cost_price, p.price_includes_tax,
-			       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
-			FROM product_variants pv
-			JOIN products p ON p.id = pv.product_id
-			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-			WHERE pv.id = NULLIF($1,'')::uuid OR p.category_id = NULLIF($2,'')::uuid`, req.VariantID, req.CategoryID)
-		if err != nil {
+		var err error
+		if belowCost, err = ruleBelowCost(ctx, tx, req); err != nil {
 			return err
-		}
-		covered := 0
-		for rows.Next() {
-			var sku string
-			var selling, mrp, cost, taxRate float64
-			var inclusive bool
-			if err := rows.Scan(&sku, &selling, &mrp, &cost, &inclusive, &taxRate); err != nil {
-				rows.Close()
-				return err
-			}
-			covered++
-			price := applyRule(selling, mrp, req.RuleType, req.Value)
-			if taxcalc.NetPrice(price, taxRate, inclusive) < cost {
-				belowCost = append(belowCost, sku)
-			}
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if req.VariantID != "" && covered == 0 {
-			return pgx.ErrNoRows
 		}
 		if len(belowCost) > 0 && !req.Override {
 			return errNegativeMargin
@@ -385,6 +358,125 @@ func (h *Handler) GetEffectivePrice(w http.ResponseWriter, r *http.Request) {
 		if lp.RuleName != "" {
 			resp["price_rule_name"] = lp.RuleName
 		}
+		httpx.JSON(w, http.StatusOK, resp)
+	}
+}
+
+// ruleBelowCost is the margin guard over every variant a rule covers, on
+// the NET price: the same rule PATCH /pricing/variants/{id} applies, just
+// across a category when the rule targets one. Returns the SKUs the rule
+// would sell below cost, or pgx.ErrNoRows when a variant rule's variant
+// doesn't exist.
+func ruleBelowCost(ctx context.Context, tx pgx.Tx, req priceRuleRequest) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT pv.sku, pv.selling_price, pv.mrp, pv.cost_price, p.price_includes_tax,
+		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
+		FROM product_variants pv
+		JOIN products p ON p.id = pv.product_id
+		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+		WHERE pv.id = NULLIF($1,'')::uuid OR p.category_id = NULLIF($2,'')::uuid`, req.VariantID, req.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var belowCost []string
+	covered := 0
+	for rows.Next() {
+		var sku string
+		var selling, mrp, cost, taxRate float64
+		var inclusive bool
+		if err := rows.Scan(&sku, &selling, &mrp, &cost, &inclusive, &taxRate); err != nil {
+			return nil, err
+		}
+		covered++
+		price := applyRule(selling, mrp, req.RuleType, req.Value)
+		if taxcalc.NetPrice(price, taxRate, inclusive) < cost {
+			belowCost = append(belowCost, sku)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if req.VariantID != "" && covered == 0 {
+		return nil, pgx.ErrNoRows
+	}
+	return belowCost, nil
+}
+
+// UpdatePriceRule: PUT /pricing/rules/{id} — replaces a rule's terms, with
+// create's validation and margin guard. Refused (409 PRICE_RULE_IN_USE)
+// once the rule has priced a sale: those sales were priced under its
+// current terms, so deactivate it and create a new rule instead. The
+// active flag is left as it is (PATCH sets it).
+func (h *Handler) UpdatePriceRule(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	var req priceRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	if msg := validatePriceRule(req); msg != "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", msg)
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	var resp priceRule
+	var belowCost []string
+	var ruleMissing bool
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var used bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM sales_order_lines WHERE price_rule_id = r.id)
+			FROM price_rules r WHERE r.id = $1 FOR UPDATE`, id).Scan(&used); err != nil {
+			ruleMissing = errors.Is(err, pgx.ErrNoRows)
+			return err
+		}
+		if used {
+			return errPriceRuleInUse
+		}
+		var err error
+		if belowCost, err = ruleBelowCost(ctx, tx, req); err != nil {
+			return err
+		}
+		if len(belowCost) > 0 && !req.Override {
+			return errNegativeMargin
+		}
+		var days []int16
+		for _, d := range req.DaysOfWeek {
+			days = append(days, int16(d))
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE price_rules SET name = $1, variant_id = NULLIF($2,'')::uuid, category_id = NULLIF($3,'')::uuid,
+			       branch_id = NULLIF($4,'')::uuid, rule_type = $5, value = $6, priority = $7,
+			       starts_at = NULLIF($8,'')::timestamptz, ends_at = NULLIF($9,'')::timestamptz, days_of_week = $10,
+			       time_start = NULLIF($11,'')::time, time_end = NULLIF($12,'')::time
+			WHERE id = $13`,
+			req.Name, req.VariantID, req.CategoryID, req.BranchID, req.RuleType, req.Value, req.Priority,
+			req.StartsAt, req.EndsAt, days, req.TimeStart, req.TimeEnd, id); err != nil {
+			return err
+		}
+		return scanPriceRule(tx.QueryRow(ctx, priceRuleSelect+` WHERE r.id = $1`, id), &resp)
+	})
+
+	switch {
+	case errors.Is(err, errPriceRuleInUse):
+		httpx.Error(w, http.StatusConflict, "PRICE_RULE_IN_USE", "this rule has priced real sales — deactivate it and create a new rule instead")
+	case errors.Is(err, errNegativeMargin):
+		httpx.ErrorWithDetails(w, http.StatusConflict, "NEGATIVE_MARGIN",
+			fmt.Sprintf("this rule would sell %d variant(s) below cost — pass override:true to allow it anyway", len(belowCost)),
+			map[string]any{"below_cost_skus": belowCost})
+	case errors.Is(err, pgx.ErrNoRows) && ruleMissing:
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "price rule not found")
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "variant not found")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update price rule")
+	default:
 		httpx.JSON(w, http.StatusOK, resp)
 	}
 }

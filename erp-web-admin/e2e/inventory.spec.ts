@@ -25,8 +25,9 @@ test("stock lookup and a manual adjustment round-trip through the real backend",
   const onHandValue = () => page.locator("div", { hasText: /^On hand:/ }).last().locator("span");
 
   await test.step("look up the seed variant's current stock", async () => {
-    await page.getByRole("combobox").nth(1).click();
-    await page.getByRole("option", { name: new RegExp(SEED_VARIANT_LABEL) }).click();
+    await page.locator("#invVariant").click();
+    await page.getByLabel("Search products").fill(SEED_VARIANT_LABEL);
+    await page.getByRole("option", { name: new RegExp(SEED_VARIANT_LABEL) }).first().click();
     await page.getByRole("button", { name: "Look up" }).click();
     const onHandText = await onHandValue().innerText();
     onHandBefore = Number(onHandText);
@@ -62,8 +63,9 @@ test("stock lookup and a manual adjustment round-trip through the real backend",
     await page.waitForURL("/dashboard");
 
     await page.goto("/inventory");
-    await page.getByRole("combobox").nth(1).click();
-    await page.getByRole("option", { name: new RegExp(SEED_VARIANT_LABEL) }).click();
+    await page.locator("#invVariant").click();
+    await page.getByLabel("Search products").fill(SEED_VARIANT_LABEL);
+    await page.getByRole("option", { name: new RegExp(SEED_VARIANT_LABEL) }).first().click();
     await page.fill("#delta", "1");
     await page.fill("#reason", "should be denied");
     await page.getByRole("button", { name: "Apply" }).click();

@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { ProductPicker } from "@/components/data/product-picker";
 
 interface BarcodeLookup {
   product_id: string;
@@ -192,6 +193,21 @@ export default function GRNDetailPage() {
                 Look up
               </Button>
             </form>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="grnProductSearch">Or search by name or SKU</Label>
+              <ProductPicker
+                id="grnProductSearch"
+                ariaLabel="Search a product to receive"
+                status="all"
+                value={null}
+                placeholder="Search a product"
+                onChange={(o) => {
+                  setLookupError(null);
+                  setBarcode("");
+                  setResolved({ product_id: o.productId, product_name: o.productName, variant_id: o.variantId, sku: o.sku });
+                }}
+              />
+            </div>
             {lookupError && <p className="text-sm text-destructive">{lookupError}</p>}
             {resolved && (
               <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-muted/50">

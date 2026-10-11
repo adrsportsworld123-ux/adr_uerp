@@ -12,24 +12,19 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
-import { Branch, Product, StockLevel } from "@/lib/types";
+import { Branch, StockLevel } from "@/lib/types";
+import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-interface VariantOption {
-  variantId: string;
-  label: string;
-  trackBatch: boolean;
-}
-
 export default function InventoryPage() {
   const [branchId, setBranchId] = useState(SEED_BRANCH_ID);
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [variantOptions, setVariantOptions] = useState<VariantOption[]>([]);
-  const [variantId, setVariantId] = useState("");
+  const [variant, setVariant] = useState<VariantOption | null>(null);
+  const variantId = variant?.variantId ?? "";
   const [stock, setStock] = useState<StockLevel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,7 +36,7 @@ export default function InventoryPage() {
   // it, where blank writes off the expired/soonest-expiring batch first.
   const [batchNo, setBatchNo] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
-  const trackBatch = variantOptions.find((o) => o.variantId === variantId)?.trackBatch ?? false;
+  const trackBatch = variant?.trackBatch ?? false;
   const batchMissing = trackBatch && Number(delta) > 0 && !batchNo.trim();
   // Phase 15: an adjustment worth more than the Approval Policies' stock
   // threshold (quantity x cost) needs an approver. The cost isn't on this
@@ -55,22 +50,6 @@ export default function InventoryPage() {
     api
       .get<{ branches: Branch[] }>("/api/v1/branches?scope=mine")
       .then((d) => setBranches(d.branches))
-      .catch(() => {});
-    api
-      // limit=200 (the backend's own cap), not the default 50 — see
-      // inventory-reconciliation/page.tsx's matching comment: a variant
-      // picker sourced from the unbounded default page can lose a seed
-      // variant off the end as the catalog grows.
-      .get<{ products: Product[] }>("/api/v1/products?limit=200")
-      .then((d) => {
-        const options: VariantOption[] = [];
-        for (const p of d.products) {
-          for (const v of p.variants) {
-            options.push({ variantId: v.variant_id, label: `${p.name} (${v.sku})`, trackBatch: v.track_batch });
-          }
-        }
-        setVariantOptions(options);
-      })
       .catch(() => {});
   }, []);
 
@@ -151,23 +130,10 @@ export default function InventoryPage() {
               </Select>
             </div>
             <div className="flex flex-col gap-2 w-64">
-              <Label>Product variant</Label>
-              <Select
-                value={variantId}
-                onValueChange={(v) => setVariantId(v ?? "")}
-                items={Object.fromEntries(variantOptions.map((o) => [o.variantId, o.label]))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a product variant" />
-                </SelectTrigger>
-                <SelectContent>
-                  {variantOptions.map((o) => (
-                    <SelectItem key={o.variantId} value={o.variantId}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="invVariant">Product variant</Label>
+              {/* Searches the whole catalogue (name, SKU or barcode); the old
+                  dropdown held only the first 200 products. */}
+              <ProductPicker id="invVariant" ariaLabel="Product variant" value={variant} onChange={setVariant} placeholder="Choose a product variant" />
             </div>
             <Button onClick={lookup} disabled={busy || !variantId}>
               Look up

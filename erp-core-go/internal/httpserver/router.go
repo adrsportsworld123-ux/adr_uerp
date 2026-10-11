@@ -417,12 +417,16 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Post("/promotions", promo.CreatePromotion)
 			protected.With(authn.RequirePermission(database, "promotions.manage")).
 				Patch("/promotions/{id}", promo.UpdatePromotion)
+			protected.With(authn.RequirePermission(database, "promotions.manage")).
+				Delete("/promotions/{id}", promo.DeletePromotion)
 
 			protected.Get("/coupons", promo.ListCoupons)
 			protected.With(authn.RequirePermission(database, "promotions.manage")).
 				Post("/coupons", promo.CreateCoupon)
 			protected.With(authn.RequirePermission(database, "promotions.manage")).
 				Patch("/coupons/{id}", promo.UpdateCoupon)
+			protected.With(authn.RequirePermission(database, "promotions.manage")).
+				Delete("/coupons/{id}", promo.DeleteCoupon)
 
 			protected.Get("/loyalty/config", loy.GetConfig)
 			protected.With(authn.RequirePermission(database, "loyalty.manage")).
@@ -468,6 +472,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Post("/pricing/price-lists", prc.CreatePriceList)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Patch("/pricing/price-lists/{id}", prc.RenamePriceList)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Delete("/pricing/price-lists/{id}", prc.DeletePriceList)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Put("/pricing/price-lists/{id}/items/{variant_id}", prc.UpsertPriceListItem)
@@ -483,6 +489,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Post("/pricing/scheduled-changes", prc.CreateScheduledChange)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Post("/pricing/scheduled-changes/{id}/cancel", prc.CancelScheduledChange)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Put("/pricing/scheduled-changes/{id}", prc.UpdateScheduledChange)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Delete("/pricing/scheduled-changes/{id}", prc.DeleteScheduledChange)
 			protected.Get("/pricing/rules", prc.ListPriceRules)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Post("/pricing/rules", prc.CreatePriceRule)
@@ -490,6 +500,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Patch("/pricing/rules/{id}", prc.SetPriceRuleActive)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Delete("/pricing/rules/{id}", prc.DeletePriceRule)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Put("/pricing/rules/{id}", prc.UpdatePriceRule)
 			protected.Get("/pricing/variants/{id}/effective-price", prc.GetEffectivePrice)
 
 			protected.With(authn.RequirePermission(database, "hr.manage")).

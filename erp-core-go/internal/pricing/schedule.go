@@ -355,3 +355,131 @@ func (h *Handler) applyScheduledChange(ctx context.Context, merchantID, id strin
 		h.reindex(ctx, merchantID, variantID)
 	}
 }
+
+var (
+	errScheduleNotEditable = errors.New("only a pending scheduled change can be edited")
+	errScheduleApplied     = errors.New("an applied price change is history and can't be deleted — schedule a new change instead")
+)
+
+// UpdateScheduledChange: PUT /pricing/scheduled-changes/{id} — pending
+// only. Same body and checks as create (the variant can change too); the
+// margin guard runs again against today's cost.
+func (h *Handler) UpdateScheduledChange(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	var req scheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	if req.VariantID == "" || (req.CostPrice == nil && req.MRP == nil && req.SellingPrice == nil) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "variant_id and at least one of cost_price/mrp/selling_price are required")
+		return
+	}
+	for _, v := range []*float64{req.CostPrice, req.MRP, req.SellingPrice} {
+		if v != nil && *v < 0 {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "prices cannot be negative")
+			return
+		}
+	}
+	effectiveAt, err := time.Parse(time.RFC3339, req.EffectiveAt)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "effective_at must be an RFC3339 timestamp, e.g. 2026-11-01T00:00:00+05:30")
+		return
+	}
+	if !effectiveAt.After(time.Now()) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", errEffectiveAtNotFuture.Error())
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	var resp scheduledChange
+	var missing bool
+	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM scheduled_price_changes WHERE id = $1 FOR UPDATE`, id).Scan(&status); err != nil {
+			missing = true
+			return err
+		}
+		if status != "pending" {
+			return errScheduleNotEditable
+		}
+		var cost, selling float64
+		if err := tx.QueryRow(ctx, `SELECT cost_price, selling_price FROM product_variants WHERE id = $1`, req.VariantID).
+			Scan(&cost, &selling); err != nil {
+			return err
+		}
+		if req.CostPrice != nil {
+			cost = *req.CostPrice
+		}
+		if req.SellingPrice != nil {
+			selling = *req.SellingPrice
+		}
+		taxRatePct, inclusive, err := loadTaxBasis(ctx, tx, req.VariantID)
+		if err != nil {
+			return err
+		}
+		if taxcalc.NetPrice(selling, taxRatePct, inclusive) < cost && !req.Override {
+			return errNegativeMargin
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE scheduled_price_changes
+			SET variant_id = $1, cost_price = $2, mrp = $3, selling_price = $4, effective_at = $5,
+			    reason = NULLIF($6,''), override = $7
+			WHERE id = $8`,
+			req.VariantID, req.CostPrice, req.MRP, req.SellingPrice, effectiveAt, req.Reason, req.Override, id); err != nil {
+			return err
+		}
+		return scanScheduledChange(tx.QueryRow(ctx, scheduledChangeSelect+` WHERE s.id = $1`, id), &resp)
+	})
+	switch {
+	case errors.Is(err, errScheduleNotEditable):
+		httpx.Error(w, http.StatusConflict, "SCHEDULED_CHANGE_NOT_PENDING", errScheduleNotEditable.Error())
+	case errors.Is(err, errNegativeMargin):
+		httpx.Error(w, http.StatusConflict, "NEGATIVE_MARGIN", "this price would sell below cost — pass override:true to allow it anyway")
+	case errors.Is(err, pgx.ErrNoRows) && missing:
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "scheduled change not found")
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "variant not found")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update scheduled change")
+	default:
+		httpx.JSON(w, http.StatusOK, resp)
+	}
+}
+
+// DeleteScheduledChange: DELETE /pricing/scheduled-changes/{id} — removes
+// a pending, cancelled or failed change; 204. An applied change is part of
+// the variant's price history (409 SCHEDULED_CHANGE_APPLIED).
+func (h *Handler) DeleteScheduledChange(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM scheduled_price_changes WHERE id = $1 FOR UPDATE`, id).Scan(&status); err != nil {
+			return err
+		}
+		if status == "applied" {
+			return errScheduleApplied
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM scheduled_price_changes WHERE id = $1`, id)
+		return err
+	})
+	switch {
+	case errors.Is(err, errScheduleApplied):
+		httpx.Error(w, http.StatusConflict, "SCHEDULED_CHANGE_APPLIED", errScheduleApplied.Error())
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "scheduled change not found")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not delete scheduled change")
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

@@ -100,9 +100,9 @@ test("AI Insights: reorder suggestions and frequently-bought-together both refle
   });
 
   await test.step("frequently-bought-together correctly surfaces the second product", async () => {
-    // Combobox order on this page: Branch (reorder-suggestions section),
-    // then Product (this section) — the second one, not the first.
-    await page.getByRole("combobox").nth(1).click();
+    // The product picker searches the server as you type.
+    await page.locator("#recProduct").click();
+    await page.getByLabel("Search products").fill(productAName);
     await page.getByRole("option", { name: new RegExp(productAName) }).click();
     await page.getByRole("button", { name: "Get recommendations" }).click();
 

@@ -45,11 +45,23 @@ test("promotion/coupon CRUD, permission gate, and a customer's loyalty ledger", 
   const promoName = `E2E Promo ${unique}`;
   await test.step("create a percent promotion", async () => {
     await page.goto("/promotions");
+    await page.getByRole("button", { name: "New promotion" }).click();
     await page.fill("#promoName", promoName);
     await page.fill("#valuePercent", "10");
     await page.click('button[type="submit"]:has-text("Create promotion")');
     await expect(page.getByText("Promotion created")).toBeVisible();
     await expect(page.getByRole("cell", { name: promoName })).toBeVisible();
+  });
+
+  await test.step("edit the promotion: the dialog opens with its values, and saving updates the row", async () => {
+    const row = page.getByRole("row", { name: new RegExp(promoName) });
+    await row.getByRole("button", { name: "Edit" }).click();
+    await expect(page.locator("#promoName")).toHaveValue(promoName);
+    await expect(page.locator("#valuePercent")).toHaveValue("10");
+    await page.fill("#valuePercent", "15");
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Promotion updated")).toBeVisible();
+    await expect(row).toContainText("15% off");
   });
 
   await test.step("deactivate the promotion", async () => {
@@ -59,13 +71,53 @@ test("promotion/coupon CRUD, permission gate, and a customer's loyalty ledger", 
     await expect(row.getByText("inactive")).toBeVisible();
   });
 
+  await test.step("the status filter separates active and inactive promotions", async () => {
+    await page.getByLabel("promotions status").selectOption("active");
+    await expect(page.getByRole("row", { name: new RegExp(promoName) })).toHaveCount(0);
+    await page.getByLabel("promotions status").selectOption("inactive");
+    await expect(page.getByRole("row", { name: new RegExp(promoName) })).toBeVisible();
+    await page.getByLabel("promotions status").selectOption("");
+  });
+
+  await test.step("delete the unused promotion", async () => {
+    const row = page.getByRole("row", { name: new RegExp(promoName) });
+    await row.getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByText(/Nothing uses this promotion/)).toBeVisible();
+    await page.getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page.getByText(`Deleted promotion “${promoName}”`)).toBeVisible();
+    await expect(page.getByRole("row", { name: new RegExp(promoName) })).toHaveCount(0);
+  });
+
   const couponCode = `E2E${unique}`;
   await test.step("create a flat-amount coupon", async () => {
+    await page.getByRole("button", { name: "New coupon" }).click();
     await page.fill("#code", couponCode);
     await page.fill("#couponValue", "50");
     await page.click('button[type="submit"]:has-text("Create coupon")');
     await expect(page.getByText("Coupon created")).toBeVisible();
     await expect(page.getByRole("cell", { name: couponCode })).toBeVisible();
+  });
+
+  await test.step("edit the coupon's value and usage limit", async () => {
+    const row = page.getByRole("row", { name: new RegExp(couponCode) });
+    await row.getByRole("button", { name: "Edit" }).click();
+    await expect(page.locator("#code")).toHaveValue(couponCode);
+    await page.fill("#couponValue", "75");
+    await page.fill("#usageLimitTotal", "100");
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Coupon updated")).toBeVisible();
+    await expect(row).toContainText("₹75.00");
+    await expect(row).toContainText("0 / 100");
+  });
+
+  await test.step("deactivate, then delete the unused coupon", async () => {
+    const row = page.getByRole("row", { name: new RegExp(couponCode) });
+    await row.getByRole("button", { name: "Deactivate" }).click();
+    await expect(page.getByText("Coupon deactivated")).toBeVisible();
+    await row.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page.getByText(`Deleted coupon “${couponCode}”`)).toBeVisible();
+    await expect(page.getByRole("row", { name: new RegExp(couponCode) })).toHaveCount(0);
   });
 
   await test.step("update loyalty settings", async () => {
@@ -92,6 +144,7 @@ test("promotion/coupon CRUD, permission gate, and a customer's loyalty ledger", 
     await page.waitForURL("/dashboard");
 
     await page.goto("/promotions");
+    await page.getByRole("button", { name: "New promotion" }).click();
     await page.fill("#promoName", `Denied ${unique}`);
     await page.fill("#valuePercent", "5");
     await page.click('button[type="submit"]:has-text("Create promotion")');

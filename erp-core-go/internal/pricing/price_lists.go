@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,9 @@ type priceListSummary struct {
 	ID        string `json:"price_list_id"`
 	Name      string `json:"name"`
 	ItemCount int    `json:"item_count"`
+	// CustomerCount is how many customers are on this list; a list with
+	// customers can't be deleted (reassign them first).
+	CustomerCount int `json:"customer_count"`
 }
 
 type priceListItem struct {
@@ -80,6 +84,41 @@ func (h *Handler) CreatePriceList(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// RenamePriceList: PATCH /pricing/price-lists/{id} {name} — gated by
+// pricing.manage. The list's prices are edited per item (PUT/DELETE
+// .../items/{variant_id}); this renames the list itself.
+func (h *Handler) RenamePriceList(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	var req createPriceListRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name is required")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	listID := chi.URLParam(r, "id")
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE price_lists SET name = $1 WHERE id = $2`, req.Name, listID)
+		if err == nil && tag.RowsAffected() == 0 {
+			return pgx.ErrNoRows
+		}
+		return err
+	})
+	switch {
+	case isUniqueViolation(err):
+		httpx.Error(w, http.StatusConflict, "PRICE_LIST_NAME_EXISTS", "a price list with this name already exists")
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "price list not found")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not rename price list")
+	default:
+		httpx.JSON(w, http.StatusOK, priceListSummary{ID: listID, Name: req.Name})
+	}
+}
+
 // ListPriceLists: GET /pricing/price-lists
 func (h *Handler) ListPriceLists(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
@@ -90,7 +129,8 @@ func (h *Handler) ListPriceLists(w http.ResponseWriter, r *http.Request) {
 	lists := []priceListSummary{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT pl.id::text, pl.name, COUNT(pli.id)
+			SELECT pl.id::text, pl.name, COUNT(pli.id),
+			       (SELECT count(*) FROM customers c WHERE c.price_list_id = pl.id)::int
 			FROM price_lists pl
 			LEFT JOIN price_list_items pli ON pli.price_list_id = pl.id
 			GROUP BY pl.id, pl.name
@@ -101,7 +141,7 @@ func (h *Handler) ListPriceLists(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var l priceListSummary
-			if err := rows.Scan(&l.ID, &l.Name, &l.ItemCount); err != nil {
+			if err := rows.Scan(&l.ID, &l.Name, &l.ItemCount, &l.CustomerCount); err != nil {
 				return err
 			}
 			lists = append(lists, l)

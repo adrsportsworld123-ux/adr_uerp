@@ -102,18 +102,31 @@ test("wholesale price list: create, set an item price via the UI, and confirm it
     expect(resp.status()).toBe(403);
   });
 
-  await test.step("deleting the list while a customer is still assigned is refused, through the real UI (found missing during a completeness audit)", async () => {
+  await test.step("while a customer is still assigned, the list shows it and Delete is unavailable with the reason", async () => {
     await page.reload();
-    await page.getByRole("row", { name: new RegExp(listName) }).getByRole("button", { name: "Delete" }).click();
-    await page.getByRole("button", { name: "Delete price list" }).click(); // Phase 11: confirm step
-    await expect(page.getByText(/assigned to this price list/i)).toBeVisible();
-    // Still there — the refusal didn't silently drop the row.
-    await expect(page.getByRole("cell", { name: listName })).toBeVisible();
+    const row = page.getByRole("row", { name: new RegExp(listName) });
+    const del = row.getByRole("button", { name: "Delete" });
+    await expect(del).toBeDisabled();
+    await expect(del).toHaveAttribute("title", /customer\(s\) use this list/);
+    // The API refuses it too, not just the button.
+    const headers = { Authorization: `Bearer ${adminToken}` };
+    const lists = await (await request.get(`${API_BASE}/pricing/price-lists`, { headers })).json();
+    const id = lists.price_lists.find((l: { name: string }) => l.name === listName).price_list_id;
+    expect((await request.delete(`${API_BASE}/pricing/price-lists/${id}`, { headers })).status()).toBe(409);
+  });
+
+  await test.step("rename the list", async () => {
+    await page.getByRole("row", { name: new RegExp(listName) }).getByRole("button", { name: "Rename" }).click();
+    await page.locator("#edit-name").fill(`${listName} renamed`);
+    await page.getByRole("button", { name: "Rename", exact: true }).last().click();
+    await expect(page.getByText("Price list renamed")).toBeVisible();
+    await expect(page.getByRole("cell", { name: `${listName} renamed` })).toBeVisible();
   });
 
   await test.step("after unassigning the customer, the same delete succeeds", async () => {
     const headers = { Authorization: `Bearer ${adminToken}` };
     await request.patch(`${API_BASE}/customers/${customerId}`, { headers, data: { price_list_id: "" } });
+    await page.reload();
 
     await page.getByRole("row", { name: new RegExp(listName) }).getByRole("button", { name: "Delete" }).click();
     await page.getByRole("button", { name: "Delete price list" }).click(); // Phase 11: confirm step

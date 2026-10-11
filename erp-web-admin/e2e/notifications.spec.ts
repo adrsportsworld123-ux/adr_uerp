@@ -88,8 +88,9 @@ test("reorder-point configuration, permission gate, and the sent-notification lo
     const comboboxes = page.getByRole("combobox");
     await comboboxes.nth(3).click();
     await page.getByRole("option", { name: "MG Road" }).click();
-    await comboboxes.nth(4).click();
-    await page.getByRole("option", { name: /SG Cricket Bat/ }).click();
+    await page.locator("#reorderProduct").click();
+    await page.getByLabel("Search products").fill("SG Cricket Bat");
+    await page.getByRole("option", { name: /SG Cricket Bat/ }).first().click();
 
     await expect(page.getByText("On hand")).toBeVisible();
     await page.fill("#reorderPoint", "3");
@@ -114,8 +115,9 @@ test("reorder-point configuration, permission gate, and the sent-notification lo
     const comboboxes = page.getByRole("combobox");
     await comboboxes.nth(3).click();
     await page.getByRole("option", { name: "MG Road" }).click();
-    await comboboxes.nth(4).click();
-    await page.getByRole("option", { name: /SG Cricket Bat/ }).click();
+    await page.locator("#reorderProduct").click();
+    await page.getByLabel("Search products").fill("SG Cricket Bat");
+    await page.getByRole("option", { name: /SG Cricket Bat/ }).first().click();
     await expect(page.getByText("On hand")).toBeVisible();
 
     await page.fill("#reorderPoint", "7");

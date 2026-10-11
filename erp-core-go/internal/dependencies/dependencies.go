@@ -118,13 +118,15 @@ func AnyBlocking(deps []Dependency) bool {
 // admin can delete or deactivate are listed — this is not a generic
 // "count anything" endpoint.
 var entities = map[string]string{
-	"category": "categories",
-	"brand":    "brands",
-	"tax_slab": "tax_slabs",
-	"supplier": "suppliers",
-	"customer": "customers",
-	"branch":   "branches",
-	"product":  "products",
+	"category":  "categories",
+	"brand":     "brands",
+	"tax_slab":  "tax_slabs",
+	"supplier":  "suppliers",
+	"customer":  "customers",
+	"branch":    "branches",
+	"product":   "products",
+	"promotion": "promotions",
+	"coupon":    "coupons",
 }
 
 type Handler struct {
@@ -254,6 +256,8 @@ var labels = map[string]string{
 	"inventory_reconciliation_lines": "Stock count lines",
 	"prescriptions":                  "Prescriptions",
 	"einvoices":                      "E-invoices",
+	"sales_order_discounts":          "Sales it discounted",
+	"coupon_redemptions":             "Redemptions",
 }
 
 func label(refTable, target, column string) string {

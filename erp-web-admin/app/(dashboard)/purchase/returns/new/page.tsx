@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
 interface DraftLine {
   variant_id: string;
@@ -28,6 +29,8 @@ export default function NewPurchaseReturnPage() {
   const [lines, setLines] = useState<DraftLine[]>([]);
 
   const [barcode, setBarcode] = useState("");
+  // Either pick the product by search or scan its barcode.
+  const [picked, setPicked] = useState<VariantOption | null>(null);
   const [quantity, setQuantity] = useState("");
   const [unitCost, setUnitCost] = useState("");
   const [batchNo, setBatchNo] = useState("");
@@ -42,10 +45,15 @@ export default function NewPurchaseReturnPage() {
   async function handleAddLine(e: React.FormEvent) {
     e.preventDefault();
     setLineError(null);
+    if (!picked && !barcode.trim()) {
+      setLineError("Search for a product or scan its barcode.");
+      return;
+    }
     try {
-      const product = await api.get<{ variant_id: string; product_name: string; sku: string }>(
-        `/api/v1/products/barcode/${encodeURIComponent(barcode)}`
-      );
+      const product = picked
+        ? { variant_id: picked.variantId, product_name: picked.productName, sku: picked.sku }
+        : await api.get<{ variant_id: string; product_name: string; sku: string }>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}`);
+      setPicked(null);
       setLines((prev) => [
         ...prev,
         { variant_id: product.variant_id, product_name: product.product_name, sku: product.sku, quantity: Number(quantity), unit_cost: Number(unitCost), batch_no: batchNo.trim() },
@@ -142,9 +150,32 @@ export default function NewPurchaseReturnPage() {
             </Table>
           )}
           <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-muted/50">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="barcode">Scan or enter barcode</Label>
-              <Input id="barcode" required value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="8901234567890" />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="lineProduct">Product</Label>
+                <ProductPicker
+                  id="lineProduct"
+                  ariaLabel="Product"
+                  value={picked}
+                  placeholder="Search name or SKU"
+                  onChange={(o) => {
+                    setPicked(o);
+                    setBarcode("");
+                  }}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="barcode">Or scan / enter barcode</Label>
+                <Input
+                  id="barcode"
+                  value={barcode}
+                  onChange={(e) => {
+                    setBarcode(e.target.value);
+                    setPicked(null);
+                  }}
+                  placeholder="8901234567890"
+                />
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">

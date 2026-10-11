@@ -66,10 +66,11 @@ test("Phase 10: price rule, scheduled change, and draft quotation editing throug
 
   await test.step("create a 20%-off rule for the product through the Price Rules screen", async () => {
     await page.goto("/pricing/rules");
+    await page.getByRole("button", { name: "New rule" }).click();
     await page.fill("#ruleName", ruleName);
     await page.locator("button", { hasText: "A whole category" }).click();
     await page.getByRole("option", { name: "One product variant" }).click();
-    await page.locator("button", { hasText: "Choose a variant" }).first().click();
+    await page.locator("#ruleTarget").click();
     await page.getByRole("option", { name: new RegExp(productName) }).click();
     await page.fill("#ruleValue", "-20");
     for (const day of ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]) {
@@ -81,7 +82,7 @@ test("Phase 10: price rule, scheduled change, and draft quotation editing throug
   });
 
   await test.step("the price check shows the rule pricing the item at ₹800", async () => {
-    await page.locator("button", { hasText: "Choose a variant" }).last().click();
+    await page.locator("#checkVariant").click();
     await page.getByRole("option", { name: new RegExp(productName) }).click();
     await page.locator("button", { hasText: "Choose a branch" }).click();
     await page.getByRole("option", { name: branchName, exact: true }).click();
@@ -93,16 +94,18 @@ test("Phase 10: price rule, scheduled change, and draft quotation editing throug
   await test.step("deactivating the rule puts the item back at its base price, and an unused rule deletes", async () => {
     const row = page.getByRole("row", { name: new RegExp(ruleName) });
     await row.getByRole("button", { name: "Deactivate" }).click();
-    await expect(row).toContainText("inactive");
+    await expect(row).toContainText(/inactive/i);
     await page.getByRole("button", { name: "Check price" }).click();
     await expect(page.getByTestId("price-check-result")).toContainText("₹1000.00");
     await expect(page.getByTestId("price-check-result")).toContainText("base price");
     await row.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete rule" }).click();
     await expect(page.getByRole("row", { name: new RegExp(ruleName) })).toHaveCount(0);
   });
 
   await test.step("schedule a price change for tomorrow, see it pending, then cancel it", async () => {
     await page.goto("/pricing/scheduled-changes");
+    await page.getByRole("button", { name: "Schedule a change" }).click();
     await page.locator("button", { hasText: "Choose a product variant" }).click();
     await page.getByRole("option", { name: new RegExp(productName) }).click();
     await page.fill("#newSelling", "1100");
@@ -114,7 +117,7 @@ test("Phase 10: price rule, scheduled change, and draft quotation editing throug
 
     const row = page.getByRole("row", { name: new RegExp(productName) });
     await expect(row).toContainText("Selling ₹1100.00");
-    await expect(row).toContainText("pending");
+    await expect(row).toContainText(/pending/i);
     await row.getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("row", { name: new RegExp(productName) })).toHaveCount(0); // list is filtered to pending
   });

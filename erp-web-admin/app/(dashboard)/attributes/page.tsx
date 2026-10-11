@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect, categoryOption } from "@/components/data/search-select";
 
 const INPUT_TYPE_LABEL: Record<string, string> = { select: "Select (controlled list)", text: "Free text", number: "Number" };
 
@@ -204,15 +205,8 @@ export default function AttributesPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2 w-64">
-            <Label>Category</Label>
-            <Select value={categoryId} onValueChange={(v) => loadCategorySet(v ?? "")} items={Object.fromEntries(categories.map((c) => [c.category_id, c.name]))}>
-              <SelectTrigger><SelectValue placeholder="Select a category" /></SelectTrigger>
-              <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c.category_id} value={c.category_id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="attrCategory">Category</Label>
+            <SearchSelect id="attrCategory" ariaLabel="Category" value={categoryId} onChange={loadCategorySet} options={categories.map(categoryOption)} placeholder="Select a category" />
           </div>
 
           {categoryId && (

@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/data/page-header";
 import { StatusChip } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
+import { SearchSelect } from "@/components/data/search-select";
 
 type Option = { id: string; name: string };
 
@@ -138,32 +139,26 @@ function ProductsList() {
               <option value="inactive">Inactive</option>
               <option value="discontinued">Discontinued</option>
             </select>
-            <select
-              aria-label="Category"
-              value={state.filters.category_id}
-              onChange={(e) => update({ filters: { category_id: e.target.value } })}
-              className={selectClass}
-            >
-              <option value="">All categories</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Brand"
-              value={state.filters.brand_id}
-              onChange={(e) => update({ filters: { brand_id: e.target.value } })}
-              className={selectClass}
-            >
-              <option value="">All brands</option>
-              {brands.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
+            <div className="w-52">
+              <SearchSelect
+                ariaLabel="Category"
+                value={state.filters.category_id ?? ""}
+                onChange={(v) => update({ filters: { category_id: v } })}
+                options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                noneLabel="All categories"
+                placeholder="All categories"
+              />
+            </div>
+            <div className="w-44">
+              <SearchSelect
+                ariaLabel="Brand"
+                value={state.filters.brand_id ?? ""}
+                onChange={(v) => update({ filters: { brand_id: v } })}
+                options={brands.map((b) => ({ value: b.id, label: b.name }))}
+                noneLabel="All brands"
+                placeholder="All brands"
+              />
+            </div>
           </>
         }
         empty={{
