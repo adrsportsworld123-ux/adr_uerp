@@ -54,6 +54,7 @@ const (
 	AccountPaymentGatewayFees = "5003"
 	AccountOtherIncome        = "4002" // Phase 13 cash paid in (migrations/040)
 	AccountPettyCash          = "5004" // Phase 13 cash paid out of the drawer
+	AccountRoundOff           = "5005" // supplier invoice round-off (migrations/048); a credit balance is a gain
 )
 
 // AccountCodeForPaymentMethod maps a sales/bill payment method to the

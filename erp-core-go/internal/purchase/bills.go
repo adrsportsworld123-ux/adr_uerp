@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"time"
 
@@ -46,6 +47,14 @@ type createBillRequest struct {
 	SupplierInvoiceNumber string  `json:"supplier_invoice_number"`
 	TaxTotal              float64 `json:"tax_total"`
 	DueDate               string  `json:"due_date"` // YYYY-MM-DD, optional
+	// BillDate is the supplier invoice's date (YYYY-MM-DD, optional, not in
+	// the future): the bill and its ledger entry are dated to it, so a bill
+	// entered late still lands in the right month's books and GST input.
+	BillDate string `json:"bill_date"`
+	// RoundOff is the supplier's rounding of the invoice total (under ₹1
+	// either way), so the bill equals the printed total to the paisa
+	// without misstating GST. Posted to Round Off (5005).
+	RoundOff float64 `json:"round_off"`
 }
 
 func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
@@ -63,9 +72,18 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "grn_id is required")
 		return
 	}
+	if req.TaxTotal < 0 || math.Abs(req.RoundOff) >= 1 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "tax_total can't be negative and round_off must be under ₹1 either way")
+		return
+	}
+	billDate, err := pastDate(req.BillDate)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "bill_date: "+err.Error())
+		return
+	}
 
 	var resp billResponse
-	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var supplierID, branchID, grnStatus string
 		var subtotal, freight, otherCharges float64
 		if err := tx.QueryRow(ctx, `
@@ -79,7 +97,7 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 		}
 
 		billNumber := fmt.Sprintf("BILL-%d", time.Now().UnixNano())
-		grandTotal := subtotal + freight + otherCharges + req.TaxTotal
+		grandTotal := math.Round((subtotal+freight+otherCharges+req.TaxTotal+req.RoundOff)*100) / 100
 
 		var dueDate *string
 		if req.DueDate != "" {
@@ -88,12 +106,13 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO purchase_bills (id, merchant_id, branch_id, supplier_id, grn_id, bill_number, supplier_invoice_number,
-			                             due_date, subtotal, tax_total, freight_amount, other_charges, grand_total)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			                             due_date, subtotal, tax_total, freight_amount, other_charges, grand_total, bill_date)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+			        COALESCE($12::date, CURRENT_DATE))
 			RETURNING id, bill_number, COALESCE(supplier_invoice_number,''), supplier_id, grn_id,
 			          subtotal::text, tax_total::text, freight_amount::text, other_charges::text, grand_total::text, amount_paid::text, status`,
 			branchID, supplierID, req.GRNID, billNumber, req.SupplierInvoiceNumber, dueDate,
-			subtotal, req.TaxTotal, freight, otherCharges, grandTotal,
+			subtotal, req.TaxTotal, freight, otherCharges, grandTotal, billDate,
 		).Scan(&resp.BillID, &resp.BillNumber, &resp.SupplierInvoiceNumber, &resp.SupplierID, &resp.GRNID,
 			&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status); err != nil {
 			return err
@@ -111,15 +130,28 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 		if req.TaxTotal > 0 {
 			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountGSTInput, Debit: req.TaxTotal})
 		}
+		// The payable is the printed total; whatever rounding separates it
+		// from cost + tax lands in Round Off.
+		if diff := math.Round((grandTotal-(subtotal+freight+otherCharges+req.TaxTotal))*100) / 100; diff > 0 {
+			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Debit: diff})
+		} else if diff < 0 {
+			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Credit: -diff})
+		}
 		lines = append(lines, accounting.JournalLine{
 			AccountCode: accounting.AccountPayable, Credit: grandTotal,
 			PartyType: "supplier", PartyID: supplierID,
 		})
-		_, err := accounting.PostJournalEntry(ctx, tx, branchID, "purchase_bill", resp.BillID, "Purchase bill "+billNumber, claims.UserID, lines)
+		desc := "Purchase bill " + billNumber
+		if req.SupplierInvoiceNumber != "" {
+			desc += " (supplier invoice " + req.SupplierInvoiceNumber + ")"
+		}
+		_, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "purchase_bill", resp.BillID, desc, claims.UserID, dateOrToday(billDate), lines)
 		return err
 	})
 
 	switch {
+	case errors.Is(err, accounting.ErrPeriodLocked):
+		httpx.Error(w, http.StatusConflict, "PERIOD_LOCKED", "that date is in a locked accounting period")
 	case errors.Is(err, errGRNNotCompleted):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "the GRN must be completed before it can be billed")
 	case errors.Is(err, pgx.ErrNoRows):
@@ -139,6 +171,10 @@ type billPaymentRequest struct {
 	Amount      float64 `json:"amount"`
 	Method      string  `json:"method"`
 	ReferenceNo string  `json:"reference_no"`
+	// PaidOn: when the payment was made (YYYY-MM-DD, optional, not in the
+	// future, not before the bill); the payment and its ledger entry are
+	// dated to it.
+	PaidOn string `json:"paid_on"`
 }
 
 func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
@@ -158,27 +194,37 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "a positive amount and method are required")
 		return
 	}
+	paidOn, err := pastDate(req.PaidOn)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "paid_on: "+err.Error())
+		return
+	}
 
 	var resp billResponse
-	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var branchID, supplierID string
 		var grandTotal, amountPaid float64
-		if err := tx.QueryRow(ctx, `SELECT branch_id, supplier_id, grand_total, amount_paid FROM purchase_bills WHERE id = $1`, billID).
-			Scan(&branchID, &supplierID, &grandTotal, &amountPaid); err != nil {
+		var billDate string
+		if err := tx.QueryRow(ctx, `SELECT branch_id, supplier_id, grand_total, amount_paid, bill_date::text FROM purchase_bills WHERE id = $1`, billID).
+			Scan(&branchID, &supplierID, &grandTotal, &amountPaid, &billDate); err != nil {
 			return err
+		}
+		if paidOn != nil && *paidOn < billDate {
+			return errPaidBeforeBill
 		}
 		if amountPaid+req.Amount > grandTotal+0.01 { // small epsilon for float rounding
 			return errBillOverpaid
 		}
 
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO purchase_bill_payments (id, purchase_bill_id, amount, method, reference_no, performed_by)
-			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
-			billID, req.Amount, req.Method, req.ReferenceNo, claims.UserID); err != nil {
+			INSERT INTO purchase_bill_payments (id, purchase_bill_id, amount, method, reference_no, performed_by, paid_at)
+			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5,
+			        COALESCE(($6::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()))`,
+			billID, req.Amount, req.Method, req.ReferenceNo, claims.UserID, paidOn); err != nil {
 			return err
 		}
 
-		if _, err := accounting.PostJournalEntry(ctx, tx, branchID, "bill_payment", billID, "Payment against bill", claims.UserID, []accounting.JournalLine{
+		if _, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "bill_payment", billID, "Payment against bill", claims.UserID, dateOrToday(paidOn), []accounting.JournalLine{
 			{AccountCode: accounting.AccountPayable, Debit: req.Amount, PartyType: "supplier", PartyID: supplierID},
 			{AccountCode: accounting.AccountCodeForPaymentMethod(req.Method), Credit: req.Amount},
 		}); err != nil {
@@ -203,6 +249,10 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errBillOverpaid):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "payment would exceed the bill's grand total")
+	case errors.Is(err, errPaidBeforeBill):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "paid_on is before the bill's date")
+	case errors.Is(err, accounting.ErrPeriodLocked):
+		httpx.Error(w, http.StatusConflict, "PERIOD_LOCKED", "that date is in a locked accounting period")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "bill not found")
 	case err != nil:

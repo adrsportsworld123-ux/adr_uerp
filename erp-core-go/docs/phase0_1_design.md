@@ -181,7 +181,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `PAYMENT_NOT_CORRECTABLE` | 409 | `POST /sales/orders/{id}/payments/{payment_id}/correct` | Not a captured cash/card/UPI payment on a completed sale, or the same method (§3.39) |
 | `CORRECTION_NOT_APPROVED` | 403 | `POST /sales/orders/{id}/payments/{payment_id}/correct` | Missing or wrong Branch Manager/Merchant Admin code + PIN (§3.39) |
 | `TAX_SLAB_MIXED` | 400 | `POST /tax-slabs` | A slab with both CGST/SGST and IGST: every component on a slab is charged, so it's one or the other (§3.39) |
-| `PERIOD_LOCKED` | 409 | voucher create/edit/post/reverse, `POST /cash-reconciliation` (any posting dated on or before `accounting_settings.locked_through`) | The period is locked (§3.41) |
+| `PERIOD_LOCKED` | 409 | voucher create/edit/post/reverse, `POST /cash-reconciliation`, `POST /purchase/bills` and `.../payments` with a past date (any posting dated on or before `accounting_settings.locked_through`) | The period is locked (§3.41, §3.48) |
 | `JV_APPROVAL_REQUIRED` | 409 | `POST /accounting/vouchers` (`action: post`) | Approval is on: submit instead (§3.41) |
 | `JV_APPROVAL_OFF` | 409 | `POST /accounting/vouchers` (`action: submit`), `.../submit` | Approval is off: post directly (§3.41) |
 | `VOUCHER_STATE` | 409 | voucher edit/delete/actions | The voucher's status doesn't allow it, e.g. editing a posted voucher or reversing twice (§3.41) |
@@ -1567,7 +1567,7 @@ The Phase 15 scope sweep and approvals, and every earlier suite, pass again with
 
 **Onboarding** (`POST /platform/merchants`) creates, in one transaction:
 - the merchant;
-- its 15 system accounts (the ones the automatic postings use; migrations 007, 016, 017 and 040 had seeded them only for the merchants that existed then);
+- its 16 system accounts (the ones the automatic postings use; migrations 007, 016, 017, 040 and 048 had seeded them only for the merchants that existed then);
 - three roles: Merchant Admin with every permission, and Branch Manager (own branch) and POS User from `role_templates` (captured from the oldest merchant's roles by migration 046);
 - the first branch with its online and back-office terminals;
 - the owner's Merchant Admin login;
@@ -1683,6 +1683,37 @@ docker run --rm -i --network erp-core-go_default -e BASE=http://<api>:8080 -e OP
 ```
 
 **Not measured here:** a production-like database size, multiple API replicas, and the POS on a real network. The gate shows the API and schema hold FRD Part A's rate with wide margins on one machine, not production capacity.
+
+### 3.48 Dated purchases and supplier round-off (`internal/purchase/dates.go`, `migrations/048_purchase_round_off.sql`, 2026-10-11)
+
+**Why.** Supplier invoices are often keyed in days or weeks after they were issued. Before this change a goods receipt, a bill and its payments were all dated to the day of entry. That put the stock history, the payable and the GST input credit in the wrong month. The ledger is append-only (§3.41), so they could never be corrected afterwards.
+
+**What each call can now carry:**
+
+| Method & Path | New optional field | Effect |
+|---|---|---|
+| `POST /purchase/grn/{id}/complete` | `{received_on: YYYY-MM-DD}` | The receipt's completion time and its stock movements (noon IST that day) |
+| `POST /purchase/bills` | `bill_date: YYYY-MM-DD` | `purchase_bills.bill_date` and the bill's ledger entry; the description names the supplier invoice |
+| `POST /purchase/bills` | `round_off` (under ₹1 either way) | Bill total = cost + tax + round-off, so the bill equals the printed total to the paisa; the difference is posted to Round Off (5005) |
+| `POST /purchase/bills/{id}/payments` | `paid_on: YYYY-MM-DD` | `paid_at` and the payment's ledger entry; it can't be dated before the bill |
+
+All dates are refused in the future (400). The period lock applies: a date in a locked period gets `409 PERIOD_LOCKED`. Without these fields, every call behaves exactly as before (today, no round-off).
+
+Migration 048 adds account 5005 Round Off (expense; a credit balance is a gain) to every merchant, and onboarding (§3.45) now creates it too.
+
+**Verified live** (`purchase_dates_live.py`, 9 checks, on the dev database):
+- A receipt with a future date is refused; a past one dates its stock movements and completion.
+- A round-off of ₹1 or more is refused.
+- A bill with +₹0.01 round-off equals the printed ₹1,440.00, and its entry (dated to the invoice) is: Inventory 1,371.42, GST input 68.57, Round Off 0.01, Payable 1,440.00.
+- A payment dated before the bill is refused; a dated one credits Bank on its date and marks the bill paid.
+- No dates and a −₹0.50 round-off: today, with Round Off credited.
+- A bill dated into a locked period gets 409.
+
+**First use (2026-10-11).** Seven SPORTS COM invoices were imported into `adr_sports_world` through the API, on their own dates (14 Sep to 1 Oct):
+- 389 lines received;
+- 248 new products with 375 variants;
+- bills of ₹3,64,341, of which ₹90,000 is paid by bank transfer and ₹2,74,341 is due;
+- GST input of ₹8,666.56 and inventory of ₹3,55,674.21, matching the printed invoices.
 
 ---
 

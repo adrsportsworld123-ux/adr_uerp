@@ -28,7 +28,7 @@ var systemAccounts = [][3]string{
 	{"2001", "GST Output Payable", "liability"}, {"2002", "Accounts Payable", "liability"},
 	{"4001", "Sales Revenue", "income"}, {"4002", "Other Income", "income"},
 	{"5001", "Inventory Shrinkage", "expense"}, {"5002", "Cash Over/Short", "expense"}, {"5003", "Payment Gateway Fees", "expense"},
-	{"5004", "Petty Cash Expenses", "expense"},
+	{"5004", "Petty Cash Expenses", "expense"}, {"5005", "Round Off", "expense"},
 }
 
 var merchantCodeRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,39}$`)

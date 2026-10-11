@@ -260,9 +260,20 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grnID := chi.URLParam(r, "id")
+	// Optional body {received_on: YYYY-MM-DD}: when the goods actually
+	// arrived. The stock movements and completion carry that date.
+	var req struct {
+		ReceivedOn string `json:"received_on"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	receivedOn, err := pastDate(req.ReceivedOn)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "received_on: "+err.Error())
+		return
+	}
 
 	var resp grnResponse
-	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var branchID, status string
 		var freight, otherCharges, subtotal float64
 		if err := tx.QueryRow(ctx, `
@@ -363,15 +374,17 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, performed_by)
-				VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'purchase', $3, 'grn', $4, $5)`,
-				branchID, l.variantID, l.quantity, grnID, claims.UserID); err != nil {
+				INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, performed_by, created_at)
+				VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'purchase', $3, 'grn', $4, $5,
+				        COALESCE(($6::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()))`,
+				branchID, l.variantID, l.quantity, grnID, claims.UserID, receivedOn); err != nil {
 				return err
 			}
 		}
 
 		if _, err := tx.Exec(ctx, `
-			UPDATE goods_receipt_notes SET status = 'completed', completed_at = now() WHERE id = $1`, grnID); err != nil {
+			UPDATE goods_receipt_notes SET status = 'completed',
+			  completed_at = COALESCE(($2::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()) WHERE id = $1`, grnID, receivedOn); err != nil {
 			return err
 		}
 
