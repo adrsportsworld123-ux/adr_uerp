@@ -261,6 +261,10 @@ class OrderSummary {
   final String grandTotal;
   final List<OrderLine> lines;
 
+  /// True when a quantity change or line removal undid the cart's
+  /// discounts (the server re-sizes nothing; the cashier re-applies them).
+  final bool discountsCleared;
+
   OrderSummary({
     required this.orderId,
     required this.orderNumber,
@@ -270,6 +274,7 @@ class OrderSummary {
     required this.taxTotal,
     required this.grandTotal,
     this.lines = const [],
+    this.discountsCleared = false,
   });
 
   factory OrderSummary.fromJson(Map<String, dynamic> json) => OrderSummary(
@@ -283,6 +288,7 @@ class OrderSummary {
         lines: (json['lines'] as List<dynamic>? ?? const [])
             .map((e) => OrderLine.fromJson(e as Map<String, dynamic>))
             .toList(),
+        discountsCleared: json['discounts_cleared'] as bool? ?? false,
       );
 }
 

@@ -25,13 +25,12 @@ type updateLineRequest struct {
 // than releasing and re-reserving the full quantity, so a concurrent
 // reservation on the same variant only ever sees the actual net change.
 //
-// Known simplification: any discount already applied to this line
-// (discount_amount) is reset to 0 — it was computed against the
-// pre-edit subtotal in POST .../discounts, and re-proportioning it here
-// would need the whole order's discount context, not just this line.
-// Re-apply the discount after editing quantity if needed; this mirrors the
-// same reservation-matching simplification DeleteLine already documents
-// (no direct FK from a line to its reservation).
+// Discounts: every layer on the cart was sized against the pre-edit cart,
+// so the edit undoes them all (clearDiscountLayers, with their coupon and
+// loyalty side effects) and the response says so (discounts_cleared); the
+// cashier re-applies them. Reservation matching keeps the same
+// simplification DeleteLine documents (no direct FK from a line to its
+// reservation).
 func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -61,6 +60,12 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 		if status != "cart" {
 			return errOrderNotEditable
 		}
+
+		cleared, err := clearDiscountLayers(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
+		resp.DiscountsCleared = cleared
 
 		var variantID string
 		var oldQuantity float64

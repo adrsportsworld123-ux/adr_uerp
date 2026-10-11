@@ -126,3 +126,78 @@ func ApplyDiscountLayer(ctx context.Context, tx pgx.Tx, layer DiscountLayer) (or
 	err = recalcOrderTotals(ctx, tx, layer.OrderID, &resp)
 	return resp, err
 }
+
+// clearDiscountLayers undoes every discount layer on a cart, side effects
+// included: each line back to its undiscounted tax and total, the coupon's
+// redemption and use count, and the loyalty points redeemed against it.
+// Reports whether there was anything to clear.
+//
+// Changing a line's quantity or removing a line calls this first. Each
+// layer was sized against the cart as it was (a percent of that subtotal, a
+// BOGO over those quantities), so after the edit the cashier re-applies
+// them. Before, the edited line's discount was zeroed while the order kept
+// the layer's audit row, so the sale was charged in full while its history
+// still listed the discount.
+func clearDiscountLayers(ctx context.Context, tx pgx.Tx, orderID string) (bool, error) {
+	var n int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM sales_order_discounts WHERE sales_order_id = $1`, orderID).Scan(&n); err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT sol.id, sol.unit_price, sol.quantity, sol.price_includes_tax,
+		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
+		FROM sales_order_lines sol
+		JOIN product_variants pv ON pv.id = sol.variant_id
+		JOIN products p ON p.id = pv.product_id
+		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+		WHERE sol.sales_order_id = $1 AND sol.discount_amount <> 0`, orderID)
+	if err != nil {
+		return false, err
+	}
+	type line struct {
+		id                   string
+		unitPrice, qty, rate float64
+		inclusive            bool
+	}
+	var lines []line
+	for rows.Next() {
+		var l line
+		if err := rows.Scan(&l.id, &l.unitPrice, &l.qty, &l.inclusive, &l.rate); err != nil {
+			rows.Close()
+			return false, err
+		}
+		lines = append(lines, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, l := range lines {
+		calc := taxcalc.ComputeLine(l.unitPrice, l.qty, 0, l.rate, l.inclusive)
+		if _, err := tx.Exec(ctx, `UPDATE sales_order_lines SET discount_amount = 0, tax_amount = $1, line_total = $2 WHERE id = $3`,
+			calc.Tax, calc.Total, l.id); err != nil {
+			return false, err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE coupons c SET usage_count = GREATEST(c.usage_count - r.n, 0)
+		FROM (SELECT coupon_id, count(*) AS n FROM coupon_redemptions WHERE sales_order_id = $1 GROUP BY coupon_id) r
+		WHERE c.id = r.coupon_id`, orderID); err != nil {
+		return false, err
+	}
+	for _, q := range []string{
+		`DELETE FROM coupon_redemptions WHERE sales_order_id = $1`,
+		`DELETE FROM loyalty_ledger WHERE sales_order_id = $1 AND entry_type = 'redeem'`,
+		`DELETE FROM sales_order_discounts WHERE sales_order_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, q, orderID); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}

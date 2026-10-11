@@ -161,7 +161,17 @@ class _PosScreenState extends State<PosScreen> {
     final session = context.read<AppSession>();
     final ok = await _withBusy(() => session.updateLineQuantity(line.lineId, next));
     if (ok != true && session.lastError != null) _snack(session.lastError!);
+    _noteClearedDiscounts(ok == true);
     _refocusScan();
+  }
+
+  /// Editing or removing a line undoes the cart's discounts on the server
+  /// (each was sized against the old cart); say so, or the cashier would
+  /// take payment believing the discount still stands.
+  void _noteClearedDiscounts(bool ok) {
+    if (ok && mounted && context.read<AppSession>().currentOrder?.discountsCleared == true) {
+      _snack('Discounts were removed because the cart changed. Apply them again before payment.');
+    }
   }
 
   Future<void> _removeLine(OrderLine line) async {
@@ -169,6 +179,7 @@ class _PosScreenState extends State<PosScreen> {
     final ok = await _withBusy(() => session.removeLine(line.lineId));
     if (ok == true && _selectedLineId == line.lineId) setState(() => _selectedLineId = null);
     if (ok != true && session.lastError != null) _snack(session.lastError!);
+    _noteClearedDiscounts(ok == true);
     _refocusScan();
   }
 
@@ -179,6 +190,7 @@ class _PosScreenState extends State<PosScreen> {
     final session = context.read<AppSession>();
     final ok = await _withBusy(() => session.updateLineQuantity(line.lineId, qty));
     if (ok != true && session.lastError != null) _snack(session.lastError!);
+    _noteClearedDiscounts(ok == true);
     _refocusScan();
   }
 

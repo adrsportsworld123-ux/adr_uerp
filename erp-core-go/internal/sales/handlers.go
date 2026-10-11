@@ -62,6 +62,10 @@ type orderResponse struct {
 	TaxTotal      string      `json:"tax_total"`
 	GrandTotal    string      `json:"grand_total"`
 	Lines         []orderLine `json:"lines"`
+	// DiscountsCleared is true on a line edit or removal that undid the
+	// cart's discounts (clearDiscountLayers); the till asks the cashier
+	// to apply them again.
+	DiscountsCleared bool `json:"discounts_cleared,omitempty"`
 }
 
 type orderLine struct {
@@ -547,11 +551,21 @@ func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		// Undo the cart's discounts first: they were sized against the
+		// cart with this line in it (see clearDiscountLayers).
+		cleared, err := clearDiscountLayers(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM sales_order_lines WHERE id = $1 AND sales_order_id = $2`, lineID, orderID); err != nil {
 			return err
 		}
 
-		return recalcOrderTotals(ctx, tx, orderID, &resp)
+		if err := recalcOrderTotals(ctx, tx, orderID, &resp); err != nil {
+			return err
+		}
+		resp.DiscountsCleared = cleared
+		return nil
 	})
 
 	switch {

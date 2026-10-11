@@ -12,6 +12,8 @@ export function useServerList<T>(path: string, key: string, query: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  // When the rows on screen were last fetched (ms), for a "live" indicator.
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -23,6 +25,7 @@ export function useServerList<T>(path: string, key: string, query: string) {
         setRows(list);
         setTotal(typeof d.total === "number" ? d.total : list.length);
         setError(null);
+        setLoadedAt(Date.now());
       })
       .catch((e: Error) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
@@ -37,5 +40,9 @@ export function useServerList<T>(path: string, key: string, query: string) {
     setNonce((n) => n + 1);
   }, []);
 
-  return { rows, total, loading, error, reload, setLoading };
+  // A background re-fetch: same query, rows stay as they are (no dimming)
+  // until the new ones arrive. For screens that keep themselves current.
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+
+  return { rows, total, loading, error, reload, refresh, loadedAt, setLoading };
 }

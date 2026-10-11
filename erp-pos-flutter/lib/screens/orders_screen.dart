@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -12,6 +14,10 @@ import 'return_screen.dart';
 /// a day summary, filters, the server's sales, and above them the sales
 /// this device made offline that haven't synced yet ("queued"). Opening a
 /// sale shows its receipt, where it can be reprinted or returned.
+///
+/// While open it refreshes itself every 30 seconds (quietly, keeping the
+/// list on screen), so a manager can leave it up to watch the day's sales
+/// come in, including other tills' when "Whole branch" is selected.
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
 
@@ -35,15 +41,29 @@ class _OrdersScreenState extends State<OrdersScreen> {
   bool _loading = true;
   bool _loadingMore = false;
   String? _error;
+  DateTime? _updatedAt;
+
+  /// Each load gets a number; only the newest one's answer is shown, so a
+  /// slow reply for an old filter can't overwrite the current one.
+  int _loadSeq = 0;
+  Timer? _autoRefresh;
+
+  static const _refreshEvery = Duration(seconds: 30);
 
   @override
   void initState() {
     super.initState();
     _load();
+    _autoRefresh = Timer.periodic(_refreshEvery, (_) {
+      // Not while paging further down (that would reset the list) or
+      // already loading.
+      if (mounted && !_loading && !_loadingMore && _page == 1) _load(quiet: true);
+    });
   }
 
   @override
   void dispose() {
+    _autoRefresh?.cancel();
     _search.dispose();
     super.dispose();
   }
@@ -61,14 +81,19 @@ class _OrdersScreenState extends State<OrdersScreen> {
     };
   }
 
-  Future<void> _load() async {
+  /// [quiet] is the background refresh: the list stays on screen (no
+  /// spinner) and a failure leaves the last good list in place.
+  Future<void> _load({bool quiet = false}) async {
     final session = context.read<AppSession>();
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    final seq = ++_loadSeq;
+    if (!quiet) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     final queued = await session.queuedSales();
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return;
     setState(() => _queued = queued);
     if (session.offlineMode) {
       setState(() {
@@ -85,7 +110,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         session.salesHistory(thisTerminalOnly: _thisTill, status: _status, query: _search.text.trim(), from: from, to: to),
         session.salesSummary(thisTerminalOnly: _thisTill, from: from, to: to),
       ]);
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq) return;
       final page = results[0] as SalesHistoryPage;
       setState(() {
         _orders = page.orders;
@@ -93,15 +118,17 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _page = 1;
         _summary = results[1] as SalesSummaryData;
         _loading = false;
+        _error = null;
+        _updatedAt = DateTime.now();
       });
     } on ApiException catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq || quiet) return;
       setState(() {
         _error = e.message;
         _loading = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || seq != _loadSeq || quiet) return;
       setState(() {
         _error = 'Can\'t reach the server. Only this device\'s queued sales are shown.';
         _loading = false;
@@ -175,7 +202,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sales history'),
-        actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh), tooltip: 'Refresh')],
+        actions: [
+          if (_updatedAt != null)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Text('Updated ${_hm(_updatedAt!)}', style: theme.textTheme.bodySmall),
+              ),
+            ),
+          IconButton(onPressed: _load, icon: const Icon(Icons.refresh), tooltip: 'Refresh'),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _load,
@@ -267,6 +303,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
             controller: _search,
             textInputAction: TextInputAction.search,
             onSubmitted: (_) => _load(),
+            // Rebuild so the clear button appears as soon as there's text.
+            onChanged: (_) => setState(() {}),
             decoration: InputDecoration(
               isDense: true,
               prefixIcon: const Icon(Icons.search),
@@ -383,6 +421,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
       ),
     );
   }
+
+  static String _hm(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
 
   static String _time(String? iso) {
     if (iso == null) return '';

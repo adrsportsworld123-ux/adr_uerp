@@ -4,10 +4,13 @@
 // completed, voided and refunded sale from the tills, the online store and
 // the back office, newest first, with the period's summary on top. A row
 // opens the full sale (items, tax, payments, returns, ledger and audit).
-import { Suspense, useEffect, useState } from "react";
+// The list and summary refresh themselves every 15 seconds while the tab is
+// visible (and on returning to it), so the screen can be left open to
+// monitor the tills; "Pause" stops that.
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Pause, Play, Plus } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { Branch, SaleSummaryRow, SalesSummary } from "@/lib/types";
 import { CHANNEL_LABEL, METHOD_LABEL, STATUS_LABEL, dateTime, qty, rupees } from "@/lib/format";
@@ -18,6 +21,8 @@ import { PageHeader } from "@/components/data/page-header";
 import { StatusChip } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
+import { useLiveRefresh } from "@/components/data/use-live-refresh";
+import { Button } from "@/components/ui/button";
 
 const columns: Column<SaleSummaryRow>[] = [
   {
@@ -76,6 +81,16 @@ function SalesView() {
   const list = useServerList<SaleSummaryRow>("/api/v1/sales/orders", "orders", apiQuery);
   const [summary, setSummary] = useState<SalesSummary | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [live, setLive] = useState(true);
+  const [tick, setTick] = useState(0);
+  const { refresh } = list;
+  useLiveRefresh(
+    useCallback(() => {
+      refresh();
+      setTick((t) => t + 1);
+    }, [refresh]),
+    { enabled: live },
+  );
 
   useEffect(() => {
     api.get<{ branches: Branch[] }>("/api/v1/branches?scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
@@ -86,8 +101,9 @@ function SalesView() {
     const p = new URLSearchParams();
     for (const k of FILTER_KEYS) if (f[k]) p.set(k, f[k]);
     if (state.q) p.set("q", state.q);
+    if (state.status) p.set("status", state.status);
     api.get<SalesSummary>(`/api/v1/sales/summary?${p.toString()}`).then(setSummary).catch(() => setSummary(null));
-  }, [f, state.q]);
+  }, [f, state.q, state.status, tick]);
 
   const setFilter = (k: string, v: string) => {
     list.setLoading(true);
@@ -100,11 +116,21 @@ function SalesView() {
         title="Sales"
         description="Every sale from the tills, the online store and the back office. Open one to see items, tax, payments, returns and its ledger entries."
         actions={
-          can("sales.backoffice") ? (
-            <Link href="/sales/new" className={buttonVariants()}>
-              <Plus /> New sale
-            </Link>
-          ) : undefined
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status" aria-live="polite">
+              <span className={`size-2 rounded-full ${live ? "animate-pulse bg-pay" : "bg-muted-foreground/50"}`} aria-hidden />
+              {live ? "Live" : "Paused"}
+              {list.loadedAt && ` · updated ${new Date(list.loadedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`}
+            </span>
+            <Button variant="outline" size="sm" onClick={() => setLive(!live)} aria-pressed={!live}>
+              {live ? <Pause /> : <Play />} {live ? "Pause" : "Resume"}
+            </Button>
+            {can("sales.backoffice") && (
+              <Link href="/sales/new" className={buttonVariants()}>
+                <Plus /> New sale
+              </Link>
+            )}
+          </div>
         }
       />
 
