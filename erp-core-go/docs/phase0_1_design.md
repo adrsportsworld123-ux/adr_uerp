@@ -187,7 +187,8 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `VOUCHER_STATE` | 409 | voucher edit/delete/actions | The voucher's status doesn't allow it, e.g. editing a posted voucher or reversing twice (§3.41) |
 | `SELF_APPROVAL` | 403 | `POST /accounting/vouchers/{id}/approve` | The maker can't approve their own voucher (§3.41) |
 | `BRANCH_FORBIDDEN` | 403 | any protected route given `branch_id`, `from_branch_id` or `to_branch_id` (query or JSON body) | The branch is outside the caller's data scope (§3.42) |
-| `DISCOUNT_ABOVE_POLICY` | 400 | `POST /sales/orders/{id}/discounts` | Above the last tier of the merchant's discount policy (§3.43) |
+| `DISCOUNT_ABOVE_POLICY` | 400 | `POST /sales/orders/{id}/discounts` | Above the last tier of the merchant's discount policy (§3.43); for a fixed amount the message names the rupee cap on that cart (§3.50) |
+| `DISCOUNT_EXCEEDS_TOTAL` | 400 | `POST /sales/orders/{id}/discounts` (`mode: amount`) | The fixed amount is more than the cart has left after its other discounts; the message names the most allowed (§3.50) |
 | `ADJUSTMENT_NOT_APPROVED` | 403 | `POST /inventory/adjustments` | Worth more than the policy's stock threshold (quantity × cost) without a valid approver code + PIN (§3.43) |
 | `BELOW_COST_NOT_ALLOWED` | 403 | `PATCH /pricing/variants/{id}` (`override: true`) | The policy limits below-cost prices to a higher role (§3.43) |
 | `SUBSCRIPTION_EXPIRED` | 402 | any write on a tenant route while the subscription is expired or cancelled (reads, exports, sign-out, `/subscription/*` and `/sync/push` still work) | The account is read-only until renewed (§3.44) |
@@ -1761,6 +1762,46 @@ The response carries `discounts_cleared: true`, and the POS tells the cashier to
 - the margin guard on rule and schedule edits.
 
 The admin's browser specs for these screens were updated and pass.
+
+### 3.50 Fixed-amount discounts, category filters that include subcategories, desktop POS local store (2026-10-16)
+
+**Fixed-amount manual discount.** `POST /sales/orders/{id}/discounts` takes `mode`:
+- `"percent"` (the default when `mode` is omitted, so existing clients are unchanged): `value` is a percent of the subtotal.
+- `"amount"`: `amount` is rupees off the whole sale (e.g. `{"type":"manual","mode":"amount","amount":200}`), above 0 with at most 2 decimals.
+
+How an amount is judged and applied:
+- The approval tier is the percent of the cart the amount comes to (`amount / Σ unit_price × quantity`), so a fixed amount can't sidestep the merchant's policy. Above the last tier is `DISCOUNT_ABOVE_POLICY` with the rupee cap, rounded down (rounding up would itself be over).
+- More than the cart has left after its other discounts is `DISCOUNT_EXCEEDS_TOTAL`.
+- The amount comes off the lines' pre-tax value like any layer (`ApplyDiscountLayer`). With GST-inclusive prices the bill drops by exactly the amount; with exclusive prices it drops by the amount plus the tax on it, which is the GST treatment of an invoice discount.
+- `ApplyDiscountLayer` now gives the last line whatever rounding the others left, so the line shares add up to the layer's amount exactly (₹99.99 across three lines was ₹99.98 or ₹100.00 before). This applies to every layer.
+- The audit row records `value_percent` NULL, as migrations/012 asks of every rupee-amount layer.
+
+`GET /sales/orders/{id}/detail` returns `value_percent: null` for such rows. It used to scan the column into a non-null string, so a sale with any promotion or loyalty discount (NULL percent) would have failed to load. Discount anomaly detection (`internal/ai`) counts only rows with a percent.
+
+POS (F7) and the admin's New sale screen have a Percent / Amount ₹ switch. Each shows the percent of the sale an amount comes to and asks for the approver at the same threshold as the server. The sale detail page lists a fixed discount as `Manual · ₹200.00`.
+
+**Category filters include subcategories.** `GET /products?category_id=`, `GET /products/search?category_id=` and the bulk price update's category filter now match the category **and everything below it** (`db.CategorySubtreeSQL`, a recursive walk of `parent_id`, not the materialized path, which a rename leaves stale). Before, they matched the exact category only. In `adr_sports_world`, "Cricket" has no products of its own, only six subcategories holding 100, so choosing it on the POS showed nothing. Search resolves the subtree in Postgres and sends OpenSearch a `terms` filter. An unknown or malformed id matches nothing, not an error. Promotion, price-rule and commission category matching are unchanged: those are rule scopes, not browse filters, and widening them would change prices.
+
+The POS product grid shows a second chip row with the chosen category's subcategories.
+
+**Desktop POS local store.** `sqflite` has no Windows or Linux implementation. On a Windows till every local-store call threw, so:
+- the sales history screen spun forever (it reads the offline queue before asking the server);
+- the offline catalogue was never cached.
+
+`main()` now installs the FFI SQLite factory on Windows/Linux (`lib/local/db_platform*.dart`; `sqflite_common_ffi` moved from a dev to a runtime dependency). The history screen also no longer lets a local-store failure block the server's list.
+
+**Verified live** on a throwaway API (compose database, `acme-sports`), 21 checks:
+- a parent category two levels deep;
+- unknown and malformed ids;
+- bulk preview by parent;
+- ₹99.99 on a three-line inclusive cart: the total drops by exactly that and the shares add up;
+- the approval tier, the policy cap and the remaining-value cap;
+- 3-decimal and unknown-mode refusals;
+- the percent path unchanged;
+- the detail endpoint with NULL-percent rows;
+- an exclusive-price cart.
+
+The OpenSearch `terms` query was checked read-only on the live index (Cricket: 0 hits before, 124 after). The browser specs `fixed-discount.spec.ts` (new) and `phase14-admin-sales.spec.ts` pass. The POS dialog widget test now covers the amount mode.
 
 ---
 

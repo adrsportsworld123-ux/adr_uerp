@@ -10,13 +10,16 @@ import (
 )
 
 type Params struct {
-	TenantID   string // always applied as a filter, never client-controlled
-	Query      string
-	CategoryID string
-	BrandID    string
-	MinPrice   string
-	MaxPrice   string
-	From, Size int
+	TenantID string // always applied as a filter, never client-controlled
+	Query    string
+	// CategoryIDs is a category and all its subcategories (the handler
+	// resolves them, db.CategorySubtree); a product in any one matches.
+	// Non-nil but empty means an unknown category: nothing matches.
+	CategoryIDs []string
+	BrandID     string
+	MinPrice    string
+	MaxPrice    string
+	From, Size  int
 }
 
 type Hit struct {
@@ -42,8 +45,8 @@ func (c *Client) Search(ctx context.Context, p Params) (Result, error) {
 		{"term": map[string]any{"merchant_id": p.TenantID}},
 		{"term": map[string]any{"status": "active"}},
 	}
-	if p.CategoryID != "" {
-		filter = append(filter, map[string]any{"term": map[string]any{"category_id": p.CategoryID}})
+	if p.CategoryIDs != nil {
+		filter = append(filter, map[string]any{"terms": map[string]any{"category_id": p.CategoryIDs}})
 	}
 	if p.BrandID != "" {
 		filter = append(filter, map[string]any{"term": map[string]any{"brand_id": p.BrandID}})

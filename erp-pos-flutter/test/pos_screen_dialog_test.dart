@@ -158,6 +158,29 @@ void main() {
     expect(tester.widget<FilledButton>(applyButton()).onPressed, isNotNull,
         reason: 'BUG: Apply stayed disabled after typing a reason — no onChanged was rebuilding the dialog');
 
+    // --- Fixed amount: the ₹ mode judges the amount by the percent of the
+    // cart it comes to (one seed bat), like the server does. ---
+    await tester.tap(find.text('Amount ₹'));
+    await tester.pump();
+    final amountField = find.widgetWithText(TextField, 'Discount amount (₹)');
+    expect(amountField, findsOneWidget);
+    await tester.enterText(amountField, '50');
+    await tester.pump();
+    expect(find.textContaining('% of the sale'), findsOneWidget);
+    expect(tester.widget<FilledButton>(applyButton()).onPressed, isNotNull, reason: 'a small amount needs no approval');
+
+    await tester.enterText(amountField, '400'); // ~17% of a ₹2,299 bat
+    await tester.pump();
+    expect(find.widgetWithText(TextField, 'Approver employee code'), findsOneWidget);
+    expect(tester.widget<FilledButton>(applyButton()).onPressed, isNull, reason: 'needs an approver now');
+
+    await tester.enterText(amountField, '100000');
+    await tester.pump();
+    expect(find.textContaining('The maximum on this sale is'), findsOneWidget);
+    await tester.enterText(amountField, '10.555');
+    await tester.pump();
+    expect(find.text('Rupees and paise only, e.g. 99.50'), findsOneWidget);
+
     await tester.tap(find.text('Cancel').last);
     await tester.pumpAndSettle();
     // Unmount, then let dart:io's 15 s HTTP keep-alive timer (opened by the

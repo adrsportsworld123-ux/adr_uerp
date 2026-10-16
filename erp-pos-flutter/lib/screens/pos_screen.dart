@@ -212,13 +212,14 @@ class _PosScreenState extends State<PosScreen> {
     final input = await showDialog<_DiscountInput>(context: context, builder: (_) => _scoped(const _DiscountDialog()));
     if (input == null) return _refocusScan();
     final ok = await _withBusy(() => session.applyManualDiscount(
-          valuePercent: input.percent,
+          valuePercent: input.fixed ? 0 : input.value,
+          amount: input.fixed ? input.value : null,
           authorizedByCode: input.approverCode,
           authorizedPin: input.approverPin,
           reason: input.reason,
         ));
     _snack(ok == true
-        ? 'Discount applied'
+        ? (input.fixed ? '${formatRupeesNum(input.value)} discount applied' : 'Discount applied')
         : (session.lastError?.contains('authorizer') == true
             ? 'The approver’s code or PIN doesn’t allow a discount this size'
             : session.lastError ?? 'Could not apply the discount'));

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'api/api_client.dart';
+import 'local/db_platform.dart';
 import 'state/session.dart';
 import 'state/terminal_config.dart';
 import 'screens/login_screen.dart';
@@ -29,6 +30,7 @@ const bool kUseSeedTerminal = bool.fromEnvironment('USE_SEED_TERMINAL');
 final GlobalKey<NavigatorState> kNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
+  initLocalDbPlatform();
   runApp(const PosApp());
 }
 

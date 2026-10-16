@@ -1336,9 +1336,14 @@ class ApiClient {
   /// true authority on the exact tier boundaries (0-5/5-15/15-25%), this
   /// client just mirrors them so the approval fields can be shown/hidden
   /// without a round trip.
+  ///
+  /// Pass [amount] instead of [valuePercent] for a fixed rupee discount on
+  /// the sale (e.g. ₹100 off); the server judges its approval tier by the
+  /// percent of the cart it comes to.
   Future<OrderSummary> applyDiscount({
     required String orderId,
-    required double valuePercent,
+    double valuePercent = 0,
+    double? amount,
     String authorizedBy = '',
     String authorizedByCode = '',
     String authorizedPin = '',
@@ -1349,7 +1354,7 @@ class ApiClient {
       headers: _authHeaders,
       body: jsonEncode({
         'type': 'manual',
-        'value': valuePercent,
+        if (amount != null) ...{'mode': 'amount', 'amount': amount} else 'value': valuePercent,
         'authorized_by': authorizedBy,
         // Phase 12: the approver's employee code (what staff know); the
         // server resolves it to authorized_by.

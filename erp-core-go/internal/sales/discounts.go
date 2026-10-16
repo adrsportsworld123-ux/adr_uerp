@@ -35,10 +35,22 @@ const (
 var errDiscountNotAuthorized = errors.New("discount exceeds what the authorizer's role/PIN permits")
 var errDiscountOutOfRange = errors.New("discount value must be between 0 and 25 percent")
 var errDiscountAbovePolicy = errors.New("this discount is above the largest the approval policy allows")
+var errDiscountExceedsTotal = errors.New("discount is more than the sale's remaining value")
+
+const (
+	discountModePercent = "percent"
+	discountModeAmount  = "amount"
+)
 
 type discountRequest struct {
-	Type          string  `json:"type"` // "manual" | "coupon"
+	Type string `json:"type"` // "manual" | "coupon"
+	// Mode is "percent" (default: Value is a percent of the subtotal) or
+	// "amount" (Amount is a fixed rupee discount on the sale, e.g. ₹100
+	// off). Either way the approval tier is judged on the percent of the
+	// subtotal it comes to, so a fixed amount can't sidestep the policy.
+	Mode          string  `json:"mode"`
 	ValuePercent  float64 `json:"value"`
+	Amount        float64 `json:"amount"`
 	AuthorizedBy  string  `json:"authorized_by"`  // user id of the approving manager/admin; empty for the 0-5% tier
 	AuthorizedPIN string  `json:"authorized_pin"` // required alongside authorized_by for tiers above 5%
 	// AuthorizedByCode (Phase 12) names the approver by employee code — what
@@ -75,8 +87,20 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "type must be 'manual' or 'coupon'")
 		return
 	}
-	if req.ValuePercent <= 0 || req.ValuePercent > 100 {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "value must be above 0 and at most 100 percent")
+	switch req.Mode {
+	case "", discountModePercent:
+		req.Mode = discountModePercent
+		if req.ValuePercent <= 0 || req.ValuePercent > 100 {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "value must be above 0 and at most 100 percent")
+			return
+		}
+	case discountModeAmount:
+		if req.Amount <= 0 || round2(req.Amount) != req.Amount {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "amount must be above 0 with at most 2 decimals")
+			return
+		}
+	default:
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "mode must be 'percent' or 'amount'")
 		return
 	}
 
@@ -95,18 +119,29 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		tier, ok := policy.DiscountTierFor(req.ValuePercent)
-		if !ok {
-			return fmt.Errorf("%w: at most %.4g%%", errDiscountAbovePolicy, policy.MaxDiscount())
-		}
 
-		var subtotal float64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(unit_price*quantity),0) FROM sales_order_lines WHERE sales_order_id = $1`, orderID).
-			Scan(&subtotal); err != nil {
+		var subtotal, remaining float64
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(SUM(unit_price*quantity),0), COALESCE(SUM(unit_price*quantity - discount_amount),0)
+			FROM sales_order_lines WHERE sales_order_id = $1`, orderID).
+			Scan(&subtotal, &remaining); err != nil {
 			return err
 		}
 		if subtotal <= 0 {
 			return errDiscountOutOfRange // nothing to discount against
+		}
+
+		discountTotal, pct, valuePercent := resolveManualDiscount(req, subtotal)
+		if req.Mode == discountModeAmount && discountTotal > round2(remaining) {
+			return fmt.Errorf("%w: at most ₹%.2f", errDiscountExceedsTotal, round2(remaining))
+		}
+		tier, ok := policy.DiscountTierFor(pct)
+		if !ok {
+			if req.Mode == discountModeAmount {
+				return fmt.Errorf("%w: at most %.4g%% (₹%.2f on this sale)", errDiscountAbovePolicy, policy.MaxDiscount(),
+					math.Floor(subtotal*policy.MaxDiscount())/100) // rounded down: rounding up would itself be over
+			}
+			return fmt.Errorf("%w: at most %.4g%%", errDiscountAbovePolicy, policy.MaxDiscount())
 		}
 
 		var authorizerID *string
@@ -129,14 +164,12 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 			authorizerID = &id
 		}
 
-		discountTotal := round2(subtotal * req.ValuePercent / 100)
-
 		var applyErr error
 		resp, applyErr = ApplyDiscountLayer(ctx, tx, DiscountLayer{
 			OrderID:      orderID,
 			Type:         req.Type,
 			Amount:       discountTotal,
-			ValuePercent: &req.ValuePercent,
+			ValuePercent: valuePercent,
 			AuthorizedBy: authorizerID,
 			AppliedBy:    claims.UserID,
 			Reason:       req.Reason,
@@ -151,6 +184,8 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "DISCOUNT_NOT_AUTHORIZED", "the presented authorizer/PIN does not permit a discount of this size")
 	case errors.Is(err, errDiscountAbovePolicy):
 		httpx.Error(w, http.StatusBadRequest, "DISCOUNT_ABOVE_POLICY", err.Error())
+	case errors.Is(err, errDiscountExceedsTotal):
+		httpx.Error(w, http.StatusBadRequest, "DISCOUNT_EXCEEDS_TOTAL", err.Error())
 	case errors.Is(err, errDiscountOutOfRange), errors.Is(err, ErrDiscountExceedsAvailable):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has nothing left to discount")
 	case errors.Is(err, pgx.ErrNoRows):
@@ -160,6 +195,19 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.JSON(w, http.StatusOK, resp)
 	}
+}
+
+// resolveManualDiscount returns the rupee amount a manual discount takes
+// off, the percent of the subtotal that is (what the approval tiers are
+// measured in), and the percent to record: a fixed amount records none,
+// as migrations/012 asks of every rupee-amount layer, rather than a
+// back-computed one.
+func resolveManualDiscount(req discountRequest, subtotal float64) (amount, pct float64, valuePercent *float64) {
+	if req.Mode == discountModeAmount {
+		return req.Amount, req.Amount / subtotal * 100, nil
+	}
+	v := req.ValuePercent
+	return round2(subtotal * v / 100), v, &v
 }
 
 func fetchRolesFor(ctx context.Context, tx pgx.Tx, userID string) ([]string, error) {

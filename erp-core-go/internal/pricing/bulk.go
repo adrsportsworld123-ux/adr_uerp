@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/taxcalc"
 )
@@ -100,7 +101,7 @@ func computeBulkChanges(ctx context.Context, tx pgx.Tx, req bulkUpdateRequest, a
 		FROM product_variants pv
 		JOIN products p ON p.id = pv.product_id
 		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-		WHERE ($1 = '' OR p.category_id::text = $1)
+		WHERE ($1 = '' OR p.category_id IN (`+db.CategorySubtreeSQL+`))
 		  AND ($2 = '' OR p.brand_id::text = $2)
 		  AND ($3 = 0 OR pv.selling_price >= $3)
 		  AND ($4 = 0 OR pv.selling_price <= $4)

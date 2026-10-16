@@ -140,7 +140,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 			LEFT JOIN categories c ON c.id = p.category_id
 			LEFT JOIN brands b ON b.id = p.brand_id
-			WHERE ($1 = '' OR p.category_id::text = $1)
+			WHERE ($1 = '' OR p.category_id IN (` + db.CategorySubtreeSQL + `))
 			  AND ($2 = '' OR p.brand_id::text = $2)
 			  AND ($3 = '' OR p.name ILIKE '%' || $3 || '%'
 			       OR EXISTS (SELECT 1 FROM product_variants sv WHERE sv.product_id = p.id AND sv.sku ILIKE '%' || $3 || '%')

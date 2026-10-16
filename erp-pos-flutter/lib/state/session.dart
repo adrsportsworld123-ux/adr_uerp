@@ -634,9 +634,12 @@ class AppSession extends ChangeNotifier {
     }
   }
 
+  /// A percent off ([valuePercent]) or, with [amount], a fixed rupee
+  /// amount off the sale.
   Future<bool> applyManualDiscount({
     String authorizedByCode = '',
-    required double valuePercent,
+    double valuePercent = 0,
+    double? amount,
     String authorizedBy = '',
     String authorizedPin = '',
     required String reason,
@@ -651,6 +654,7 @@ class AppSession extends ChangeNotifier {
       currentOrder = await api.applyDiscount(
         orderId: currentOrder!.orderId,
         valuePercent: valuePercent,
+        amount: amount,
         authorizedBy: authorizedBy,
         authorizedByCode: authorizedByCode,
         authorizedPin: authorizedPin,

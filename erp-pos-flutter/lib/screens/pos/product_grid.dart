@@ -30,7 +30,11 @@ class _ProductPane extends StatefulWidget {
 
 class _ProductPaneState extends State<_ProductPane> {
   List<CatalogCategory> _categories = [];
-  String? _categoryId;
+  // The chosen top-level chip, and the subcategory chip under it if any.
+  // The server includes subcategories in a category filter, so choosing
+  // just the parent (Cricket) shows all of its products.
+  String? _parentId;
+  String? _subcategoryId;
   List<GridProduct> _items = [];
   bool _loading = true;
   Timer? _debounce;
@@ -59,7 +63,7 @@ class _ProductPaneState extends State<_ProductPane> {
     if (session.offlineMode) return;
     try {
       final cats = await session.loadCategories();
-      if (mounted) setState(() => _categories = cats.where((c) => c.parentId == null).toList());
+      if (mounted) setState(() => _categories = cats);
     } catch (_) {
       // Chips are a convenience; the grid and search work without them.
     }
@@ -82,7 +86,7 @@ class _ProductPaneState extends State<_ProductPane> {
     _lastQuery = q;
     final seq = ++_requestSeq;
     setState(() => _loading = true);
-    final items = await session.browseProducts(query: query, categoryId: _categoryId);
+    final items = await session.browseProducts(query: query, categoryId: _subcategoryId ?? _parentId);
     if (!mounted || seq != _requestSeq) return; // a newer search superseded this one
     setState(() {
       _items = items;
@@ -123,16 +127,18 @@ class _ProductPaneState extends State<_ProductPane> {
           ),
           if (_categories.isNotEmpty && !session.offlineMode) ...[
             const SizedBox(height: 12),
-            SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  _chip('All', _categoryId == null, () => _selectCategory(null)),
-                  for (final c in _categories) _chip(c.name, _categoryId == c.categoryId, () => _selectCategory(c.categoryId)),
-                ],
-              ),
-            ),
+            _chipRow([
+              _chip('All', _parentId == null, () => _selectCategory(null)),
+              for (final c in _categories.where((c) => c.parentId == null))
+                _chip(c.name, _parentId == c.categoryId, () => _selectCategory(c.categoryId)),
+            ]),
+            if (_subcategories.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _chipRow([
+                _chip('All ${_nameOf(_parentId!)}', _subcategoryId == null, () => _selectSubcategory(null)),
+                for (final c in _subcategories) _chip(c.name, _subcategoryId == c.categoryId, () => _selectSubcategory(c.categoryId)),
+              ]),
+            ],
           ],
           const SizedBox(height: 12),
           Expanded(child: _grid(theme)),
@@ -141,10 +147,28 @@ class _ProductPaneState extends State<_ProductPane> {
     );
   }
 
+  List<CatalogCategory> get _subcategories =>
+      _parentId == null ? const [] : _categories.where((c) => c.parentId == _parentId).toList();
+
+  String _nameOf(String id) => _categories.firstWhere((c) => c.categoryId == id).name;
+
   void _selectCategory(String? id) {
-    setState(() => _categoryId = id);
+    setState(() {
+      _parentId = id;
+      _subcategoryId = null;
+    });
     _load();
   }
+
+  void _selectSubcategory(String? id) {
+    setState(() => _subcategoryId = id);
+    _load();
+  }
+
+  Widget _chipRow(List<Widget> chips) => SizedBox(
+        height: 40,
+        child: ListView(scrollDirection: Axis.horizontal, children: chips),
+      );
 
   Widget _chip(String label, bool selected, VoidCallback onTap) => Padding(
         padding: const EdgeInsets.only(right: 8),

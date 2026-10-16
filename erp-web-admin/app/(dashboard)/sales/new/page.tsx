@@ -49,6 +49,8 @@ export default function NewSalePage() {
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerHits, setCustomerHits] = useState<Customer[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  // A percent off, or a fixed rupee amount off the sale (₹100 off).
+  const [discountMode, setDiscountMode] = useState<"percent" | "amount">("percent");
   const [discount, setDiscount] = useState("");
   const [discountReason, setDiscountReason] = useState("");
   const [payments, setPayments] = useState<Payment[]>([{ method: "cash", amount: "", reference: "" }]);
@@ -161,15 +163,18 @@ export default function NewSalePage() {
     run(async () => {
       if (!oid) return;
       const value = Number(discount);
-      const body: Record<string, unknown> = { type: "manual", value, reason: discountReason.trim() };
-      if (value > 5) {
+      const body: Record<string, unknown> =
+        discountMode === "amount"
+          ? { type: "manual", mode: "amount", amount: value, reason: discountReason.trim() }
+          : { type: "manual", value, reason: discountReason.trim() };
+      if (needsDiscountApproval) {
         body.authorized_by_code = approverCode;
         body.authorized_pin = approverPin;
       }
       setOrder(await api.post<CartOrder>(`/api/v1/sales/orders/${oid}/discounts`, body));
       setDiscount("");
       setDiscountReason("");
-      toast.success(`Discount of ${value}% applied`);
+      toast.success(discountMode === "amount" ? `Discount of ${rupees(value)} applied` : `Discount of ${value}% applied`);
     });
 
   const total = Number(order?.grand_total ?? 0);
@@ -191,7 +196,11 @@ export default function NewSalePage() {
     });
 
   const discountValue = Number(discount);
-  const needsDiscountApproval = discountValue > 5;
+  // What the server measures a discount against (and the approval tier by):
+  // the lines' price × quantity before any discount. Display math only.
+  const discountBase = (order?.lines ?? []).reduce((s, l) => s + Number(l.unit_price) * Number(l.quantity), 0);
+  const discountPercent = discountMode === "amount" ? (discountBase > 0 ? (discountValue / discountBase) * 100 : 0) : discountValue;
+  const needsDiscountApproval = discountPercent > 5;
   const openPriceNeedsApproval = openPrice?.range.approval_above != null && Number(price) > Number(openPrice.range.approval_above);
 
   return (
@@ -348,11 +357,39 @@ export default function NewSalePage() {
           </div>
 
           <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
-            <span className="text-sm font-semibold">Discount</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-semibold">Discount</span>
+              <div className="flex gap-1" role="group" aria-label="Discount type">
+                {(["percent", "amount"] as const).map((m) => (
+                  <Button
+                    key={m}
+                    type="button"
+                    size="sm"
+                    variant={discountMode === m ? "default" : "outline"}
+                    aria-pressed={discountMode === m}
+                    onClick={() => {
+                      setDiscountMode(m);
+                      setDiscount("");
+                    }}
+                  >
+                    {m === "percent" ? "%" : "₹"}
+                  </Button>
+                ))}
+              </div>
+            </div>
             <div className="flex gap-2">
-              <Input aria-label="Discount percent" className="w-24" type="number" min={0} max={25} step="0.5" placeholder="%" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+              {discountMode === "percent" ? (
+                <Input aria-label="Discount percent" className="w-24" type="number" min={0} max={25} step="0.5" placeholder="%" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+              ) : (
+                <Input aria-label="Discount amount" className="w-28" type="number" min={0} step="0.01" placeholder="₹" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+              )}
               <Input aria-label="Discount reason" placeholder="Reason" value={discountReason} onChange={(e) => setDiscountReason(e.target.value)} />
             </div>
+            {discountMode === "amount" && discountValue > 0 && discountBase > 0 && (
+              <p className="text-xs text-muted-foreground" data-testid="discount-equivalent">
+                {discountPercent.toFixed(2)}% of the sale
+              </p>
+            )}
             {needsDiscountApproval && (
               <div className="grid grid-cols-2 gap-2">
                 <Input aria-label="Approver employee code" placeholder="Manager's code" value={approverCode} onChange={(e) => setApproverCode(e.target.value.toUpperCase())} />
@@ -362,7 +399,9 @@ export default function NewSalePage() {
             <Button variant="outline" disabled={!oid || !(discountValue > 0) || busy || (needsDiscountApproval && (!approverCode || approverPin.length < 4))} onClick={applyDiscount}>
               Apply discount
             </Button>
-            <p className="text-xs text-muted-foreground">Up to 5% needs no approval; above that a manager approves, up to 25%.</p>
+            <p className="text-xs text-muted-foreground">
+              Up to 5% needs no approval; above that a manager approves, up to 25%. A fixed amount counts as the percent of the sale it comes to.
+            </p>
           </div>
 
           <div className="flex flex-col gap-3 rounded-xl border bg-card p-4">

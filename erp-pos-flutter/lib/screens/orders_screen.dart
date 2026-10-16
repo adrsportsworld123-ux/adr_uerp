@@ -92,7 +92,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _error = null;
       });
     }
-    final queued = await session.queuedSales();
+    // The device's own queue is a side panel: if the local store can't be
+    // read, still show the server's history rather than spin forever.
+    List<QueuedSale> queued;
+    try {
+      queued = await session.queuedSales();
+    } catch (_) {
+      queued = const [];
+    }
     if (!mounted || seq != _loadSeq) return;
     setState(() => _queued = queued);
     if (session.offlineMode) {

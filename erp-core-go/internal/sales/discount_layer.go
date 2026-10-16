@@ -99,9 +99,17 @@ func ApplyDiscountLayer(ctx context.Context, tx pgx.Tx, layer DiscountLayer) (or
 		return resp, ErrDiscountExceedsAvailable
 	}
 
-	for _, l := range lines {
+	var allocated float64
+	for i, l := range lines {
 		lineRemaining := l.unitPrice*l.qty - l.existingDiscount
 		share := round2(layer.Amount * (lineRemaining / remainingBase))
+		// The last line takes whatever rounding the others left, so the
+		// shares add up to exactly layer.Amount: a fixed ₹100 off is ₹100,
+		// not ₹99.99 across three lines.
+		if i == len(lines)-1 {
+			share = round2(layer.Amount - allocated)
+		}
+		allocated += share
 		newDiscount := l.existingDiscount + share
 		// For a tax-inclusive line the discount reduces the inclusive
 		// price the customer pays, and tax is re-extracted from what's

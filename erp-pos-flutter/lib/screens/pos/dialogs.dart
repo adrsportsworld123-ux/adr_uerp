@@ -146,15 +146,22 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
 // Merchant Admin by default) as a UX nicety only; the server enforces them. Phase 12: the
 // approver is named by EMPLOYEE CODE (what staff know) and enters their
 // PIN on the shared ApprovalPinPad, instead of a raw user id.
+//
+// The discount is a percent or a fixed rupee amount off the sale (₹100
+// off). A fixed amount falls in the tier of the percent of the cart it
+// comes to, measured like the server does: against the lines' price ×
+// quantity, before any discount.
 // ---------------------------------------------------------------------
 
 class _DiscountInput {
-  final double percent;
+  /// True: [value] is rupees off the sale. False: [value] is a percent.
+  final bool fixed;
+  final double value;
   final String approverCode;
   final String approverPin;
   final String reason;
 
-  _DiscountInput(this.percent, this.approverCode, this.approverPin, this.reason);
+  _DiscountInput(this.fixed, this.value, this.approverCode, this.approverPin, this.reason);
 }
 
 class _DiscountDialog extends StatefulWidget {
@@ -169,10 +176,36 @@ class _DiscountDialogState extends State<_DiscountDialog> {
   final _reasonController = TextEditingController();
   final _approverController = TextEditingController();
   String _pin = '';
+  bool _fixed = false;
 
-  double get _percent => double.tryParse(_percentController.text) ?? 0;
+  double get _value => double.tryParse(_percentController.text) ?? 0;
+
+  /// The cart's price × quantity before discounts, what both kinds of
+  /// discount are measured against.
+  double get _base {
+    final lines = context.read<AppSession>().currentOrder?.lines ?? const <OrderLine>[];
+    return lines.fold(0.0, (sum, l) => sum + (double.tryParse(l.unitPrice) ?? 0) * (double.tryParse(l.quantity) ?? 0));
+  }
+
+  /// What other discounts have left to take off.
+  double get _remaining => _base - (double.tryParse(context.read<AppSession>().currentOrder?.discountTotal ?? '') ?? 0);
+
+  /// The percent the approval tiers judge: typed, or what the amount comes to.
+  double get _percent => !_fixed ? _value : (_base > 0 ? _value / _base * 100 : 0);
   List<DiscountTier> get _tiers => context.read<AppSession>().discountTiers;
   double get _max => _tiers.last.upTo;
+
+  /// The largest fixed amount allowed: the policy's top percent of the
+  /// cart, and never more than is left to discount.
+  double get _maxAmount {
+    final byPolicy = (_base * _max).floorToDouble() / 100;
+    return byPolicy < _remaining ? byPolicy : _remaining;
+  }
+
+  bool get _overMax => _fixed ? _value > _maxAmount + 0.001 : _value > _max;
+
+  /// A rupee amount has at most two decimals.
+  bool get _validAmount => !_fixed || (_value * 100 - (_value * 100).roundToDouble()).abs() < 1e-6;
   double get _free => _tiers.where((t) => t.approver == 'none').fold(0.0, (m, t) => t.upTo > m ? t.upTo : m);
   DiscountTier? get _tier => DiscountTier.forPercent(_tiers, _percent);
   bool get _needsApproval => _tier != null && _tier!.approver != 'none';
@@ -180,9 +213,19 @@ class _DiscountDialogState extends State<_DiscountDialog> {
 
   String _pct(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
 
+  String get _helperText {
+    final free = _free > 0 ? 'Up to ${_pct(_free)}% needs no approval' : 'Every discount needs approval';
+    if (!_fixed) return _value > _max ? 'The maximum is ${_pct(_max)}%' : free;
+    if (!_validAmount) return 'Rupees and paise only, e.g. 99.50';
+    if (_overMax) return 'The maximum on this sale is ${formatRupeesNum(_maxAmount)}';
+    if (_value <= 0) return _free > 0 ? '$free (${formatRupeesNum(_base * _free / 100)} on this sale)' : free;
+    return '${_percent.toStringAsFixed(2)}% of the sale';
+  }
+
   bool get _canApply =>
-      _percent > 0 &&
-      _percent <= _max &&
+      _value > 0 &&
+      !_overMax &&
+      _validAmount &&
       _reasonController.text.trim().isNotEmpty &&
       (!_needsApproval || (_approverController.text.trim().isNotEmpty && _pin.length >= 4));
 
@@ -206,16 +249,28 @@ class _DiscountDialogState extends State<_DiscountDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              SegmentedButton<bool>(
+                key: const Key('discount-mode'),
+                segments: const [
+                  ButtonSegment(value: false, label: Text('Percent %')),
+                  ButtonSegment(value: true, label: Text('Amount ₹')),
+                ],
+                selected: {_fixed},
+                onSelectionChanged: (v) => setState(() {
+                  _fixed = v.first;
+                  _percentController.clear();
+                }),
+              ),
+              const SizedBox(height: 12),
               TextField(
                 controller: _percentController,
                 autofocus: true,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
-                  labelText: 'Discount %',
-                  helperText: _percent > _max
-                      ? 'The maximum is ${_pct(_max)}%'
-                      : (_free > 0 ? 'Up to ${_pct(_free)}% needs no approval' : 'Every discount needs approval'),
-                  helperStyle: _percent > _max ? TextStyle(color: theme.colorScheme.error) : null,
+                  labelText: _fixed ? 'Discount amount (₹)' : 'Discount %',
+                  helperText: _helperText,
+                  helperMaxLines: 2,
+                  helperStyle: _overMax || !_validAmount ? TextStyle(color: theme.colorScheme.error) : null,
                 ),
                 onChanged: (_) => setState(() {}),
               ),
@@ -261,7 +316,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
           onPressed: _canApply
               ? () => Navigator.pop(
                     context,
-                    _DiscountInput(_percent, _approverController.text.trim(), _pin, _reasonController.text.trim()),
+                    _DiscountInput(_fixed, _value, _approverController.text.trim(), _pin, _reasonController.text.trim()),
                   )
               : null,
           child: const Text('Apply'),

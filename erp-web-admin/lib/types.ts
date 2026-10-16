@@ -1281,7 +1281,8 @@ export interface SaleDetail {
   lines: SaleDetailLine[];
   tax_summary: { rate: string; taxable_value: string; tax_amount: string; cgst: string; sgst: string }[];
   payments: SaleDetailPayment[];
-  discounts: { type: string; value_percent: string; discount_amount: string; applied_by: string; authorized_by: string | null; reason: string }[];
+  /** value_percent is null for a rupee-amount discount (fixed manual, promotion, loyalty). */
+  discounts: { type: string; value_percent: string | null; discount_amount: string; applied_by: string; authorized_by: string | null; reason: string }[];
   returns: SaleReturn[];
   journal: { entry_number: string; entry_date: string; source_type: string; description: string; amount: string }[];
   audit: { entity_type: string; action: string; performed_by: string | null; reason: string; created_at: string }[];

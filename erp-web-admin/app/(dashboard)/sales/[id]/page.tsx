@@ -27,6 +27,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/data/page-header";
 import { StatusChip } from "@/components/data/status-chip";
 
+const DISCOUNT_LABEL: Record<string, string> = { manual: "Manual", coupon: "Coupon", promotion: "Promotion", loyalty: "Loyalty points" };
+
 function newKey() {
   return `admin-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -293,7 +295,8 @@ export default function SaleDetailPage() {
               <ul className="flex flex-col gap-1.5 text-sm">
                 {sale.discounts.map((d, i) => (
                   <li key={i}>
-                    {d.type === "coupon" ? "Coupon" : "Manual"} {Number(d.value_percent)}% · {rupees(d.discount_amount)} · by {d.applied_by}
+                    {DISCOUNT_LABEL[d.type] ?? d.type}
+                    {d.value_percent != null ? ` ${Number(d.value_percent)}%` : ""} · {rupees(d.discount_amount)} · by {d.applied_by}
                     {d.authorized_by ? `, approved by ${d.authorized_by}` : ""}
                     {d.reason ? ` · ${d.reason}` : ""}
                   </li>

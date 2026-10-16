@@ -71,7 +71,7 @@ type paymentCorrection struct {
 
 type detailDiscount struct {
 	Type         string  `json:"type"`
-	Percent      string  `json:"value_percent"`
+	Percent      *string `json:"value_percent"` // null for a rupee-amount layer (fixed manual, promotion, loyalty)
 	Amount       string  `json:"discount_amount"`
 	AppliedBy    string  `json:"applied_by"`
 	AuthorizedBy *string `json:"authorized_by"`

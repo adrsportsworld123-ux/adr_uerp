@@ -1,8 +1,11 @@
 package search
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+
+	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
@@ -40,15 +43,33 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		page = p
 	}
 
+	// A category means it and its subcategories, as on GET /products:
+	// the index holds each product's own (usually leaf) category only.
+	var categoryIDs []string
+	if id := q.Get("category_id"); id != "" {
+		err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+			var err error
+			categoryIDs, err = db.CategorySubtree(ctx, tx, id)
+			return err
+		})
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not read categories")
+			return
+		}
+		if categoryIDs == nil {
+			categoryIDs = []string{}
+		}
+	}
+
 	result, err := h.Client.Search(r.Context(), Params{
-		TenantID:   claims.TenantID,
-		Query:      q.Get("q"),
-		CategoryID: q.Get("category_id"),
-		BrandID:    q.Get("brand_id"),
-		MinPrice:   q.Get("min_price"),
-		MaxPrice:   q.Get("max_price"),
-		From:       (page - 1) * limit,
-		Size:       limit,
+		TenantID:    claims.TenantID,
+		Query:       q.Get("q"),
+		CategoryIDs: categoryIDs,
+		BrandID:     q.Get("brand_id"),
+		MinPrice:    q.Get("min_price"),
+		MaxPrice:    q.Get("max_price"),
+		From:        (page - 1) * limit,
+		Size:        limit,
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusServiceUnavailable, "SEARCH_UNAVAILABLE", "product search is temporarily unavailable")

@@ -14,12 +14,12 @@ dependencies:
   shared_preferences: ^2.3.2 # persists a per-device fingerprint for PIN-login device binding
   sqflite: ^2.3.3+1 # local offline-sync store: pending sales, cached catalog/stock
   path: ^1.9.0 # joins the sqflite database file path
+  sqflite_common_ffi: ^2.3.4+4 # SQLite via FFI on Windows/Linux tills (sqflite has no plugin there) and in tests
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-  sqflite_common_ffi: ^2.3.4+4 # runs real SQLite via FFI in tests — no Android/iOS device needed
 
 flutter:
   uses-material-design: true

@@ -44,7 +44,8 @@ type voidRateAnomaly struct {
 //  1. Individual manual discounts (sales_order_discounts, type='manual')
 //     whose value_percent is a statistical outlier vs. every other manual
 //     discount applied in the window — a single unusually large discount,
-//     not a per-cashier aggregate.
+//     not a per-cashier aggregate. Fixed-amount manual discounts carry no
+//     percent and sit outside this population.
 //  2. Cashiers whose void rate (voided orders / their total orders) is a
 //     statistical outlier vs. every other cashier's void rate in the
 //     window — flags a person, not a transaction.
@@ -114,7 +115,7 @@ func findDiscountAnomalies(ctx context.Context, tx pgx.Tx, days int, branchID st
 			  AND (params.branch_filter IS NULL OR so.branch_id = params.branch_filter)
 		),
 		stats AS (
-			SELECT AVG(value_percent) AS mean_pct, STDDEV(value_percent) AS stddev_pct, COUNT(*) AS n FROM discounts
+			SELECT AVG(value_percent) AS mean_pct, STDDEV(value_percent) AS stddev_pct, COUNT(value_percent) AS n FROM discounts
 		)
 		SELECT d.id::text, d.sales_order_id::text, d.applied_by::text, d.applied_by_name,
 		       d.value_percent::text, d.discount_amount::text, d.reason, d.created_at::text,
