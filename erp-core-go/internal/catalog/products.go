@@ -54,6 +54,11 @@ type variantSummary struct {
 	// Status of the variant itself (a single size can be discontinued
 	// while the product stays on sale).
 	Status string `json:"status"`
+	// OnHand / Available: live stock over the branches the caller may see,
+	// or the one named by ?branch_id= (db.StockByVariant). Available is on
+	// hand less what open carts hold.
+	OnHand    string `json:"on_hand"`
+	Available string `json:"available"`
 }
 
 type productSummary struct {
@@ -239,6 +244,22 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 				PriceIncludesTax: pr.priceIncludesTax, TaxRatePct: pr.taxRatePct, Variants: variants,
 				CategoryID: pr.categoryID, CategoryName: pr.categoryName, BrandID: pr.brandID, BrandName: pr.brandName,
 			})
+		}
+		var ids []string
+		for _, p := range products {
+			for _, v := range p.Variants {
+				ids = append(ids, v.VariantID)
+			}
+		}
+		stock, err := db.StockByVariant(ctx, tx, ids, r.URL.Query().Get("branch_id"))
+		if err != nil {
+			return err
+		}
+		for i := range products {
+			for j := range products[i].Variants {
+				st := stock[products[i].Variants[j].VariantID]
+				products[i].Variants[j].OnHand, products[i].Variants[j].Available = st.OnHand, st.Available
+			}
 		}
 		return nil
 	})

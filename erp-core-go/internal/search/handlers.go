@@ -76,8 +76,32 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Live quantities beside each hit (db.StockByVariant): the index holds
+	// the catalogue, never stock, which changes with every sale.
+	ids := make([]string, len(result.Hits))
+	for i, hit := range result.Hits {
+		ids[i] = hit.VariantID
+	}
+	var stock map[string]db.Stock
+	if err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		stock, err = db.StockByVariant(ctx, tx, ids, q.Get("branch_id"))
+		return err
+	}); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not read stock")
+		return
+	}
+	type hitWithStock struct {
+		Hit
+		db.Stock
+	}
+	hits := make([]hitWithStock, len(result.Hits))
+	for i, hit := range result.Hits {
+		hits[i] = hitWithStock{Hit: hit, Stock: stock[hit.VariantID]}
+	}
+
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"results": result.Hits,
+		"results": hits,
 		"total":   result.Total,
 		"page":    page,
 		"limit":   limit,

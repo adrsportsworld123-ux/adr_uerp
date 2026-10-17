@@ -32,6 +32,24 @@ test("free-text search, fuzzy typo tolerance, and price filtering", async ({ pag
   await test.step("a price filter that excludes the seed product returns no results", async () => {
     await page.fill("#q", "");
     await page.fill("#minPrice", "999999");
-    await expect(page.getByText("No matching products")).toBeVisible();
+    await expect(page.getByText("Nothing matches these filters")).toBeVisible();
   });
+});
+
+test("category and brand filters, and live available stock per row", async ({ page }) => {
+  await page.goto("/login");
+  await page.fill("#email", "ravi@acme-sports.test");
+  await page.fill("#password", "Passw0rd!");
+  await page.click('button[type="submit"]');
+  await page.waitForURL("/dashboard");
+  await page.goto("/search?q=cricket");
+  const row = page.getByRole("row", { name: /SG Cricket Bat/ });
+  await expect(row).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Available" })).toBeVisible();
+  await expect(row.getByRole("cell").nth(4)).toHaveText(/^\d/); // a quantity, live from Postgres
+
+  await page.getByRole("button", { name: "Filter by brand" }).click();
+  await page.getByRole("option", { name: "SG", exact: true }).click();
+  await expect(page).toHaveURL(/brand_id=/);
+  await expect(page.getByRole("row", { name: /SG Cricket Bat/ })).toBeVisible();
 });

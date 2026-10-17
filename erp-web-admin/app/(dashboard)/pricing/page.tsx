@@ -1,12 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+// Pricing on the shared list kit (Phase 11 DataTable, URL-kept filters,
+// paging and states like every other list), with live stock per variant
+// and the price edit in a dialog — the same row pattern as the masters.
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { Pencil, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { CatalogBrand, Category, PricingSettings, Product, ProductVariant } from "@/lib/types";
 import { SearchOption, SearchSelect, categoryOption } from "@/components/data/search-select";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Modal } from "@/components/ui/dialog";
+import { Column, DataTable } from "@/components/data/data-table";
+import { PageHeader } from "@/components/data/page-header";
+import { useListState } from "@/components/data/use-list-state";
+import { useServerList } from "@/components/data/use-server-list";
+import { qty } from "@/lib/format";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,8 +27,6 @@ function marginClass(pct: number | null) {
   if (pct === null) return "";
   return pct < 0 ? "text-destructive font-medium" : "text-foreground";
 }
-
-const PAGE_SIZE = 50;
 
 // Category and brand options for the filters on this page, loaded once.
 function useCatalogFilters() {
@@ -31,82 +39,104 @@ function useCatalogFilters() {
   return { categories, brands };
 }
 
-export default function PricingPage() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [total, setTotal] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  // Server-side search and paging: the list used to load the first 200
-  // products only, so on a larger catalogue the rest could never be
-  // priced from here.
-  const [query, setQuery] = useState("");
-  const [categoryId, setCategoryId] = useState("");
-  const [brandId, setBrandId] = useState("");
-  const [page, setPage] = useState(1);
-  const [reloadKey, setReloadKey] = useState(0);
-  const filters = useCatalogFilters();
+// One row per variant (prices live on variants); the server pages products.
+type PriceRow = { product: Product; variant: ProductVariant };
 
-  useEffect(() => {
-    let cancelled = false;
-    const t = setTimeout(() => {
-      const p = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(page), sort: "name" });
-      if (query.trim()) p.set("q", query.trim());
-      if (categoryId) p.set("category_id", categoryId);
-      if (brandId) p.set("brand_id", brandId);
-      api
-        .get<{ products: Product[]; total: number }>(`/api/v1/products?${p.toString()}`)
-        .then((d) => {
-          if (cancelled) return;
-          setProducts(d.products);
-          setTotal(d.total);
-          setError(null);
-        })
-        .catch((e) => !cancelled && setError(e.message));
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [query, categoryId, brandId, page, reloadKey]);
-  const load = () => setReloadKey((k) => k + 1);
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+// Live stock beside the price (GET /products returns it per variant over
+// the branches you may see): what's left to sell, and what's on the shelf
+// when open carts hold some of it.
+function StockCell({ v }: { v: ProductVariant }) {
+  const available = Number(v.available ?? 0);
+  const onHand = Number(v.on_hand ?? 0);
+  return (
+    <div className="flex flex-col leading-tight">
+      <span className={`tabular font-medium ${available <= 0 ? "text-destructive" : ""}`}>{qty(available)}</span>
+      {onHand !== available && <span className="text-xs text-muted-foreground">{qty(onHand)} on hand</span>}
+    </div>
+  );
+}
+
+function PricingList() {
+  const { state, update, apiQuery, activeFilterCount } = useListState({ sort: "name", limit: 50, filterKeys: ["category_id", "brand_id"] });
+  const list = useServerList<Product>("/api/v1/products", "products", apiQuery);
+  const filters = useCatalogFilters();
+  const [editing, setEditing] = useState<PriceRow | null>(null);
+  const rows = useMemo(() => list.rows?.flatMap((p) => p.variants.map((v) => ({ product: p, variant: v }))) ?? null, [list.rows]);
+
+  const columns: Column<PriceRow>[] = [
+    {
+      key: "name",
+      header: "Product",
+      sort: "name",
+      cell: ({ product }) => (
+        <div className="flex flex-col leading-tight">
+          <span className="font-medium">{product.name}</span>
+          {(product.category_name || product.brand_name) && (
+            <span className="text-xs text-muted-foreground">{[product.category_name, product.brand_name].filter(Boolean).join(" · ")}</span>
+          )}
+        </div>
+      ),
+    },
+    { key: "sku", header: "SKU", cell: ({ variant }) => <span className="font-mono text-xs">{variant.sku}</span> },
+    { key: "available", header: "Available", align: "right", cell: ({ variant }) => <StockCell v={variant} /> },
+    { key: "cost", header: "Cost", align: "right", cell: ({ variant }) => <span className="tabular">₹{variant.cost_price}</span> },
+    { key: "mrp", header: "MRP", align: "right", cell: ({ variant }) => <span className="tabular">₹{variant.mrp}</span> },
+    {
+      key: "selling",
+      header: "Selling",
+      align: "right",
+      cell: ({ product, variant }) => (
+        <div className="flex flex-col leading-tight">
+          <span className="tabular">₹{variant.selling_price}</span>
+          {/* Server-computed (internal/taxcalc) — never derived in JS, see lib/api-client.ts's money note */}
+          <span className="text-xs text-muted-foreground">
+            {product.price_includes_tax ? `net ₹${variant.net_selling_price}` : `customer pays ₹${variant.gross_selling_price}`}
+          </span>
+        </div>
+      ),
+    },
+    { key: "gst", header: "GST basis", cell: ({ product }) => <TaxBasisCell product={product} onChanged={list.reload} /> },
+    {
+      key: "margin",
+      header: "Margin",
+      align: "right",
+      cell: ({ variant }) => <span className={`tabular ${marginClass(variant.margin_pct)}`}>{variant.margin_pct ?? "—"}%</span>,
+    },
+    {
+      key: "markup",
+      header: "Markup",
+      align: "right",
+      cell: ({ variant }) => <span className={`tabular ${marginClass(variant.markup_pct)}`}>{variant.markup_pct ?? "—"}%</span>,
+    },
+    { key: "barcode", header: "Barcode", cell: ({ variant }) => <BarcodeCell variant={variant} onAssigned={list.reload} /> },
+  ];
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Pricing</h1>
-        <Link href="/products/new">
-          <Button variant="outline">New product</Button>
-        </Link>
-      </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
-
-      <TaxPricingSettings />
-
-      <Card>
-        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-base">
-            Products <span className="font-normal text-muted-foreground">({total})</span>
-          </CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Search name, SKU or barcode"
-              aria-label="Search products"
-              className="h-9 w-60 rounded-lg border bg-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-            />
+    <>
+      <DataTable<PriceRow>
+        columns={columns}
+        rows={rows}
+        total={list.total}
+        loading={list.loading}
+        error={list.error}
+        onRetry={list.reload}
+        state={state}
+        update={(p) => {
+          list.setLoading(true);
+          update(p);
+        }}
+        rowKey={({ variant }) => variant.variant_id}
+        searchPlaceholder="Search name, SKU or barcode"
+        searchLabel="Search products"
+        activeFilterCount={activeFilterCount}
+        onClearFilters={() => update({ q: "", filters: { category_id: "", brand_id: "" } })}
+        filters={
+          <>
             <div className="w-52">
               <SearchSelect
                 ariaLabel="Filter by category"
-                value={categoryId}
-                onChange={(v) => {
-                  setCategoryId(v);
-                  setPage(1);
-                }}
+                value={state.filters.category_id}
+                onChange={(v) => update({ filters: { category_id: v } })}
                 options={filters.categories}
                 noneLabel="All categories"
                 placeholder="All categories"
@@ -115,73 +145,79 @@ export default function PricingPage() {
             <div className="w-44">
               <SearchSelect
                 ariaLabel="Filter by brand"
-                value={brandId}
-                onChange={(v) => {
-                  setBrandId(v);
-                  setPage(1);
-                }}
+                value={state.filters.brand_id}
+                onChange={(v) => update({ filters: { brand_id: v } })}
                 options={filters.brands}
                 noneLabel="All brands"
                 placeholder="All brands"
               />
             </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Product</TableHead>
-                <TableHead>SKU</TableHead>
-                <TableHead>Cost</TableHead>
-                <TableHead>MRP</TableHead>
-                <TableHead>Selling</TableHead>
-                <TableHead>GST basis</TableHead>
-                <TableHead title="Computed on the pre-GST (net) selling price">Margin</TableHead>
-                <TableHead>Markup</TableHead>
-                <TableHead>Barcode</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {products.flatMap((p) =>
-                p.variants.map((v) => (
-                  <VariantRow key={v.variant_id} product={p} variant={v} onSaved={load} />
-                ))
-              )}
-              {products.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={10} className="py-6 text-center text-sm text-muted-foreground">
-                    {query || categoryId || brandId ? "No product matches these filters" : "No products yet"}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          {total > PAGE_SIZE && (
-            <div className="mt-3 flex items-center justify-end gap-2 text-sm">
-              <span className="text-muted-foreground">
-                Page {page} of {pages}
-              </span>
-              <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                Previous
-              </Button>
-              <Button size="sm" variant="outline" disabled={page >= pages} onClick={() => setPage(page + 1)}>
-                Next
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          </>
+        }
+        empty={{
+          title: "No products yet",
+          body: "Add products to set their prices here.",
+          action: (
+            <Link href="/products/new" className={buttonVariants({ size: "sm" })}>
+              <Plus aria-hidden />
+              New product
+            </Link>
+          ),
+        }}
+        // No row-click editing: the GST basis and barcode cells are controls
+        // of their own, and a click there must not open the price dialog.
+        rowActions={(r) => (
+          <Button variant="ghost" size="icon-sm" aria-label={`Edit price of ${r.variant.sku}`} title="Edit price" onClick={() => setEditing(r)}>
+            <Pencil />
+          </Button>
+        )}
+      />
+      {editing && (
+        <PriceDialog
+          row={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            list.reload();
+          }}
+        />
+      )}
+    </>
+  );
+}
 
-      <Calculator />
-      <BulkUpdate onApplied={load} categories={filters.categories} brands={filters.brands} />
+export default function PricingPage() {
+  const filters = useCatalogFilters();
+  const [reloadKey, setReloadKey] = useState(0);
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Pricing"
+        description="Selling prices, margins and stock for every product. Available is what can still be sold — on hand less what open carts hold."
+        actions={
+          <Link href="/products/new" className={buttonVariants()}>
+            <Plus aria-hidden />
+            New product
+          </Link>
+        }
+      />
+      <Suspense>
+        <PricingList key={reloadKey} />
+      </Suspense>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Calculator />
+        <TaxPricingSettings />
+      </div>
+      <BulkUpdate onApplied={() => setReloadKey((k) => k + 1)} categories={filters.categories} brands={filters.brands} />
     </div>
   );
 }
 
-function VariantRow({ product, variant, onSaved }: { product: Product; variant: ProductVariant; onSaved: () => void }) {
-  const [editing, setEditing] = useState(false);
+// Edit one variant's selling price: a reason is recorded with the price
+// history; a price below cost needs an explicit override
+// (NEGATIVE_MARGIN), same rule the API enforces.
+function PriceDialog({ row, onClose, onSaved }: { row: PriceRow; onClose: () => void; onSaved: () => void }) {
+  const { product, variant } = row;
   const [sellingPrice, setSellingPrice] = useState(variant.selling_price);
   const [reason, setReason] = useState("");
   const [override, setOverride] = useState(false);
@@ -197,8 +233,6 @@ function VariantRow({ product, variant, onSaved }: { product: Product; variant: 
         override,
       });
       toast.success("Price updated");
-      setEditing(false);
-      setNeedsOverride(false);
       onSaved();
     } catch (e) {
       if (e instanceof ApiError && e.code === "NEGATIVE_MARGIN") {
@@ -212,58 +246,39 @@ function VariantRow({ product, variant, onSaved }: { product: Product; variant: 
   }
 
   return (
-    <TableRow>
-      <TableCell>{product.name}</TableCell>
-      <TableCell className="font-mono text-xs">{variant.sku}</TableCell>
-      <TableCell>₹{variant.cost_price}</TableCell>
-      <TableCell>₹{variant.mrp}</TableCell>
-      <TableCell>
-        {editing ? (
-          <Input className="w-24" type="number" step="0.01" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} />
-        ) : (
-          <div className="flex flex-col">
-            <span>₹{variant.selling_price}</span>
-            {/* Server-computed (internal/taxcalc) — never derived in JS, see lib/api-client.ts's money note */}
-            <span className="text-xs text-muted-foreground">
-              {product.price_includes_tax ? `net ₹${variant.net_selling_price}` : `customer pays ₹${variant.gross_selling_price}`}
-            </span>
-          </div>
-        )}
-      </TableCell>
-      <TableCell>
-        <TaxBasisCell product={product} onChanged={onSaved} />
-      </TableCell>
-      <TableCell className={marginClass(variant.margin_pct)}>{variant.margin_pct ?? "—"}%</TableCell>
-      <TableCell className={marginClass(variant.markup_pct)}>{variant.markup_pct ?? "—"}%</TableCell>
-      <TableCell>
-        <BarcodeCell variant={variant} onAssigned={onSaved} />
-      </TableCell>
-      <TableCell>
-        {editing ? (
-          <div className="flex flex-col gap-2 w-56">
-            <Input placeholder="Reason" value={reason} onChange={(e) => setReason(e.target.value)} className="h-7 text-xs" />
-            {needsOverride && (
-              <label className="flex items-center gap-1 text-xs text-destructive">
-                <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} />
-                This sells below cost — override anyway
-              </label>
-            )}
-            <div className="flex gap-1">
-              <Button size="sm" disabled={busy} onClick={save}>
-                Save
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-            Edit
+    <Modal
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Edit selling price"
+      description={`${product.name} · ${variant.sku} · cost ₹${variant.cost_price} · MRP ₹${variant.mrp}`}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
           </Button>
+          <Button onClick={save} disabled={busy || !sellingPrice}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="sellingPrice">Selling price (₹{product.price_includes_tax ? ", incl. GST" : ""})</Label>
+          <Input id="sellingPrice" type="number" step="0.01" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} className="w-40" autoFocus />
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="priceReason">Reason</Label>
+          <Input id="priceReason" placeholder="e.g. New MRP from supplier" value={reason} onChange={(e) => setReason(e.target.value)} />
+        </div>
+        {needsOverride && (
+          <label className="flex items-center gap-2 text-sm text-destructive">
+            <input type="checkbox" checked={override} onChange={(e) => setOverride(e.target.checked)} />
+            This sells below cost — override anyway
+          </label>
         )}
-      </TableCell>
-    </TableRow>
+      </div>
+    </Modal>
   );
 }
 

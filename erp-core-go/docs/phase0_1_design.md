@@ -1945,6 +1945,26 @@ POS terminals keep activate/deactivate only: `pos_terminals` has no RLS (PIN log
 - Regression: the customers, HR & payroll, promotions, Phase 11 masters, purchase-and-accounting and audit/attendance specs (24 tests) pass. Three pre-existing assertions were made exact, because the new row-action buttons share text with cell names.
 - POS: 52 tests pass, including a check-in-again test.
 
+### 3.55 Live stock in product search and pricing; both screens on the shared list kit (2026-10-17)
+
+**API.** `db.StockByVariant` reads live quantities for a page of variants, summed over the branches the caller may see (`stock_levels` is branch-scoped), or for one branch with `?branch_id=`.
+- `GET /products/search` adds `on_hand`, `reserved` and `available` to each hit.
+- `GET /products` adds `on_hand` and `available` to each variant.
+
+Quantities come from Postgres on every request, never from the search index, which would be stale after the next sale. Category (with subcategories) and brand filters on search already existed server-side.
+
+**Web admin.**
+
+| Screen | Change |
+|---|---|
+| Product Search | Moved onto `DataTable`. Category and brand pickers, debounced price bounds, an Available column (on hand shown underneath when carts hold some), filters kept in the URL, paging. "Edit price" opens Pricing searched to that SKU |
+| Pricing | `PageHeader`, `DataTable`, URL-kept category and brand filters, 50 rows by default, Available column. The price edit is a dialog (pencil row action) with the same reason and below-cost override rule. Row-click doesn't edit, because the GST basis and barcode cells are controls. Calculator and GST default sit side by side below; bulk update is unchanged |
+
+**Verified:**
+- On a copy of the live database: search and pricing quantities match `stock_levels`.
+- Chrome: the brand and category filters narrow the search, the Available column shows, and the price dialog opens.
+- Seed regression: the pricing (override, bulk), tax-inclusive, barcode, products and session-expiry specs pass.
+
 ## 4. What Phase 0 concretely delivers against this design
 
 1. Run `migrations/001_schema.sql` against your local Postgres (already verified to execute cleanly, RLS included).

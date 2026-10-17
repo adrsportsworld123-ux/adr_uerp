@@ -28,6 +28,10 @@ export interface ProductVariant {
   // for these (a stock increase on one needs a batch_no).
   track_batch: boolean;
   status: VariantStatus;
+  // Live stock over the branches you may see (GET /products, db.StockByVariant):
+  // on hand, and what's still sellable (on hand less open carts).
+  on_hand?: string;
+  available?: string;
 }
 
 export type ProductStatus = "active" | "inactive" | "discontinued";
@@ -72,6 +76,10 @@ export interface SearchHit {
   mrp: number;
   selling_price: number;
   status: string;
+  // Live stock (GET /products/search attaches it from Postgres, never the index).
+  on_hand?: string;
+  reserved?: string;
+  available?: string;
 }
 
 export interface SearchResponse {

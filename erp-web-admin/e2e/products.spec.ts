@@ -42,7 +42,7 @@ test("creating a product with a category/brand/tax slab makes it real and sellab
     await page.getByRole("button", { name: "Create product" }).click();
     await page.waitForURL("/pricing");
     await expect(page.getByRole("cell", { name: productName })).toBeVisible();
-    await expect(page.getByRole("cell", { name: sku })).toBeVisible();
+    await expect(page.getByRole("cell", { name: sku, exact: true })).toBeVisible();
   });
 
   await test.step("POS User (Ravi) is denied creating a product", async () => {

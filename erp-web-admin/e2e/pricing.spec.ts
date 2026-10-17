@@ -27,7 +27,8 @@ test("calculator, single-variant negative-margin override, and bulk update", asy
     // First row's Edit button — whichever variant it is, the same
     // block-then-override flow applies.
     await page.getByRole("button", { name: "Edit" }).first().click();
-    const priceInput = page.locator("input[type='number']").first();
+    // The price edit is a dialog now (the shared row pattern).
+    const priceInput = page.getByRole("dialog").locator("#sellingPrice");
     await priceInput.fill("1"); // well below any real cost price in the seed catalog
     await page.getByRole("button", { name: "Save" }).click();
 

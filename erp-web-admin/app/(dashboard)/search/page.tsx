@@ -1,162 +1,173 @@
 "use client";
 
+// Product Search (internal/search — OpenSearch-backed), distinct from the
+// Pricing screen's GET /products browse: free-text and typo-tolerant
+// (fuzzy multi_match server-side), filtered by category (with its
+// subcategories), brand and price, with live stock beside each hit — the
+// API reads quantities from Postgres, never from the index, so they're
+// current. Built on the shared list kit like every other list. When
+// OpenSearch isn't reachable the table shows the API's "temporarily
+// unavailable" message with a retry instead of breaking.
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
-import { api, ApiError } from "@/lib/api-client";
-import { SearchHit, SearchResponse } from "@/lib/types";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { api } from "@/lib/api-client";
+import { CatalogBrand, Category, SearchHit } from "@/lib/types";
+import { qty } from "@/lib/format";
 import { buttonVariants } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Column, DataTable } from "@/components/data/data-table";
+import { PageHeader } from "@/components/data/page-header";
+import { SearchOption, SearchSelect, categoryOption } from "@/components/data/search-select";
+import { useListState } from "@/components/data/use-list-state";
+import { useServerList } from "@/components/data/use-server-list";
 
 function marginPct(sellingPrice: number, costPrice: number): number | null {
   if (sellingPrice <= 0) return null;
   return Math.round(((sellingPrice - costPrice) / sellingPrice) * 100 * 100) / 100;
 }
 
-// Product Search (internal/search — OpenSearch-backed), distinct from the
-// Pricing screen's GET /products browse: this one is free-text and
-// typo-tolerant (fuzzy multi_match server-side), and degrades to a plain
-// "search unavailable" message rather than crashing when OpenSearch isn't
-// configured/reachable — SEARCH_UNAVAILABLE is an expected, not
-// exceptional, response shape for this one screen.
-export default function SearchPage() {
-  const [q, setQ] = useState("");
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [results, setResults] = useState<SearchHit[] | null>(null);
-  const [total, setTotal] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+const columns: Column<SearchHit>[] = [
+  {
+    key: "name",
+    header: "Product",
+    cell: (h) => (
+      <div className="flex flex-col leading-tight">
+        <span className="font-medium">{h.name}</span>
+        {h.hsn_code && <span className="text-xs text-muted-foreground">HSN {h.hsn_code}</span>}
+      </div>
+    ),
+  },
+  { key: "sku", header: "SKU", cell: (h) => <span className="font-mono text-xs">{h.sku}</span> },
+  { key: "category", header: "Category", cell: (h) => h.category_name || "—" },
+  { key: "brand", header: "Brand", cell: (h) => h.brand_name || "—" },
+  {
+    key: "available",
+    header: "Available",
+    align: "right",
+    cell: (h) => {
+      const available = Number(h.available ?? 0);
+      const onHand = Number(h.on_hand ?? 0);
+      return (
+        <div className="flex flex-col leading-tight">
+          <span className={`tabular font-medium ${available <= 0 ? "text-destructive" : ""}`}>{qty(available)}</span>
+          {onHand !== available && <span className="text-xs text-muted-foreground">{qty(onHand)} on hand</span>}
+        </div>
+      );
+    },
+  },
+  { key: "cost", header: "Cost", align: "right", cell: (h) => <span className="tabular">₹{h.cost_price}</span> },
+  { key: "selling", header: "Selling", align: "right", cell: (h) => <span className="tabular">₹{h.selling_price}</span> },
+  {
+    key: "margin",
+    header: "Margin",
+    align: "right",
+    cell: (h) => {
+      const m = marginPct(h.selling_price, h.cost_price);
+      return <span className={`tabular ${m !== null && m < 0 ? "font-medium text-destructive" : ""}`}>{m ?? "—"}%</span>;
+    },
+  },
+];
 
-  function runSearch() {
-    setLoading(true);
-    setError(null);
-    setUnavailable(false);
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (minPrice) params.set("min_price", minPrice);
-    if (maxPrice) params.set("max_price", maxPrice);
-    api
-      .get<SearchResponse>(`/api/v1/products/search?${params.toString()}`)
-      .then((d) => {
-        setResults(d.results ?? []);
-        setTotal(d.total);
-      })
-      .catch((e) => {
-        if (e instanceof ApiError && e.code === "SEARCH_UNAVAILABLE") {
-          setUnavailable(true);
-        } else {
-          setError(e instanceof ApiError ? e.message : "Could not reach the server");
-        }
-      })
-      .finally(() => setLoading(false));
-  }
-
-  // Debounced live search as the user types/adjusts filters — this is a
-  // typeahead-style screen (FRD: "<=50ms autocomplete"), not a
-  // submit-a-form one.
+// A price bound that applies as you type, after a pause — like the search box.
+function PriceBound({ id, label, placeholder, value, onChange }: { id: string; label: string; placeholder: string; value: string; onChange: (v: string) => void }) {
+  const [text, setText] = useState(value);
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(runSearch, 300);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, minPrice, maxPrice]);
+    if (text === value) return;
+    const t = setTimeout(() => onChange(text), 400);
+    return () => clearTimeout(t);
+  }, [text, value, onChange]);
+  return (
+    <Input id={id} aria-label={label} placeholder={placeholder} type="number" step="0.01" min="0" className="h-9 w-24" value={text} onChange={(e) => setText(e.target.value)} />
+  );
+}
+
+function useCatalogFilters() {
+  const [categories, setCategories] = useState<SearchOption[]>([]);
+  const [brands, setBrands] = useState<SearchOption[]>([]);
+  useEffect(() => {
+    api.get<{ categories: Category[] }>("/api/v1/categories?status=active&sort=path").then((d) => setCategories(d.categories.map(categoryOption))).catch(() => {});
+    api.get<{ brands: CatalogBrand[] }>("/api/v1/brands?status=active").then((d) => setBrands(d.brands.map((b) => ({ value: b.brand_id, label: b.name })))).catch(() => {});
+  }, []);
+  return { categories, brands };
+}
+
+function SearchView() {
+  const { state, update, apiQuery, activeFilterCount } = useListState({
+    sort: "relevance",
+    filterKeys: ["category_id", "brand_id", "min_price", "max_price"],
+  });
+  const list = useServerList<SearchHit>("/api/v1/products/search", "results", apiQuery);
+  const { categories, brands } = useCatalogFilters();
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Product Search</h1>
-
-      <Card>
-        <CardContent className="flex flex-col gap-4 pt-6">
-          <div className="flex gap-2 items-end flex-wrap">
-            <div className="flex flex-col gap-2 flex-1 min-w-48">
-              <Label htmlFor="q">Search</Label>
-              <Input id="q" placeholder="Name, SKU, or HSN code" value={q} onChange={(e) => setQ(e.target.value)} />
+    <div className="flex flex-col gap-5">
+      <PageHeader
+        title="Product Search"
+        description="Typo-tolerant search across name, SKU and HSN, filtered by category, brand and price. Available is live stock that can still be sold."
+      />
+      <DataTable<SearchHit>
+        columns={columns}
+        rows={list.rows}
+        total={list.total}
+        loading={list.loading}
+        error={list.error}
+        onRetry={list.reload}
+        state={state}
+        update={(p) => {
+          list.setLoading(true);
+          update(p);
+        }}
+        rowKey={(h) => h.variant_id}
+        searchPlaceholder="Name, SKU, or HSN code"
+        searchLabel="Search"
+        searchId="q"
+        activeFilterCount={activeFilterCount}
+        onClearFilters={() => update({ q: "", filters: { category_id: "", brand_id: "", min_price: "", max_price: "" } })}
+        filters={
+          <>
+            <div className="w-52">
+              <SearchSelect
+                ariaLabel="Filter by category"
+                value={state.filters.category_id}
+                onChange={(v) => update({ filters: { category_id: v } })}
+                options={categories}
+                noneLabel="All categories"
+                placeholder="All categories"
+              />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="minPrice">Min price (₹)</Label>
-              <Input id="minPrice" type="number" step="0.01" className="w-32" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} />
+            <div className="w-44">
+              <SearchSelect
+                ariaLabel="Filter by brand"
+                value={state.filters.brand_id}
+                onChange={(v) => update({ filters: { brand_id: v } })}
+                options={brands}
+                noneLabel="All brands"
+                placeholder="All brands"
+              />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="maxPrice">Max price (₹)</Label>
-              <Input id="maxPrice" type="number" step="0.01" className="w-32" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} />
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            No category/brand filter here yet — there&apos;s no category/brand list endpoint to populate a picker from (same gap as the Pricing screen&apos;s bulk-update filter).
-          </p>
-        </CardContent>
-      </Card>
-
-      {unavailable && (
-        <Card>
-          <CardContent className="pt-6 text-sm text-warn">
-            Product search is temporarily unavailable. The rest of the app is unaffected — try again shortly, or use the Pricing screen&apos;s catalog browse instead.
-          </CardContent>
-        </Card>
-      )}
-      {error && <p className="text-sm text-destructive">{error}</p>}
-
-      {!unavailable && results && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">
-              {total} result{total === 1 ? "" : "s"}
-              {loading && <span className="text-muted-foreground font-normal"> · searching…</span>}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Product</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Brand</TableHead>
-                  <TableHead>Cost</TableHead>
-                  <TableHead>Selling</TableHead>
-                  <TableHead>Margin</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {results.map((hit) => {
-                  const margin = marginPct(hit.selling_price, hit.cost_price);
-                  return (
-                    <TableRow key={hit.variant_id}>
-                      <TableCell>{hit.name}</TableCell>
-                      <TableCell className="font-mono text-xs">{hit.sku}</TableCell>
-                      <TableCell>{hit.category_name || "—"}</TableCell>
-                      <TableCell>{hit.brand_name || "—"}</TableCell>
-                      <TableCell>₹{hit.cost_price}</TableCell>
-                      <TableCell>₹{hit.selling_price}</TableCell>
-                      <TableCell className={margin !== null && margin < 0 ? "text-destructive font-medium" : ""}>{margin ?? "—"}%</TableCell>
-                      <TableCell>
-                        <Link href="/pricing" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                          Edit price
-                        </Link>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-                {results.length === 0 && !loading && (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-6">
-                      No matching products
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
+            <PriceBound id="minPrice" label="Min price (₹)" placeholder="Min ₹" value={state.filters.min_price} onChange={(v) => update({ filters: { min_price: v } })} />
+            <PriceBound id="maxPrice" label="Max price (₹)" placeholder="Max ₹" value={state.filters.max_price} onChange={(v) => update({ filters: { max_price: v } })} />
+          </>
+        }
+        empty={{ title: "No products to search yet", body: "Products appear here as soon as they're added to the catalogue." }}
+        rowActions={(h) => (
+          <Link
+            href={`/pricing?q=${encodeURIComponent(h.sku)}`}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+            aria-label={`Edit price of ${h.sku}`}
+          >
+            Edit price
+          </Link>
+        )}
+      />
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense>
+      <SearchView />
+    </Suspense>
   );
 }
