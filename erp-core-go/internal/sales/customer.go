@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/customers"
 	"erp-core-go/internal/httpx"
 )
 
@@ -43,6 +45,11 @@ func (h *Handler) AttachCustomer(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
 		return
 	}
+	req.Name, req.Phone, req.Email = strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), strings.TrimSpace(req.Email)
+	if req.CustomerID == "" && !customers.ValidEmail(req.Email) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "email is not a valid address")
+		return
+	}
 	if req.CustomerID == "" && req.Name == "" && req.Phone == "" {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "customer_id, or at least a name/phone for a walk-in customer, is required")
 		return
@@ -60,7 +67,7 @@ func (h *Handler) AttachCustomer(w http.ResponseWriter, r *http.Request) {
 		if customerID == "" {
 			if err := tx.QueryRow(ctx, `
 				INSERT INTO customers (id, merchant_id, name, phone, email)
-				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3)
+				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, NULLIF($3,''))
 				RETURNING id`, req.Name, req.Phone, req.Email,
 			).Scan(&customerID); err != nil {
 				return err

@@ -19,7 +19,10 @@ func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		// X-Client / X-Terminal-Id: the web admin and POS name themselves for
+		// the activity log and attendance (internal/activity). A header
+		// missing here fails every browser request at the preflight.
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Client, X-Terminal-Id")
 		w.Header().Set("Access-Control-Max-Age", "600")
 		// Phase 14: a file download (label print job) names itself here; a
 		// browser hides it from a cross-origin page unless it is exposed.

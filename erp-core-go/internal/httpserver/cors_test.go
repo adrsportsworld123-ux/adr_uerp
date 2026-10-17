@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +56,24 @@ func TestCORS_preflightSucceedsAndRealRequestStillWorks(t *testing.T) {
 	}
 	if postResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected the real POST to still reach the handler, got %d", postResp.StatusCode)
+	}
+}
+
+// Every header a client sends must be allowed, or the browser refuses the
+// request at the preflight — the web admin's login broke exactly this way
+// when it started sending X-Client.
+func TestCORS_allowsEveryClientHeader(t *testing.T) {
+	srv := httptest.NewServer(CORS(innerHandlerWithNoOptionsRoute()))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodOptions, srv.URL+"/api/v1/auth/login", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := strings.ToLower(resp.Header.Get("Access-Control-Allow-Headers"))
+	for _, h := range []string{"authorization", "content-type", "x-client", "x-terminal-id"} {
+		if !strings.Contains(allowed, h) {
+			t.Errorf("Access-Control-Allow-Headers %q is missing %s", allowed, h)
+		}
 	}
 }

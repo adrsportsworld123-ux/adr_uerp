@@ -274,120 +274,9 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 
 	var resp grnResponse
 	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var branchID, status string
-		var freight, otherCharges, subtotal float64
-		if err := tx.QueryRow(ctx, `
-			SELECT branch_id, status, freight_amount, other_charges, subtotal
-			FROM goods_receipt_notes WHERE id = $1`, grnID,
-		).Scan(&branchID, &status, &freight, &otherCharges, &subtotal); err != nil {
+		if err := completeGRNTx(ctx, tx, grnID, claims.UserID, receivedOn); err != nil {
 			return err
 		}
-		if status != "draft" {
-			return errGRNNotEditable
-		}
-
-		rows, err := tx.Query(ctx, `
-			SELECT id, variant_id, quantity, unit_cost, line_total, COALESCE(batch_no,''), expiry_date::text
-			FROM goods_receipt_lines WHERE grn_id = $1`, grnID)
-		if err != nil {
-			return err
-		}
-		type line struct {
-			id, variantID      string
-			quantity, unitCost float64
-			lineTotal          float64
-			batchNo            string
-			expiryDate         *string
-		}
-		var lines []line
-		for rows.Next() {
-			var l line
-			if err := rows.Scan(&l.id, &l.variantID, &l.quantity, &l.unitCost, &l.lineTotal, &l.batchNo, &l.expiryDate); err != nil {
-				rows.Close()
-				return err
-			}
-			lines = append(lines, l)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if len(lines) == 0 {
-			return errGRNNotEditable
-		}
-
-		landedCharges := freight + otherCharges
-		for _, l := range lines {
-			// Allocate freight/other charges proportionally to each line's
-			// share of the GRN's pre-landed-cost subtotal.
-			share := 0.0
-			if subtotal > 0 {
-				share = landedCharges * (l.lineTotal / subtotal)
-			}
-			landedUnitCost := (l.lineTotal + share) / l.quantity
-
-			if _, err := tx.Exec(ctx, `
-				UPDATE goods_receipt_lines SET landed_unit_cost = $1 WHERE id = $2`,
-				landedUnitCost, l.id); err != nil {
-				return err
-			}
-
-			// Phase 8 (Grocery/FMCG): a real batch/lot, with its own landed
-			// cost and expiry, comes into existence here — the actual point
-			// of origin this vertical's tracking needs, not invented
-			// separately. No-op (empty batchNo) for a variant that was
-			// never asked to supply one at AddGRNLine time.
-			if l.batchNo != "" {
-				if err := inventory.ReceiveBatch(ctx, tx, branchID, l.variantID, l.batchNo, l.expiryDate, landedUnitCost, l.quantity); err != nil {
-					return err
-				}
-			}
-
-			// Weighted Average Cost across the whole merchant's stock of
-			// this variant (cost_price is a product_variants-level field,
-			// not branch-scoped, so "existing qty" is the sum over every
-			// branch's stock_levels row, read BEFORE this GRN's addition).
-			var existingQty, currentCost float64
-			if err := tx.QueryRow(ctx, `
-				SELECT COALESCE(SUM(on_hand), 0) FROM stock_levels WHERE variant_id = $1`, l.variantID,
-			).Scan(&existingQty); err != nil {
-				return err
-			}
-			if err := tx.QueryRow(ctx, `SELECT cost_price FROM product_variants WHERE id = $1`, l.variantID).Scan(&currentCost); err != nil {
-				return err
-			}
-			newCost := landedUnitCost
-			if existingQty+l.quantity > 0 {
-				newCost = (existingQty*currentCost + l.quantity*landedUnitCost) / (existingQty + l.quantity)
-			}
-			if _, err := tx.Exec(ctx, `UPDATE product_variants SET cost_price = $1, updated_at = now() WHERE id = $2`, newCost, l.variantID); err != nil {
-				return err
-			}
-
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO stock_levels (id, merchant_id, branch_id, variant_id, on_hand, reserved, version)
-				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, 0, 0)
-				ON CONFLICT (branch_id, variant_id) DO UPDATE SET
-				  on_hand = stock_levels.on_hand + $3, version = stock_levels.version + 1, updated_at = now()`,
-				branchID, l.variantID, l.quantity); err != nil {
-				return err
-			}
-
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, performed_by, created_at)
-				VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'purchase', $3, 'grn', $4, $5,
-				        COALESCE(($6::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()))`,
-				branchID, l.variantID, l.quantity, grnID, claims.UserID, receivedOn); err != nil {
-				return err
-			}
-		}
-
-		if _, err := tx.Exec(ctx, `
-			UPDATE goods_receipt_notes SET status = 'completed',
-			  completed_at = COALESCE(($2::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()) WHERE id = $1`, grnID, receivedOn); err != nil {
-			return err
-		}
-
 		return loadGRN(ctx, tx, grnID, &resp)
 	})
 
@@ -401,6 +290,127 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.JSON(w, http.StatusOK, resp)
 	}
+}
+
+// completeGRNTx is the completion itself, inside the caller's transaction:
+// landed cost across lines, stock in, Weighted Average Cost, batches and
+// the stock movements, dated receivedOn (nil = now). Shared by
+// CompleteGRN and the invoice importer (import.go).
+func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receivedOn *string) error {
+	var branchID, status string
+	var freight, otherCharges, subtotal float64
+	if err := tx.QueryRow(ctx, `
+		SELECT branch_id, status, freight_amount, other_charges, subtotal
+		FROM goods_receipt_notes WHERE id = $1`, grnID,
+	).Scan(&branchID, &status, &freight, &otherCharges, &subtotal); err != nil {
+		return err
+	}
+	if status != "draft" {
+		return errGRNNotEditable
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, variant_id, quantity, unit_cost, line_total, COALESCE(batch_no,''), expiry_date::text
+		FROM goods_receipt_lines WHERE grn_id = $1`, grnID)
+	if err != nil {
+		return err
+	}
+	type line struct {
+		id, variantID      string
+		quantity, unitCost float64
+		lineTotal          float64
+		batchNo            string
+		expiryDate         *string
+	}
+	var lines []line
+	for rows.Next() {
+		var l line
+		if err := rows.Scan(&l.id, &l.variantID, &l.quantity, &l.unitCost, &l.lineTotal, &l.batchNo, &l.expiryDate); err != nil {
+			rows.Close()
+			return err
+		}
+		lines = append(lines, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(lines) == 0 {
+		return errGRNNotEditable
+	}
+
+	landedCharges := freight + otherCharges
+	for _, l := range lines {
+		// Allocate freight/other charges proportionally to each line's
+		// share of the GRN's pre-landed-cost subtotal.
+		share := 0.0
+		if subtotal > 0 {
+			share = landedCharges * (l.lineTotal / subtotal)
+		}
+		landedUnitCost := (l.lineTotal + share) / l.quantity
+
+		if _, err := tx.Exec(ctx, `
+			UPDATE goods_receipt_lines SET landed_unit_cost = $1 WHERE id = $2`,
+			landedUnitCost, l.id); err != nil {
+			return err
+		}
+
+		// Phase 8 (Grocery/FMCG): a real batch/lot, with its own landed
+		// cost and expiry, comes into existence here — the actual point
+		// of origin this vertical's tracking needs, not invented
+		// separately. No-op (empty batchNo) for a variant that was
+		// never asked to supply one at AddGRNLine time.
+		if l.batchNo != "" {
+			if err := inventory.ReceiveBatch(ctx, tx, branchID, l.variantID, l.batchNo, l.expiryDate, landedUnitCost, l.quantity); err != nil {
+				return err
+			}
+		}
+
+		// Weighted Average Cost across the whole merchant's stock of
+		// this variant (cost_price is a product_variants-level field,
+		// not branch-scoped, so "existing qty" is the sum over every
+		// branch's stock_levels row, read BEFORE this GRN's addition).
+		var existingQty, currentCost float64
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(SUM(on_hand), 0) FROM stock_levels WHERE variant_id = $1`, l.variantID,
+		).Scan(&existingQty); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `SELECT cost_price FROM product_variants WHERE id = $1`, l.variantID).Scan(&currentCost); err != nil {
+			return err
+		}
+		newCost := landedUnitCost
+		if existingQty+l.quantity > 0 {
+			newCost = (existingQty*currentCost + l.quantity*landedUnitCost) / (existingQty + l.quantity)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE product_variants SET cost_price = $1, updated_at = now() WHERE id = $2`, newCost, l.variantID); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO stock_levels (id, merchant_id, branch_id, variant_id, on_hand, reserved, version)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, 0, 0)
+			ON CONFLICT (branch_id, variant_id) DO UPDATE SET
+			  on_hand = stock_levels.on_hand + $3, version = stock_levels.version + 1, updated_at = now()`,
+			branchID, l.variantID, l.quantity); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, performed_by, created_at)
+			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'purchase', $3, 'grn', $4, $5,
+			        COALESCE(($6::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()))`,
+			branchID, l.variantID, l.quantity, grnID, userID, receivedOn); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE goods_receipt_notes SET status = 'completed',
+		  completed_at = COALESCE(($2::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()) WHERE id = $1`, grnID, receivedOn); err != nil {
+		return err
+	}
+	return nil
 }
 
 func recalcGRNTotals(ctx context.Context, tx pgx.Tx, grnID string, resp *grnResponse) error {

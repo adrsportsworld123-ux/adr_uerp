@@ -236,6 +236,8 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
     ...options,
     headers: {
       "Content-Type": "application/json",
+      // Names this app in the activity log (erp-core-go internal/activity).
+      "X-Client": "web",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
@@ -279,7 +281,7 @@ async function download(path: string, body?: unknown, retried = false): Promise<
   const token = getToken();
   const resp = await fetch(`${API_BASE_URL}${path}`, {
     method: body === undefined ? "GET" : "POST",
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: { "Content-Type": "application/json", "X-Client": "web", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (resp.ok) {
@@ -303,6 +305,10 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  // A raw-body upload (a branch logo): the file itself is the body, typed by
+  // its own MIME type rather than JSON.
+  upload: <T>(path: string, file: Blob) =>
+    request<T>(path, { method: "PUT", body: file, headers: { "Content-Type": file.type || "application/octet-stream" } }),
 };
 
 // Matches migrations/002_seed.sql — the same seed branch/terminal the

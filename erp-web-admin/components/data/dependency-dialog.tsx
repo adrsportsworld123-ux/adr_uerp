@@ -122,7 +122,7 @@ export function DeleteWithDependencies({
           ) : (
             <Button variant="destructive" onClick={remove} disabled={busy || !report}>
               {busy && <Loader2 className="animate-spin" aria-hidden />}
-              Delete permanently
+              Move to Recycle Bin
             </Button>
           )}
         </>
@@ -146,7 +146,7 @@ export function DeleteWithDependencies({
       {report && !blocked && (
         <div className="flex flex-col gap-2">
           <p className="flex items-center gap-2">
-            <Link2 className="size-4" aria-hidden /> Nothing uses this {noun}. Deleting it can&rsquo;t be undone.
+            <Link2 className="size-4" aria-hidden /> Nothing uses this {noun}. It moves to the Recycle Bin, where an admin can restore it.
           </p>
         </div>
       )}

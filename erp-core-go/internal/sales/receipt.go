@@ -9,6 +9,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
+	"erp-core-go/internal/documents"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/printing"
 )
@@ -36,6 +37,10 @@ type receiptResponse struct {
 	// receipt notification.
 	CustomerEmail *string `json:"-"`
 	CustomerPhone *string `json:"-"`
+	// Also internal: the downloadable PDF (receipt_pdf.go) needs the
+	// branch for its letterhead and the sale's date in branch local time.
+	BranchID string `json:"-"`
+	DateText string `json:"-"`
 }
 
 type receiptPayment struct {
@@ -82,7 +87,16 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	orderID := chi.URLParam(r, "id")
 
-	resp, err := loadReceiptData(r.Context(), h.DB, claims.TenantID, orderID)
+	var resp receiptResponse
+	var lh documents.Letterhead
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		if resp, err = loadReceiptDataTx(ctx, tx, orderID); err != nil {
+			return err
+		}
+		lh, _, err = documents.LoadLetterhead(ctx, tx, resp.BranchID, documents.KindReceipt)
+		return err
+	})
 	if err == pgx.ErrNoRows {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
 		return
@@ -91,8 +105,13 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The branch's letterhead name, header and receipt footer, so the
+	// thermal slip and the downloadable PDF carry the same branding (the
+	// logo stays PDF-only: raster logos differ per printer model).
 	data := printing.ReceiptData{
-		MerchantName:  resp.MerchantName,
+		MerchantName:  lh.Name,
+		Header:        lh.Header,
+		Footer:        lh.Footer,
 		BranchName:    resp.BranchName,
 		OrderNumber:   resp.OrderNumber,
 		CashierName:   resp.CashierName,
@@ -134,7 +153,8 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 		SELECT so.order_number, so.status, so.finalized_at::text,
 		       m.legal_name, COALESCE(m.gstin, ''), b.name, COALESCE(b.gstin, ''),
 		       u.name, c.name, c.email, c.phone,
-		       so.subtotal::text, so.discount_total::text, so.tax_total::text, so.grand_total::text
+		       so.subtotal::text, so.discount_total::text, so.tax_total::text, so.grand_total::text,
+		       so.branch_id, to_char(COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone, 'DD Mon YYYY, HH24:MI')
 		FROM sales_orders so
 		JOIN merchants m ON m.id = so.merchant_id
 		JOIN branches b ON b.id = so.branch_id
@@ -144,7 +164,8 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 	).Scan(&resp.OrderNumber, &resp.Status, &finalizedAt,
 		&resp.MerchantName, &resp.MerchantGSTIN, &resp.BranchName, &resp.BranchGSTIN,
 		&resp.CashierName, &customerName, &resp.CustomerEmail, &resp.CustomerPhone,
-		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal,
+		&resp.BranchID, &resp.DateText); err != nil {
 		return resp, err
 	}
 	resp.FinalizedAt = finalizedAt

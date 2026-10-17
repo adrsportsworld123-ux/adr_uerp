@@ -16,10 +16,14 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/search"
 )
 
 type Handler struct {
 	DB *db.DB
+	// Search indexes the products an invoice import creates (import.go);
+	// nil or disabled = skip.
+	Search *search.Client
 }
 
 type supplierRequest struct {

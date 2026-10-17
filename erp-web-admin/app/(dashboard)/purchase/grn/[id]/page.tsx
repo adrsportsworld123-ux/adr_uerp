@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ProductPicker } from "@/components/data/product-picker";
+import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 
 interface BarcodeLookup {
   product_id: string;
@@ -112,11 +113,19 @@ export default function GRNDetailPage() {
           <h1 className="text-2xl font-semibold">{grn.grn_number}</h1>
           <Badge variant={isDraft ? "outline" : "default"}>{grn.status}</Badge>
         </div>
-        {isDraft && grn.lines.length > 0 && (
-          <Button onClick={handleComplete} disabled={busy}>
-            Complete GRN
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {grn.lines.length > 0 && (
+            <>
+              <DownloadPdfButton path={`/api/v1/purchase/grn/${grn.grn_id}/pdf`} label={isDraft ? "Draft PDF" : "Download PDF"} size="default" />
+              <PrintPdfButton path={`/api/v1/purchase/grn/${grn.grn_id}/pdf`} />
+            </>
+          )}
+          {isDraft && grn.lines.length > 0 && (
+            <Button onClick={handleComplete} disabled={busy}>
+              Complete GRN
+            </Button>
+          )}
+        </div>
       </div>
 
       <Card>

@@ -12,6 +12,7 @@ import (
 
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/reqmeta"
 )
 
 const (
@@ -73,6 +74,7 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not resolve merchant")
 		return
 	}
+	reqmeta.SetActor(ctx, tenantID, "") // the activity log records the attempt under this merchant
 
 	type userRow struct {
 		id                  string
@@ -105,6 +107,8 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "login failed")
 		return
 	}
+
+	reqmeta.SetActor(ctx, tenantID, u.id)
 
 	if u.status != "active" {
 		httpx.Error(w, http.StatusForbidden, "ACCOUNT_INACTIVE", "this account is not active")

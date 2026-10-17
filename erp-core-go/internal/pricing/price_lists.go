@@ -13,6 +13,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 )
 
 // Phase 7: wholesale price lists at scale (migrations/026_wholesale_b2b.sql).
@@ -235,7 +236,7 @@ func (h *Handler) UpsertPriceListItem(w http.ResponseWriter, r *http.Request) {
 		return tx.QueryRow(ctx, `
 			INSERT INTO price_list_items (id, price_list_id, variant_id, price)
 			VALUES (gen_random_uuid(), $1, $2, $3)
-			ON CONFLICT (price_list_id, variant_id) DO UPDATE SET price = EXCLUDED.price, updated_at = now()
+			ON CONFLICT (price_list_id, variant_id) WHERE deleted_at IS NULL DO UPDATE SET price = EXCLUDED.price, updated_at = now()
 			RETURNING price::text`, listID, variantID, req.Price,
 		).Scan(&item.Price)
 	})
@@ -260,14 +261,11 @@ func (h *Handler) DeletePriceListItem(w http.ResponseWriter, r *http.Request) {
 	variantID := chi.URLParam(r, "variant_id")
 
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM price_list_items WHERE price_list_id = $1 AND variant_id = $2`, listID, variantID)
-		if err != nil {
+		var id string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM price_list_items WHERE price_list_id::text = $1 AND variant_id::text = $2`, listID, variantID).Scan(&id); err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return pgx.ErrNoRows
-		}
-		return nil
+		return softdelete.Delete(ctx, tx, "price_list_items", id, claims.UserID, "")
 	})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -298,14 +296,12 @@ func (h *Handler) DeletePriceList(w http.ResponseWriter, r *http.Request) {
 		if customerCount > 0 {
 			return errPriceListInUse
 		}
-		tag, err := tx.Exec(ctx, `DELETE FROM price_lists WHERE id = $1`, listID)
-		if err != nil {
+		// The items went with the list when this was a hard delete
+		// (ON DELETE CASCADE); they still do.
+		if err := softdelete.Delete(ctx, tx, "price_lists", listID, claims.UserID, ""); err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return pgx.ErrNoRows
-		}
-		return nil
+		return softdelete.DeleteChildren(ctx, tx, "price_list_items", "price_list_id", listID, claims.UserID)
 	})
 	switch {
 	case errors.Is(err, errPriceListInUse):

@@ -18,6 +18,7 @@ import (
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 )
 
 // Phase 14: journal vouchers, the accounting settings and the period lock
@@ -530,7 +531,9 @@ func (h *Handler) DeleteVoucher(w http.ResponseWriter, r *http.Request) {
 		if cur.Status != "draft" {
 			return fmt.Errorf("%w: only a draft can be deleted (this one is %s)", errVoucherState, cur.Status)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM journal_vouchers WHERE id::text = $1`, id); err != nil {
+		// softdelete writes the generic delete entry; voucherAudit keeps
+		// the voucher's own trail (its lines, in its own shape) as before.
+		if err := softdelete.Delete(ctx, tx, "journal_vouchers", id, claims.UserID, ""); err != nil {
 			return err
 		}
 		return voucherAudit(ctx, tx, cur, claims.UserID, "delete", "")

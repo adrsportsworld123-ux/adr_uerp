@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../printing/document_saver.dart' as doc_saver;
 import '../printing/printer_service.dart';
 import '../state/session.dart';
 import '../ui/format.dart';
@@ -37,6 +38,29 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   final _printer = PrinterService();
   bool _printing = false;
   bool _voiding = false;
+  bool _downloading = false;
+
+  /// Saves the receipt as a PDF under the branch's letterhead. [format]
+  /// 'a4' or 'thermal'; null = the branch's default paper.
+  Future<void> _download({String? format}) async {
+    setState(() => _downloading = true);
+    final session = context.read<AppSession>();
+    final path = widget.fromHistory
+        ? await session.downloadReceiptFor(widget.orderId!, format: format)
+        : await session.downloadReceipt(format: format);
+    if (!mounted) return;
+    setState(() => _downloading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      path == null
+          ? SnackBar(content: Text(session.lastError ?? 'Could not download the receipt'))
+          : SnackBar(
+              content: Text('Saved to $path'),
+              action: doc_saver.canOpenSavedDocuments
+                  ? SnackBarAction(label: 'Open', onPressed: () => doc_saver.openSavedDocument(path))
+                  : null,
+            ),
+    );
+  }
 
   Future<void> _print() async {
     setState(() => _printing = true);
@@ -154,6 +178,32 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.print),
             label: const Text('Print receipt'),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  key: const Key('receipt-download'),
+                  onPressed: _downloading ? null : () => _download(),
+                  icon: _downloading
+                      ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.download),
+                  label: const Text('Download PDF'),
+                ),
+              ),
+              PopupMenuButton<String>(
+                key: const Key('receipt-download-format'),
+                tooltip: 'Download on other paper',
+                enabled: !_downloading,
+                icon: const Icon(Icons.arrow_drop_down),
+                onSelected: (f) => _download(format: f),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'a4', child: Text('A4 PDF')),
+                  PopupMenuItem(value: 'thermal', child: Text('80 mm roll PDF')),
+                ],
+              ),
+            ],
           ),
           if (widget.onReturn != null) ...[
             const SizedBox(height: 8),

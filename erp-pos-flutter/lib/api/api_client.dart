@@ -1017,6 +1017,96 @@ class Shift {
 /// is the first real verification it's had. Field names/JSON shapes are
 /// checked against a running server manually, not by an automated
 /// integration test — there still isn't one.
+/// A file the API sent as a download: the server's suggested name and the bytes.
+class DownloadedFile {
+  final String filename;
+  final List<int> bytes;
+  DownloadedFile(this.filename, this.bytes);
+}
+
+/// One attendance row (erp-core-go internal/hr/attendance.go).
+class AttendanceRecord {
+  final String id;
+  final String workDate;
+  final String status;
+  final DateTime? clockIn;
+  final DateTime? clockOut;
+  final String? hoursWorked;
+  final String? clockInGeofence;
+  final String? clockOutGeofence;
+  final int? clockInDistanceM;
+  final int? clockOutDistanceM;
+
+  const AttendanceRecord({
+    required this.id,
+    required this.workDate,
+    required this.status,
+    this.clockIn,
+    this.clockOut,
+    this.hoursWorked,
+    this.clockInGeofence,
+    this.clockOutGeofence,
+    this.clockInDistanceM,
+    this.clockOutDistanceM,
+  });
+
+  factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
+    DateTime? t(String k) => json[k] == null ? null : DateTime.tryParse((json[k] as String).replaceFirst(' ', 'T'))?.toLocal();
+    final inEv = (json['clock_in_evidence'] as Map<String, dynamic>?) ?? const {};
+    final outEv = (json['clock_out_evidence'] as Map<String, dynamic>?) ?? const {};
+    return AttendanceRecord(
+      id: json['id'] as String,
+      workDate: json['work_date'] as String,
+      status: json['status'] as String,
+      clockIn: t('clock_in'),
+      clockOut: t('clock_out'),
+      hoursWorked: json['hours_worked'] as String?,
+      clockInGeofence: inEv['geofence'] as String?,
+      clockOutGeofence: outEv['geofence'] as String?,
+      clockInDistanceM: inEv['distance_m'] as int?,
+      clockOutDistanceM: outEv['distance_m'] as int?,
+    );
+  }
+}
+
+/// GET /hr/attendance/me.
+class MyAttendance {
+  final AttendanceRecord? open;
+  final AttendanceRecord? today;
+  final bool requireLocation;
+  final String geofenceMode; // off | flag | block
+  final bool allowPos;
+  final String? geofenceBranch;
+  final int? geofenceRadiusM;
+
+  const MyAttendance({
+    this.open,
+    this.today,
+    this.requireLocation = false,
+    this.geofenceMode = 'flag',
+    this.allowPos = true,
+    this.geofenceBranch,
+    this.geofenceRadiusM,
+  });
+
+  bool get checkedIn => open != null;
+  bool get doneToday => open == null && today?.clockOut != null;
+
+  factory MyAttendance.fromJson(Map<String, dynamic> json) {
+    final s = (json['settings'] as Map<String, dynamic>?) ?? const {};
+    final g = json['geofence'] as Map<String, dynamic>?;
+    return MyAttendance(
+      open: json['open'] == null ? null : AttendanceRecord.fromJson(json['open'] as Map<String, dynamic>),
+      today: json['today'] == null ? null : AttendanceRecord.fromJson(json['today'] as Map<String, dynamic>),
+      requireLocation: s['require_location'] as bool? ?? false,
+      geofenceMode: s['geofence_mode'] as String? ?? 'flag',
+      allowPos: s['allow_pos'] as bool? ?? true,
+      geofenceBranch: g?['branch_name'] as String?,
+      geofenceRadiusM: g?['radius_m'] as int?,
+    );
+  }
+}
+
 class ApiClient {
   final String baseUrl;
   // Raw transport — only used directly for POST /auth/refresh, so a
@@ -1040,6 +1130,11 @@ class ApiClient {
   /// silently refreshed (refreshing an idle session would turn the FRD's
   /// 15-minute inactivity timeout into the refresh token's 30 days).
   bool Function() canRefresh = () => true;
+
+  /// This device's POS terminal, sent as X-Terminal-Id with every request
+  /// (with X-Client: pos) so the activity log and attendance know which
+  /// till acted. Set by AppSession from the device's pairing.
+  String? terminalId;
 
   /// Called once when the session can't continue — see AppSession.
   void Function(SessionEndReason reason)? onSessionExpired;
@@ -1315,6 +1410,29 @@ class ApiClient {
     return _decode(resp)['customer_id'] as String;
   }
 
+  /// GET /hr/attendance/me — the caller's open punch, today's row and the
+  /// merchant's check-in rules.
+  Future<MyAttendance> myAttendance() async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/hr/attendance/me'), headers: _authHeaders);
+    return MyAttendance.fromJson(_decode(resp));
+  }
+
+  /// POST /hr/attendance/clock-in or clock-out. The location is optional
+  /// unless the merchant requires it; the server records the IP and this
+  /// terminal itself.
+  Future<AttendanceRecord> punch({required bool checkIn, double? latitude, double? longitude, double? accuracyM}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/hr/attendance/clock-${checkIn ? 'in' : 'out'}'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        if (latitude != null) 'latitude': latitude,
+        if (longitude != null) 'longitude': longitude,
+        if (accuracyM != null) 'accuracy_m': accuracyM,
+      }),
+    );
+    return AttendanceRecord.fromJson(_decode(resp));
+  }
+
   Future<List<Customer>> searchCustomers(String query) async {
     final uri = Uri.parse('$baseUrl/api/v1/customers').replace(queryParameters: {'q': query, 'limit': '20'});
     final resp = await _http.get(uri, headers: _authHeaders);
@@ -1488,6 +1606,27 @@ class ApiClient {
       throw ApiException(resp.statusCode, 'PRINT_FAILED', 'could not fetch printable receipt');
     }
     return resp.bodyBytes;
+  }
+
+  /// GET .../receipt/pdf — the sale as a PDF under the branch's letterhead
+  /// (logo, header, receipt footer; erp-core-go internal/documents), the
+  /// same bytes the web admin downloads. [format] is 'a4' or 'thermal'
+  /// (80 mm roll); null uses the branch's default paper.
+  Future<DownloadedFile> receiptPdf(String orderId, {String? format}) async {
+    final uri =
+        Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/receipt/pdf').replace(queryParameters: format == null ? null : {'format': format});
+    final resp = await _http.get(uri, headers: _authHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      try {
+        _decode(resp); // throws the API's own error
+      } on FormatException {
+        // not a JSON error body (a proxy's HTML page): the generic error below
+      }
+      throw ApiException(resp.statusCode, 'DOWNLOAD_FAILED', 'could not download the receipt');
+    }
+    final disposition = resp.headers['content-disposition'] ?? '';
+    final name = RegExp(r'filename="([^"]+)"').firstMatch(disposition)?.group(1) ?? 'receipt-$orderId.pdf';
+    return DownloadedFile(name, resp.bodyBytes);
   }
 
   Future<Map<String, dynamic>> syncPull({required String branchId, String? since}) async {
@@ -1778,6 +1917,8 @@ class _AuthRetryingClient extends http.BaseClient {
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    request.headers['X-Client'] = 'pos';
+    if (_api.terminalId != null) request.headers['X-Terminal-Id'] = _api.terminalId!;
     if (request.url.path.contains('/api/v1/auth/') || !_api.hasSession) return _inner.send(request);
 
     // Buffered so the request can be replayed after a refresh.

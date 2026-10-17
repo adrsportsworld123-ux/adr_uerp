@@ -31,6 +31,7 @@ import (
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/dependencies"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 )
 
 type TaxonomyHandler struct {
@@ -91,8 +92,7 @@ func (h *TaxonomyHandler) deleteIfUnused(w http.ResponseWriter, r *http.Request,
 			blockers = deps
 			return nil
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM `+table+` WHERE id = $1`, locked)
-		return err
+		return softdelete.Delete(ctx, tx, table, locked, claims.UserID, "")
 	})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

@@ -84,68 +84,8 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 
 	var resp billResponse
 	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var supplierID, branchID, grnStatus string
-		var subtotal, freight, otherCharges float64
-		if err := tx.QueryRow(ctx, `
-			SELECT supplier_id, branch_id, status, subtotal, freight_amount, other_charges
-			FROM goods_receipt_notes WHERE id = $1`, req.GRNID,
-		).Scan(&supplierID, &branchID, &grnStatus, &subtotal, &freight, &otherCharges); err != nil {
-			return err
-		}
-		if grnStatus != "completed" {
-			return errGRNNotCompleted
-		}
-
-		billNumber := fmt.Sprintf("BILL-%d", time.Now().UnixNano())
-		grandTotal := math.Round((subtotal+freight+otherCharges+req.TaxTotal+req.RoundOff)*100) / 100
-
-		var dueDate *string
-		if req.DueDate != "" {
-			dueDate = &req.DueDate
-		}
-
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO purchase_bills (id, merchant_id, branch_id, supplier_id, grn_id, bill_number, supplier_invoice_number,
-			                             due_date, subtotal, tax_total, freight_amount, other_charges, grand_total, bill_date)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-			        COALESCE($12::date, CURRENT_DATE))
-			RETURNING id, bill_number, COALESCE(supplier_invoice_number,''), supplier_id, grn_id,
-			          subtotal::text, tax_total::text, freight_amount::text, other_charges::text, grand_total::text, amount_paid::text, status`,
-			branchID, supplierID, req.GRNID, billNumber, req.SupplierInvoiceNumber, dueDate,
-			subtotal, req.TaxTotal, freight, otherCharges, grandTotal, billDate,
-		).Scan(&resp.BillID, &resp.BillNumber, &resp.SupplierInvoiceNumber, &resp.SupplierID, &resp.GRNID,
-			&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status); err != nil {
-			return err
-		}
-
-		// Liability recognized at billing, not at GRN receipt — a GRN is a
-		// physical event with no financial obligation yet; the bill is what
-		// creates the payable. Landed cost (subtotal+freight+other_charges)
-		// capitalizes into Inventory Asset, matching the same landed-cost
-		// figure GRN completion already used for WAC.
-		var lines []accounting.JournalLine
-		if landedCost := subtotal + freight + otherCharges; landedCost > 0 {
-			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountInventory, Debit: landedCost})
-		}
-		if req.TaxTotal > 0 {
-			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountGSTInput, Debit: req.TaxTotal})
-		}
-		// The payable is the printed total; whatever rounding separates it
-		// from cost + tax lands in Round Off.
-		if diff := math.Round((grandTotal-(subtotal+freight+otherCharges+req.TaxTotal))*100) / 100; diff > 0 {
-			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Debit: diff})
-		} else if diff < 0 {
-			lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Credit: -diff})
-		}
-		lines = append(lines, accounting.JournalLine{
-			AccountCode: accounting.AccountPayable, Credit: grandTotal,
-			PartyType: "supplier", PartyID: supplierID,
-		})
-		desc := "Purchase bill " + billNumber
-		if req.SupplierInvoiceNumber != "" {
-			desc += " (supplier invoice " + req.SupplierInvoiceNumber + ")"
-		}
-		_, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "purchase_bill", resp.BillID, desc, claims.UserID, dateOrToday(billDate), lines)
+		var err error
+		resp, err = createBillTx(ctx, tx, req, claims.UserID, billDate)
 		return err
 	})
 
@@ -161,6 +101,77 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.JSON(w, http.StatusCreated, resp)
 	}
+}
+
+// createBillTx bills a completed GRN inside the caller's transaction: the
+// bill row and its ledger entry (Inventory, GST input and Round Off
+// against the supplier payable), dated billDate (nil = today). Shared by
+// CreateBill and the invoice importer (import.go).
+func createBillTx(ctx context.Context, tx pgx.Tx, req createBillRequest, userID string, billDate *string) (billResponse, error) {
+	var resp billResponse
+	var supplierID, branchID, grnStatus string
+	var subtotal, freight, otherCharges float64
+	if err := tx.QueryRow(ctx, `
+		SELECT supplier_id, branch_id, status, subtotal, freight_amount, other_charges
+		FROM goods_receipt_notes WHERE id = $1`, req.GRNID,
+	).Scan(&supplierID, &branchID, &grnStatus, &subtotal, &freight, &otherCharges); err != nil {
+		return billResponse{}, err
+	}
+	if grnStatus != "completed" {
+		return billResponse{}, errGRNNotCompleted
+	}
+
+	billNumber := fmt.Sprintf("BILL-%d", time.Now().UnixNano())
+	grandTotal := math.Round((subtotal+freight+otherCharges+req.TaxTotal+req.RoundOff)*100) / 100
+
+	var dueDate *string
+	if req.DueDate != "" {
+		dueDate = &req.DueDate
+	}
+
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO purchase_bills (id, merchant_id, branch_id, supplier_id, grn_id, bill_number, supplier_invoice_number,
+		                             due_date, subtotal, tax_total, freight_amount, other_charges, grand_total, bill_date)
+		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+		        COALESCE($12::date, CURRENT_DATE))
+		RETURNING id, bill_number, COALESCE(supplier_invoice_number,''), supplier_id, grn_id,
+		          subtotal::text, tax_total::text, freight_amount::text, other_charges::text, grand_total::text, amount_paid::text, status`,
+		branchID, supplierID, req.GRNID, billNumber, req.SupplierInvoiceNumber, dueDate,
+		subtotal, req.TaxTotal, freight, otherCharges, grandTotal, billDate,
+	).Scan(&resp.BillID, &resp.BillNumber, &resp.SupplierInvoiceNumber, &resp.SupplierID, &resp.GRNID,
+		&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status); err != nil {
+		return billResponse{}, err
+	}
+
+	// Liability recognized at billing, not at GRN receipt — a GRN is a
+	// physical event with no financial obligation yet; the bill is what
+	// creates the payable. Landed cost (subtotal+freight+other_charges)
+	// capitalizes into Inventory Asset, matching the same landed-cost
+	// figure GRN completion already used for WAC.
+	var lines []accounting.JournalLine
+	if landedCost := subtotal + freight + otherCharges; landedCost > 0 {
+		lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountInventory, Debit: landedCost})
+	}
+	if req.TaxTotal > 0 {
+		lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountGSTInput, Debit: req.TaxTotal})
+	}
+	// The payable is the printed total; whatever rounding separates it
+	// from cost + tax lands in Round Off.
+	if diff := math.Round((grandTotal-(subtotal+freight+otherCharges+req.TaxTotal))*100) / 100; diff > 0 {
+		lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Debit: diff})
+	} else if diff < 0 {
+		lines = append(lines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Credit: -diff})
+	}
+	lines = append(lines, accounting.JournalLine{
+		AccountCode: accounting.AccountPayable, Credit: grandTotal,
+		PartyType: "supplier", PartyID: supplierID,
+	})
+	desc := "Purchase bill " + billNumber
+	if req.SupplierInvoiceNumber != "" {
+		desc += " (supplier invoice " + req.SupplierInvoiceNumber + ")"
+	}
+	_, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "purchase_bill", resp.BillID, desc, userID, dateOrToday(billDate), lines)
+	return resp, err
 }
 
 // ---------------------------------------------------------------------

@@ -10,6 +10,7 @@ import '../ui/approval_pin_pad.dart';
 import '../ui/format.dart';
 import '../ui/open_price_dialog.dart';
 import '../ui/theme.dart';
+import 'attendance_screen.dart';
 import 'held_orders_screen.dart';
 import 'orders_screen.dart';
 import 'printer_settings_screen.dart';
@@ -201,7 +202,7 @@ class _PosScreenState extends State<PosScreen> {
     if (result == null) return _refocusScan();
     final ok = await _withBusy(() => result.existing != null
         ? session.attachCustomer(customerId: result.existing!.customerId, name: result.existing!.name)
-        : session.attachCustomer(name: result.walkInName, phone: result.walkInPhone));
+        : session.attachCustomer(name: result.walkInName, phone: result.walkInPhone, email: result.walkInEmail));
     if (ok != true && session.lastError != null) _snack(session.lastError!);
     _refocusScan();
   }
@@ -362,6 +363,9 @@ class _PosScreenState extends State<PosScreen> {
         _refocusScan();
       case _MenuAction.syncNow:
         await _sync();
+      case _MenuAction.attendance:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const AttendanceScreen())));
+        _refocusScan();
       case _MenuAction.syncQueue:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const SyncQueueScreen())));
         _refocusScan();

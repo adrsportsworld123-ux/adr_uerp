@@ -16,6 +16,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/subscriptions"
 )
 
@@ -289,10 +290,7 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		if !t.Mine {
 			return errNotOwner
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM report_templates WHERE id = $1`, t.ID); err != nil {
-			return err
-		}
-		return audit.Log(ctx, tx, audit.Entry{EntityType: "report_templates", EntityID: t.ID, Action: "delete", PerformedBy: claims.UserID, Before: t})
+		return softdelete.Delete(ctx, tx, "report_templates", t.ID, claims.UserID, "")
 	})
 	if errors.Is(err, errNotOwner) {
 		httpx.Error(w, http.StatusForbidden, "NOT_OWNER", "only the person who made a template can delete it")

@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/data/page-header";
+import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 import { StatusChip } from "@/components/data/status-chip";
 
 const DISCOUNT_LABEL: Record<string, string> = { manual: "Manual", coupon: "Coupon", promotion: "Promotion", loyalty: "Loyalty points" };
@@ -103,6 +104,13 @@ export default function SaleDetailPage() {
         }
         actions={
           <>
+            {sale.status !== "cart" && sale.status !== "held" && (
+              <>
+                <DownloadPdfButton path={`/api/v1/sales/orders/${sale.order_id}/receipt/pdf`} label="Receipt PDF" size="default" />
+                <DownloadPdfButton path={`/api/v1/sales/orders/${sale.order_id}/receipt/pdf?format=thermal`} label="80 mm" size="default" />
+                <PrintPdfButton path={`/api/v1/sales/orders/${sale.order_id}/receipt/pdf`} />
+              </>
+            )}
             <Button variant="outline" disabled={!canReturn} onClick={() => setReturning(true)}>
               <RotateCcw /> Return / refund
             </Button>

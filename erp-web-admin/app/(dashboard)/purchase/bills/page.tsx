@@ -7,6 +7,7 @@ import { BillSummary } from "@/lib/types";
 import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { DownloadPdfButton } from "@/components/data/document-actions";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
   unpaid: "outline",
@@ -57,10 +58,11 @@ export default function BillsListPage() {
                 <TableCell>
                   <Badge variant={STATUS_VARIANT[b.status] ?? "outline"}>{b.status}</Badge>
                 </TableCell>
-                <TableCell>
+                <TableCell className="flex items-center gap-2">
                   <Link href={`/purchase/bills/${b.bill_id}`} className="text-sm underline">
                     View
                   </Link>
+                  <DownloadPdfButton path={`/api/v1/purchase/bills/${b.bill_id}/pdf`} label={`Download ${b.bill_number}`} size="icon-sm" />
                 </TableCell>
               </TableRow>
             ))}

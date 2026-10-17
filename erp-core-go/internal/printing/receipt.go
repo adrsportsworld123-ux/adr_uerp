@@ -26,6 +26,12 @@ type ReceiptData struct {
 	TaxTotal      string
 	GrandTotal    string
 	Payments      []ReceiptPayment
+	// The branch's letterhead (branch_print_settings, internal/documents):
+	// lines under the branch name, and the closing lines. Footer nil keeps
+	// the original "Thank you, visit again!"; an empty, non-nil Footer
+	// prints none.
+	Header []string
+	Footer []string
 }
 
 const ruleLine = "--------------------------------"
@@ -40,8 +46,11 @@ func BuildReceipt(d ReceiptData) []byte {
 	b := New().
 		AlignCenter().
 		Bold(true).DoubleSize(true).Line(d.MerchantName).DoubleSize(false).Bold(false).
-		Line(d.BranchName).
-		Line("Order " + d.OrderNumber).
+		Line(d.BranchName)
+	for _, l := range d.Header {
+		b.Line(l)
+	}
+	b.Line("Order " + d.OrderNumber).
 		Line("Cashier: " + d.CashierName).
 		AlignLeft().
 		Line(ruleLine)
@@ -64,6 +73,14 @@ func BuildReceipt(d ReceiptData) []byte {
 		b.Line(fmt.Sprintf("%s: %s", p.Method, p.Amount))
 	}
 
-	b.FeedLines(1).AlignCenter().Line("Thank you, visit again!").FeedLines(3).Cut()
+	footer := d.Footer
+	if footer == nil {
+		footer = []string{"Thank you, visit again!"}
+	}
+	b.FeedLines(1).AlignCenter()
+	for _, l := range footer {
+		b.Line(l)
+	}
+	b.FeedLines(3).Cut()
 	return b.Bytes()
 }

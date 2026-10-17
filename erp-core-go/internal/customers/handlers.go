@@ -108,8 +108,10 @@ const customerColumns = `
 // walk-in creation POST /sales/orders/{id}/customer still does inline —
 // that path is unchanged and stays deliberately minimal for a quick
 // at-register walk-in add). This is the FRD's actual registration flow:
-// Name/Phone/Email are mandatory, and a B2B customer additionally
-// requires a GSTIN ("B2B: Mandatory registration, GSTIN required").
+// Name and phone are mandatory; email is optional (many walk-in and
+// counter customers have none) but must look like an address when
+// given. A B2B customer additionally requires a GSTIN ("B2B: Mandatory
+// registration, GSTIN required").
 // ---------------------------------------------------------------------
 
 type createCustomerRequest struct {
@@ -143,8 +145,13 @@ func (h *Handler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "customer_type must be b2c or b2b")
 		return
 	}
-	if req.Name == "" || req.Phone == "" || req.Email == "" {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name, phone, and email are required")
+	req.Name, req.Phone, req.Email = strings.TrimSpace(req.Name), strings.TrimSpace(req.Phone), strings.TrimSpace(req.Email)
+	if req.Name == "" || req.Phone == "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name and phone are required")
+		return
+	}
+	if !ValidEmail(req.Email) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "email is not a valid address")
 		return
 	}
 	if req.CustomerType == "b2b" && req.GSTIN == "" {
@@ -156,7 +163,7 @@ func (h *Handler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			INSERT INTO customers (id, merchant_id, name, phone, email, customer_type, address, date_of_birth, anniversary, company_name, gstin, price_list_id)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, NULLIF($6,'')::date, NULLIF($7,'')::date, $8, $9, NULLIF($10,'')::uuid)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, NULLIF($3,''), $4, $5, NULLIF($6,'')::date, NULLIF($7,'')::date, $8, $9, NULLIF($10,'')::uuid)
 			RETURNING id`,
 			req.Name, req.Phone, req.Email, req.CustomerType, req.Address, req.DateOfBirth, req.Anniversary, req.CompanyName, req.GSTIN, req.PriceListID,
 		).Scan(&customerID)
@@ -371,6 +378,13 @@ func (h *Handler) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "customer_type must be b2c or b2b")
 		return
 	}
+	if req.Email != nil {
+		*req.Email = strings.TrimSpace(*req.Email)
+		if !ValidEmail(*req.Email) {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "email is not a valid address")
+			return
+		}
+	}
 
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var currentType, currentGSTIN string
@@ -393,7 +407,7 @@ func (h *Handler) UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 			UPDATE customers SET
 				name = COALESCE($1, name),
 				phone = COALESCE($2, phone),
-				email = COALESCE($3, email),
+				email = CASE WHEN $3::text IS NULL THEN email ELSE NULLIF($3, '') END,
 				customer_type = COALESCE($4, customer_type),
 				address = COALESCE($5, address),
 				date_of_birth = COALESCE(NULLIF($6,'')::date, date_of_birth),
@@ -452,4 +466,19 @@ func (h *Handler) fetchByID(ctx context.Context, tenantID, customerID string) (c
 		return scanErr
 	})
 	return c, err
+}
+
+// ValidEmail: empty (email is optional) or a plausible single address.
+// Deliverability is the notification provider's problem; this only
+// catches the typos a cashier makes ("ravi.gmail.com", "a@b").
+func ValidEmail(s string) bool {
+	if s == "" {
+		return true
+	}
+	at := strings.LastIndex(s, "@")
+	if at < 1 || at == len(s)-1 || strings.ContainsAny(s, " ,;<>") || strings.Count(s, "@") != 1 {
+		return false
+	}
+	domain := s[at+1:]
+	return strings.Contains(domain, ".") && !strings.HasPrefix(domain, ".") && !strings.HasSuffix(domain, ".")
 }

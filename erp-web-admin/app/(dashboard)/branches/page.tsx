@@ -6,11 +6,12 @@
 // PIN logins and new pairing codes until it's reactivated. Stock, sales
 // and reports are untouched, and it still appears in history and reports.
 import { Suspense, useState } from "react";
-import { Pencil, Power } from "lucide-react";
+import Link from "next/link";
+import { FileText, Pencil, Power } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Branch } from "@/lib/types";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { AlertModal } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -104,6 +105,15 @@ function BranchesView() {
                 <Button variant="ghost" size="icon-sm" aria-label={`Edit ${b.name}`} title="Edit" onClick={() => setEditing(b)}>
                   <Pencil />
                 </Button>
+                <Link
+                  href={`/branches/${b.branch_id}/print-settings`}
+                  className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
+                  aria-label={`Print settings for ${b.name}`}
+                  title="Letterhead & print settings"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <FileText />
+                </Link>
                 <Button
                   variant="ghost"
                   size="icon-sm"

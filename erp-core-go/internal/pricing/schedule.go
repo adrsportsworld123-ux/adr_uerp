@@ -22,6 +22,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/taxcalc"
 )
 
@@ -469,8 +470,7 @@ func (h *Handler) DeleteScheduledChange(w http.ResponseWriter, r *http.Request) 
 		if status == "applied" {
 			return errScheduleApplied
 		}
-		_, err := tx.Exec(ctx, `DELETE FROM scheduled_price_changes WHERE id = $1`, id)
-		return err
+		return softdelete.Delete(ctx, tx, "scheduled_price_changes", id, claims.UserID, "")
 	})
 	switch {
 	case errors.Is(err, errScheduleApplied):

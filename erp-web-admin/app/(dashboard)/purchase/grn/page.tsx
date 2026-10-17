@@ -7,6 +7,7 @@ import { GRNSummary } from "@/lib/types";
 import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { DownloadPdfButton } from "@/components/data/document-actions";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
   draft: "outline",
@@ -55,10 +56,11 @@ export default function GRNListPage() {
                 </TableCell>
                 <TableCell>₹{g.grand_total}</TableCell>
                 <TableCell>{new Date(g.created_at).toLocaleString()}</TableCell>
-                <TableCell>
+                <TableCell className="flex items-center gap-2">
                   <Link href={`/purchase/grn/${g.grn_id}`} className="text-sm underline">
                     View
                   </Link>
+                  <DownloadPdfButton path={`/api/v1/purchase/grn/${g.grn_id}/pdf`} label={`Download ${g.grn_number}`} size="icon-sm" />
                 </TableCell>
               </TableRow>
             ))}

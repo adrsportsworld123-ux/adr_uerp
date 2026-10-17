@@ -142,3 +142,19 @@ func Unrestricted(ctx context.Context, tx pgx.Tx, fn func() error) error {
 	}
 	return ferr
 }
+
+// IncludeDeleted runs fn with soft-deleted rows visible and writable
+// (app.include_deleted, migrations/050), then hides them again. Only for
+// the soft-delete and restore statements themselves and the recycle bin
+// (internal/softdelete) — every other query relies on deleted rows being
+// invisible, the way it relies on another tenant's rows being invisible.
+func IncludeDeleted(ctx context.Context, tx pgx.Tx, fn func() error) error {
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.include_deleted', 'on', true)`); err != nil {
+		return err
+	}
+	ferr := fn()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.include_deleted', 'off', true)`); err != nil && ferr == nil {
+		ferr = err
+	}
+	return ferr
+}

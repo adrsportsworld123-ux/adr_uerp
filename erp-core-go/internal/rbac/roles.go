@@ -24,6 +24,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 )
 
 type Handler struct {
@@ -270,14 +271,11 @@ func (h *Handler) DeleteRole(w http.ResponseWriter, r *http.Request) {
 		if userCount > 0 {
 			return errRoleInUse
 		}
-		ct, err := tx.Exec(ctx, `DELETE FROM roles WHERE id = $1`, id)
-		if err != nil {
-			return err
-		}
-		if ct.RowsAffected() == 0 {
+		err := softdelete.Delete(ctx, tx, "roles", id, claims.UserID, "")
+		if errors.Is(err, pgx.ErrNoRows) {
 			return errRoleNotFound
 		}
-		return nil
+		return err
 	})
 
 	switch {

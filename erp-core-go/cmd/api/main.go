@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"erp-core-go/internal/activity"
 	"erp-core-go/internal/ai/llm"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/config"
@@ -116,9 +117,13 @@ func main() {
 	reportRunner := reportbuilder.NewRunner(database)
 	go reportRunner.Run(ctx, 30*time.Second)
 
+	// Every POS and web-admin action (internal/activity), written off the
+	// request path; drained after the server stops accepting requests.
+	activityLog := activity.NewRecorder(database)
+
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify, einv, llmClient, cfg.HoldDurationMinutes, reportRunner),
+		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify, einv, llmClient, cfg.HoldDurationMinutes, reportRunner, activityLog),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -137,4 +142,5 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	activityLog.Close()
 }

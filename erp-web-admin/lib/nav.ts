@@ -90,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Truck,
     items: [
       { href: "/suppliers", label: "Suppliers", match: ["/suppliers/"] },
+      { href: "/purchase/import", label: "Import Invoice" },
       { href: "/purchase/grn", label: "Goods Receipt (GRN)", match: ["/purchase/grn/"] },
       { href: "/purchase/bills", label: "Purchase Bills", match: ["/purchase/bills/"] },
       { href: "/purchase/returns", label: "Purchase Returns", match: ["/purchase/returns/"] },
@@ -141,6 +142,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/terminals", label: "POS Terminals" },
       { href: "/hr/employees", label: "Employees" },
       { href: "/hr/shifts", label: "Shifts" },
+      { href: "/hr/attendance", label: "Attendance" },
       { href: "/hr/statutory-config", label: "Statutory Config", feature: "payroll" },
       { href: "/payroll", label: "Payroll", feature: "payroll" },
     ],
@@ -155,6 +157,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/rbac/approval-policies", label: "Approval Policies" },
       { href: "/subscription", label: "Subscription & Billing" },
       { href: "/audit-logs", label: "Audit Log" },
+      { href: "/recycle-bin", label: "Recycle Bin" },
     ],
   },
 ];

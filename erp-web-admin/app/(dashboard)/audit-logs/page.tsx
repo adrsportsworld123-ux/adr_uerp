@@ -15,8 +15,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ActivityLog, AuditSettingsPanel } from "./activity";
 
-export default function AuditLogsPage() {
+function RecordChanges() {
   const [entityType, setEntityType] = useState("");
   const [entityId, setEntityId] = useState("");
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
@@ -58,7 +59,7 @@ export default function AuditLogsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Audit Log</h1>
+        <p className="text-sm text-muted-foreground">Every change to a record, before and after. Always on; tamper-evident.</p>
         <Button onClick={verify} disabled={verifying} variant="outline">
           {verifying ? "Verifying..." : "Verify tamper-evident chain"}
         </Button>
@@ -144,6 +145,39 @@ export default function AuditLogsPage() {
           </Table>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+type Tab = "activity" | "changes" | "settings";
+
+export default function AuditLogsPage() {
+  const [tab, setTab] = useState<Tab>("activity");
+  const tabs: [Tab, string][] = [
+    ["activity", "Activity"],
+    ["changes", "Record changes"],
+    ["settings", "Settings"],
+  ];
+  return (
+    <div className="flex flex-col gap-6">
+      <h1 className="text-2xl font-semibold">Audit Log</h1>
+      <div role="tablist" aria-label="Audit log views" className="flex gap-1 border-b">
+        {tabs.map(([id, label]) => (
+          <button
+            key={id}
+            role="tab"
+            type="button"
+            aria-selected={tab === id}
+            onClick={() => setTab(id)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === id ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "activity" && <ActivityLog />}
+      {tab === "changes" && <RecordChanges />}
+      {tab === "settings" && <AuditSettingsPanel />}
     </div>
   );
 }

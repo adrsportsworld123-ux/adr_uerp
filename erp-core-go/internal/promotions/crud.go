@@ -14,6 +14,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/dependencies"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 )
 
 type promotionResponse struct {
@@ -396,8 +397,7 @@ func (h *Handler) deleteIfUnused(w http.ResponseWriter, r *http.Request, table, 
 			blockers = deps
 			return nil
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM `+t+` WHERE id = $1`, locked)
-		return err
+		return softdelete.Delete(ctx, tx, table, locked, claims.UserID, "")
 	})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

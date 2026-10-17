@@ -31,7 +31,7 @@ export default function NewCustomerPage() {
       const customer = await api.post<Customer>("/api/v1/customers", {
         name,
         phone,
-        email,
+        email: email.trim(),
         customer_type: customerType,
         company_name: companyName,
         gstin,
@@ -85,8 +85,20 @@ export default function NewCustomerPage() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email">Email *</Label>
-              <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+              <Label htmlFor="email">
+                Email <span className="font-normal text-muted-foreground">(optional)</span>
+              </Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                aria-describedby="email-help"
+                placeholder="name@example.com"
+              />
+              <p id="email-help" className="text-xs text-muted-foreground">
+                Used for e-receipts and payment reminders. Leave blank if the customer has none.
+              </p>
             </div>
 
             <div className="flex flex-col gap-2">

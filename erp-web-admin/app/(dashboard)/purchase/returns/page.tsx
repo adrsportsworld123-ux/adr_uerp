@@ -6,6 +6,7 @@ import { api } from "@/lib/api-client";
 import { PurchaseReturnSummary } from "@/lib/types";
 import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DownloadPdfButton } from "@/components/data/document-actions";
 
 export default function PurchaseReturnsPage() {
   const [returns, setReturns] = useState<PurchaseReturnSummary[] | null>(null);
@@ -37,6 +38,7 @@ export default function PurchaseReturnsPage() {
               <TableHead>Grand Total</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Created</TableHead>
+              <TableHead></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -47,6 +49,9 @@ export default function PurchaseReturnsPage() {
                 <TableCell>₹{r.grand_total}</TableCell>
                 <TableCell>{r.status}</TableCell>
                 <TableCell>{new Date(r.created_at).toLocaleString()}</TableCell>
+                <TableCell>
+                  <DownloadPdfButton path={`/api/v1/purchase/returns/${r.return_id}/pdf`} label={`Download ${r.return_number}`} size="icon-sm" />
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>

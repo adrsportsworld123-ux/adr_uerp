@@ -118,60 +118,11 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	categoryID := nullableUUID(req.CategoryID)
-	brandID := nullableUUID(req.BrandID)
-	taxSlabID := nullableUUID(req.TaxSlabID)
-	collectionID := nullableUUID(req.CollectionID)
-
 	var resp productResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		// FK checks bypass RLS, so a link must be checked against this
-		// tenant's own rows (products_edit.go's refExists).
-		for _, l := range []struct {
-			id    *string
-			table string
-		}{{categoryID, "categories"}, {brandID, "brands"}, {taxSlabID, "tax_slabs"}, {collectionID, "collections"}} {
-			if l.id != nil {
-				if err := refUsable(ctx, tx, l.table, *l.id); err != nil {
-					return err
-				}
-			}
-		}
-
-		var priceIncludesTax bool
-		if req.PriceIncludesTax != nil {
-			priceIncludesTax = *req.PriceIncludesTax
-		} else if err := tx.QueryRow(ctx, `
-			SELECT COALESCE((SELECT prices_include_tax_default FROM pricing_settings), false)`,
-		).Scan(&priceIncludesTax); err != nil {
-			return err
-		}
-
-		var productID string
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, collection_id, name, short_description, hsn_code, product_type, price_includes_tax)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9)
-			RETURNING id`,
-			categoryID, brandID, taxSlabID, collectionID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType, priceIncludesTax,
-		).Scan(&productID); err != nil {
-			return err
-		}
-
-		variants := make([]variantResponse, 0, len(req.Variants))
-		for _, v := range req.Variants {
-			vr, err := insertVariant(ctx, tx, productID, categoryID, v)
-			if err != nil {
-				return err
-			}
-			variants = append(variants, vr)
-		}
-
-		resp = productResponse{
-			ProductID: productID, Name: req.Name, ShortDescription: req.ShortDescription, HSNCode: req.HSNCode,
-			CategoryID: categoryID, BrandID: brandID, TaxSlabID: taxSlabID, CollectionID: collectionID,
-			ProductType: req.ProductType, Status: "active", PriceIncludesTax: priceIncludesTax, Variants: variants,
-		}
-		return nil
+		var err error
+		resp, err = createProductTx(ctx, tx, req)
+		return err
 	})
 
 	switch {
@@ -196,6 +147,65 @@ func (h *ListHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.JSON(w, http.StatusCreated, resp)
 	}
+}
+
+// createProductTx is CreateProduct's transaction: the links checked
+// against this tenant, the product row and every variant (insertVariant).
+// Shared with CreateSimpleProduct, so a product the purchase importer
+// creates goes through exactly the same checks.
+func createProductTx(ctx context.Context, tx pgx.Tx, req createProductRequest) (productResponse, error) {
+	categoryID := nullableUUID(req.CategoryID)
+	brandID := nullableUUID(req.BrandID)
+	taxSlabID := nullableUUID(req.TaxSlabID)
+	collectionID := nullableUUID(req.CollectionID)
+
+	// FK checks bypass RLS, so a link must be checked against this
+	// tenant's own rows (products_edit.go's refExists).
+	for _, l := range []struct {
+		id    *string
+		table string
+	}{{categoryID, "categories"}, {brandID, "brands"}, {taxSlabID, "tax_slabs"}, {collectionID, "collections"}} {
+		if l.id != nil {
+			if err := refUsable(ctx, tx, l.table, *l.id); err != nil {
+				return productResponse{}, err
+			}
+		}
+	}
+
+	var priceIncludesTax bool
+	if req.PriceIncludesTax != nil {
+		priceIncludesTax = *req.PriceIncludesTax
+	} else if err := tx.QueryRow(ctx, `
+		SELECT COALESCE((SELECT prices_include_tax_default FROM pricing_settings), false)`,
+	).Scan(&priceIncludesTax); err != nil {
+		return productResponse{}, err
+	}
+
+	var productID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, collection_id, name, short_description, hsn_code, product_type, price_includes_tax)
+		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id`,
+		categoryID, brandID, taxSlabID, collectionID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType, priceIncludesTax,
+	).Scan(&productID); err != nil {
+		return productResponse{}, err
+	}
+
+	variants := make([]variantResponse, 0, len(req.Variants))
+	for _, v := range req.Variants {
+		vr, err := insertVariant(ctx, tx, productID, categoryID, v)
+		if err != nil {
+			return productResponse{}, err
+		}
+		variants = append(variants, vr)
+	}
+
+	resp := productResponse{
+		ProductID: productID, Name: req.Name, ShortDescription: req.ShortDescription, HSNCode: req.HSNCode,
+		CategoryID: categoryID, BrandID: brandID, TaxSlabID: taxSlabID, CollectionID: collectionID,
+		ProductType: req.ProductType, Status: "active", PriceIncludesTax: priceIncludesTax, Variants: variants,
+	}
+	return resp, nil
 }
 
 type updateProductRequest struct {

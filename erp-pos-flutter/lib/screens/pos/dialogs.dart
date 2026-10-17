@@ -11,9 +11,13 @@ class _CustomerPickResult {
   final Customer? existing;
   final String? walkInName;
   final String? walkInPhone;
+  final String? walkInEmail;
 
-  _CustomerPickResult.existing(this.existing) : walkInName = null, walkInPhone = null;
-  _CustomerPickResult.walkIn(this.walkInName, this.walkInPhone) : existing = null;
+  _CustomerPickResult.existing(this.existing)
+      : walkInName = null,
+        walkInPhone = null,
+        walkInEmail = null;
+  _CustomerPickResult.walkIn(this.walkInName, this.walkInPhone, this.walkInEmail) : existing = null;
 }
 
 class _CustomerPickerDialog extends StatefulWidget {
@@ -27,6 +31,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
   final _searchController = TextEditingController();
   final _walkInNameController = TextEditingController();
   final _walkInPhoneController = TextEditingController();
+  final _walkInEmailController = TextEditingController();
   List<Customer> _results = [];
   bool _searching = false;
 
@@ -47,11 +52,28 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
     }
   }
 
+  // Same rule as the server (erp-core-go customers.ValidEmail): optional,
+  // but a typo like "ravi.gmail.com" is caught here, not at checkout.
+  String? get _emailError {
+    final e = _walkInEmailController.text.trim();
+    if (e.isEmpty) return null;
+    final at = e.lastIndexOf('@');
+    final ok = at > 0 &&
+        at < e.length - 1 &&
+        '@'.allMatches(e).length == 1 &&
+        !e.contains(' ') &&
+        e.substring(at + 1).contains('.') &&
+        !e.endsWith('.') &&
+        !e.substring(at + 1).startsWith('.');
+    return ok ? null : 'Not a valid email address';
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
     _walkInNameController.dispose();
     _walkInPhoneController.dispose();
+    _walkInEmailController.dispose();
     super.dispose();
   }
 
@@ -120,17 +142,35 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
               decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder(), isDense: true),
               onChanged: (_) => setState(() {}),
             ),
+            const SizedBox(height: 8),
+            TextField(
+              key: const Key('walkin-email'),
+              controller: _walkInEmailController,
+              keyboardType: TextInputType.emailAddress,
+              decoration: InputDecoration(
+                labelText: 'Email (optional)',
+                helperText: 'For e-receipts',
+                border: const OutlineInputBorder(),
+                isDense: true,
+                errorText: _emailError,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
           ],
         ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         FilledButton(
-          onPressed: _walkInNameController.text.trim().isEmpty && _walkInPhoneController.text.trim().isEmpty
+          onPressed: (_walkInNameController.text.trim().isEmpty && _walkInPhoneController.text.trim().isEmpty) || _emailError != null
               ? null
               : () => Navigator.pop(
                     context,
-                    _CustomerPickResult.walkIn(_walkInNameController.text.trim(), _walkInPhoneController.text.trim()),
+                    _CustomerPickResult.walkIn(
+                      _walkInNameController.text.trim(),
+                      _walkInPhoneController.text.trim(),
+                      _walkInEmailController.text.trim().isEmpty ? null : _walkInEmailController.text.trim(),
+                    ),
                   ),
           child: const Text('Add walk-in'),
         ),
@@ -138,7 +178,6 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
     );
   }
 }
-
 
 // ---------------------------------------------------------------------
 // Manual discount — shows the merchant's discount tiers (Phase 15 approval

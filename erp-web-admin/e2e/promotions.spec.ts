@@ -83,7 +83,7 @@ test("promotion/coupon CRUD, permission gate, and a customer's loyalty ledger", 
     const row = page.getByRole("row", { name: new RegExp(promoName) });
     await row.getByRole("button", { name: "Delete" }).click();
     await expect(page.getByText(/Nothing uses this promotion/)).toBeVisible();
-    await page.getByRole("button", { name: "Delete permanently" }).click();
+    await page.getByRole("button", { name: "Move to Recycle Bin" }).click();
     await expect(page.getByText(`Deleted promotion “${promoName}”`)).toBeVisible();
     await expect(page.getByRole("row", { name: new RegExp(promoName) })).toHaveCount(0);
   });
@@ -115,7 +115,7 @@ test("promotion/coupon CRUD, permission gate, and a customer's loyalty ledger", 
     await row.getByRole("button", { name: "Deactivate" }).click();
     await expect(page.getByText("Coupon deactivated")).toBeVisible();
     await row.getByRole("button", { name: "Delete" }).click();
-    await page.getByRole("button", { name: "Delete permanently" }).click();
+    await page.getByRole("button", { name: "Move to Recycle Bin" }).click();
     await expect(page.getByText(`Deleted coupon “${couponCode}”`)).toBeVisible();
     await expect(page.getByRole("row", { name: new RegExp(couponCode) })).toHaveCount(0);
   });

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 )
@@ -106,8 +107,14 @@ func (h *Handler) RevokeUserRole(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		_, err := tx.Exec(ctx, `DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2`, userID, roleID)
-		return err
+		tag, err := tx.Exec(ctx, `DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2`, userID, roleID)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		// An assignment, not a record, so it is removed (migrations/050);
+		// the trail of who revoked it is kept here.
+		return audit.Log(ctx, tx, audit.Entry{EntityType: "user_roles", EntityID: userID, Action: "delete",
+			PerformedBy: claims.UserID, Before: map[string]string{"user_id": userID, "role_id": roleID}})
 	})
 
 	switch {

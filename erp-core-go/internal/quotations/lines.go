@@ -23,6 +23,7 @@ import (
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/sales"
+	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/taxcalc"
 )
 
@@ -286,7 +287,7 @@ func (h *Handler) DeleteQuotationLine(w http.ResponseWriter, r *http.Request) {
 		if lineCount <= 1 {
 			return errQuotationEmpty
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM quotation_lines WHERE id = $1`, lineID); err != nil {
+		if err := softdelete.Delete(ctx, tx, "quotation_lines", lineID, claims.UserID, ""); err != nil {
 			return err
 		}
 		if err := recalcQuotationTotals(ctx, tx, quotationID); err != nil {

@@ -14,7 +14,9 @@ dependencies:
   shared_preferences: ^2.3.2 # persists a per-device fingerprint for PIN-login device binding
   sqflite: ^2.3.3+1 # local offline-sync store: pending sales, cached catalog/stock
   path: ^1.9.0 # joins the sqflite database file path
+  path_provider: ^2.1.4 # the Downloads folder a receipt PDF is saved into
   sqflite_common_ffi: ^2.3.4+4 # SQLite via FFI on Windows/Linux tills (sqflite has no plugin there) and in tests
+  geolocator: ^14.1.1 # device location for attendance check-in (erp-core-go internal/hr/attendance.go)
 
 dev_dependencies:
   flutter_test:

@@ -1,0 +1,213 @@
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:provider/provider.dart';
+
+import '../api/api_client.dart';
+import '../state/session.dart';
+
+/// Where the device is, for an attendance punch — or why it can't say.
+class DeviceFix {
+  final double? latitude;
+  final double? longitude;
+  final double? accuracyM;
+  final String? problem;
+
+  const DeviceFix.found(double this.latitude, double this.longitude, double this.accuracyM) : problem = null;
+  const DeviceFix.missing(String this.problem)
+      : latitude = null,
+        longitude = null,
+        accuracyM = null;
+
+  bool get ok => latitude != null;
+}
+
+/// Asks the platform for one location fix. Never throws: a till without
+/// GPS (or a platform geolocator doesn't support, such as Linux) answers
+/// with the reason, and the paired terminal stands in as the evidence.
+Future<DeviceFix> currentFix() async {
+  try {
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      return const DeviceFix.missing('Location is turned off on this device.');
+    }
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      return const DeviceFix.missing('This app is not allowed to use the location.');
+    }
+    final p = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 15)),
+    );
+    return DeviceFix.found(p.latitude, p.longitude, p.accuracy);
+  } catch (_) {
+    return const DeviceFix.missing('This terminal has no location service.');
+  }
+}
+
+/// Check-in / check-out for the signed-in employee (menu → Attendance).
+class AttendanceScreen extends StatefulWidget {
+  /// Injectable for tests; defaults to the device's location.
+  final Future<DeviceFix> Function() locate;
+
+  const AttendanceScreen({super.key, this.locate = currentFix});
+
+  @override
+  State<AttendanceScreen> createState() => _AttendanceScreenState();
+}
+
+class _AttendanceScreenState extends State<AttendanceScreen> {
+  MyAttendance? _me;
+  DeviceFix? _fix;
+  bool _locating = false;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final api = context.read<AppSession>().api;
+    setState(() => _error = null);
+    try {
+      final me = await api.myAttendance();
+      if (!mounted) return;
+      setState(() => _me = me);
+      if (!me.doneToday) _locate();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Attendance needs a connection to the server.');
+    }
+  }
+
+  Future<void> _locate() async {
+    setState(() => _locating = true);
+    final f = await widget.locate();
+    if (mounted) {
+      setState(() {
+        _fix = f;
+        _locating = false;
+      });
+    }
+  }
+
+  String _time(DateTime? t) => t == null ? '—' : TimeOfDay.fromDateTime(t).format(context);
+
+  Future<void> _punch() async {
+    final me = _me!;
+    final checkIn = !me.checkedIn;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final rec = await context.read<AppSession>().api.punch(
+            checkIn: checkIn,
+            latitude: _fix?.latitude,
+            longitude: _fix?.longitude,
+            accuracyM: _fix?.accuracyM,
+          );
+      if (!mounted) return;
+      final fence = checkIn ? rec.clockInGeofence : rec.clockOutGeofence;
+      final where = fence == 'outside' ? ' — outside the branch area, flagged for your manager' : '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Checked ${checkIn ? 'in' : 'out'} at ${_time(checkIn ? rec.clockIn : rec.clockOut)}$where')),
+      );
+      Navigator.of(context).pop();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not reach the server. Try again when back online.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final me = _me;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Attendance')),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: me == null
+                ? (_error != null
+                    ? Column(mainAxisSize: MainAxisSize.min, children: [
+                        Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+                        const SizedBox(height: 12),
+                        OutlinedButton(onPressed: _load, child: const Text('Try again')),
+                      ])
+                    : const CircularProgressIndicator())
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        me.doneToday
+                            ? 'Done for today'
+                            : me.checkedIn
+                                ? 'Checked in since ${_time(me.open!.clockIn)}'
+                                : 'Not checked in yet',
+                        key: const Key('attendance-status'),
+                        style: theme.textTheme.headlineSmall,
+                        textAlign: TextAlign.center,
+                      ),
+                      if (me.doneToday)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            '${_time(me.today!.clockIn)} – ${_time(me.today!.clockOut)} · ${me.today!.hoursWorked ?? '0'} h',
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      const SizedBox(height: 24),
+                      if (!me.doneToday) ...[
+                        ListTile(
+                          leading: _locating
+                              ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                              : Icon(_fix?.ok == true ? Icons.location_on : Icons.location_off_outlined),
+                          title: Text(_locating
+                              ? 'Getting the location…'
+                              : _fix?.ok == true
+                                  ? 'Location found (±${_fix!.accuracyM!.round()} m)'
+                                  : (_fix?.problem ?? '')),
+                          subtitle: Text(me.geofenceBranch != null
+                              ? 'Checked against ${me.geofenceBranch}\'s ${me.geofenceRadiusM} m area. This terminal and its network address are recorded too.'
+                              : 'This terminal and its network address are recorded with the time.'),
+                          trailing: !_locating && _fix?.ok != true ? TextButton(onPressed: _locate, child: const Text('Retry')) : null,
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                          key: const Key('attendance-punch'),
+                          onPressed: _busy || _locating || !me.allowPos ? null : _punch,
+                          icon: _busy
+                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                              : Icon(me.checkedIn ? Icons.logout : Icons.login),
+                          label: Text(me.checkedIn ? 'Check out' : 'Check in'),
+                          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+                        ),
+                        if (!me.allowPos)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text('Your company has turned off checking in from the POS.', textAlign: TextAlign.center),
+                          ),
+                      ],
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(_error!, style: TextStyle(color: theme.colorScheme.error), textAlign: TextAlign.center),
+                        ),
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}

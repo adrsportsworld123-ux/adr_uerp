@@ -24,8 +24,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 )
 
 // ---------------------------------------------------------------------
@@ -205,14 +207,11 @@ func (h *TaxonomyHandler) DeleteAttributeValue(w http.ResponseWriter, r *http.Re
 	valueID := chi.URLParam(r, "value_id")
 
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM attribute_values WHERE id = $1 AND attribute_id = $2`, valueID, attributeID)
-		if err != nil {
+		var id string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM attribute_values WHERE id::text = $1 AND attribute_id::text = $2`, valueID, attributeID).Scan(&id); err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return pgx.ErrNoRows
-		}
-		return nil
+		return softdelete.Delete(ctx, tx, "attribute_values", id, claims.UserID, "")
 	})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -373,7 +372,8 @@ func (h *TaxonomyHandler) DeleteCategoryAttribute(w http.ResponseWriter, r *http
 		if tag.RowsAffected() == 0 {
 			return pgx.ErrNoRows
 		}
-		return nil
+		return audit.Log(ctx, tx, audit.Entry{EntityType: "category_attributes", EntityID: categoryID, Action: "delete",
+			PerformedBy: claims.UserID, Before: map[string]string{"category_id": categoryID, "attribute_id": attributeID}})
 	})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

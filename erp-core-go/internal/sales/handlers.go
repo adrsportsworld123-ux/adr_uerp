@@ -25,6 +25,7 @@ import (
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/pricing"
+	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/taxcalc"
 )
 
@@ -557,7 +558,9 @@ func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM sales_order_lines WHERE id = $1 AND sales_order_id = $2`, lineID, orderID); err != nil {
+		// Kept, not removed: a line taken off a cart is exactly what a
+		// shrinkage review needs to see (migrations/050).
+		if err := softdelete.Delete(ctx, tx, "sales_order_lines", lineID, claims.UserID, "removed from cart"); err != nil {
 			return err
 		}
 

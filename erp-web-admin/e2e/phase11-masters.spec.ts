@@ -76,7 +76,7 @@ test("Phase 11: brand lifecycle — create, duplicate refused, delete blocked by
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("can't be deleted");
     await expect(dialog.getByText("Products")).toBeVisible();
-    await expect(dialog.getByRole("button", { name: "Delete permanently" })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Move to Recycle Bin" })).toHaveCount(0);
     await dialog.getByRole("button", { name: "Deactivate instead" }).click();
     await expect(page.getByText(`Deactivated “${brand}”`)).toBeVisible();
   });
@@ -99,7 +99,7 @@ test("Phase 11: an unused brand deletes cleanly", async ({ page }) => {
   await page.getByRole("button", { name: `Delete ${brand}` }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText("Nothing uses this brand");
-  await dialog.getByRole("button", { name: "Delete permanently" }).click();
+  await dialog.getByRole("button", { name: "Move to Recycle Bin" }).click();
   await expect(page.getByText(`Deleted brand “${brand}”`)).toBeVisible();
   await expect(page.getByText("Nothing matches these filters")).toBeVisible();
 });

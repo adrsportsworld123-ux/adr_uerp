@@ -21,6 +21,7 @@ import (
 
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/taxcalc"
 )
 
@@ -292,14 +293,7 @@ func (h *Handler) DeletePriceRule(w http.ResponseWriter, r *http.Request) {
 		if used {
 			return errPriceRuleInUse
 		}
-		tag, err := tx.Exec(ctx, `DELETE FROM price_rules WHERE id = $1`, id)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return pgx.ErrNoRows
-		}
-		return nil
+		return softdelete.Delete(ctx, tx, "price_rules", id, claims.UserID, "")
 	})
 	switch {
 	case errors.Is(err, errPriceRuleInUse):

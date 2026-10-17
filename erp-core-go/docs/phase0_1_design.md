@@ -209,7 +209,16 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `SCHEDULED_CHANGE_APPLIED` | 409 | `DELETE /pricing/scheduled-changes/{id}` | An applied change is the variant's price history and can't be deleted (§3.49) |
 | `QUOTATION_NOT_SENT` | 409 | `POST /quotations/{id}/accept`, `.../reject` | Only a `sent` quotation can be accepted or rejected |
 | `QUOTATION_NOT_ACCEPTED` | 409 | `POST /quotations/{id}/convert` | Only an `accepted` quotation can be converted into a real sales order |
+| `INVALID_LOGO` | 400 | `PUT /branches/{id}/print-settings/logo` | Not a PNG/JPEG (sniffed from the bytes), outside 16–2000 px a side, or over 512 KB once re-encoded (§3.51) |
+| `LOGO_TOO_LARGE` | 413 | `PUT /branches/{id}/print-settings/logo` | Upload over 2 MB (§3.51) |
 | `INTERNAL_ERROR` | 500 | any handler | Unexpected failure (DB error, etc.) — message is intentionally generic; check server logs for detail |
+| `RESTORE_CONFLICT` | 409 | `POST /recycle-bin/{entity}/{id}/restore` | A live record now holds the deleted one's name or code; rename one first |
+| `OUTSIDE_GEOFENCE` | 409 | `POST /hr/attendance/clock-in`, `clock-out` | The merchant blocks punches outside the branch area; `details` has `distance_m` and `radius_m` |
+| `LOCATION_REQUIRED` | 400 | `POST /hr/attendance/clock-in`, `clock-out` | The merchant requires a location (or blocks outside punches) and the punch had none and came from no paired terminal |
+| `PUNCH_SOURCE_DISABLED` | 403 | `POST /hr/attendance/clock-in`, `clock-out` | The merchant turned off punching from this client (POS or web) |
+| `ATTENDANCE_EXISTS` | 409 | `POST /hr/attendance/mark` | The employee already has a row that day; correct it with `PATCH /hr/attendance/{id}` |
+| `IMPORT_INVALID` | 400 | `POST /purchase/imports/commit` | The invoice has errors (unknown category, missing MRP, totals off by ₹1 or more, already imported…); `details.preview` is the full preview with each error on its line |
+| `IMPORT_CONFLICT` | 409 | `POST /purchase/imports/commit` | Creating a product collided (a barcode or SKU taken since the preview); nothing was saved |
 
 ### 3.1 Auth
 
@@ -1804,6 +1813,82 @@ The POS product grid shows a second chip row with the chosen category's subcateg
 The OpenSearch `terms` query was checked read-only on the live index (Cricket: 0 hits before, 124 after). The browser specs `fixed-discount.spec.ts` (new) and `phase14-admin-sales.spec.ts` pass. The POS dialog widget test now covers the amount mode.
 
 ---
+
+### 3.51 Downloadable documents and branch letterheads (`internal/documents`, `migrations/049_branch_print_settings.sql`, 2026-10-17)
+
+**What.** Sale receipts, GRNs, purchase bills and purchase returns download as PDF, each under its branch's letterhead: logo, display name, address, phone/email, GSTIN, header lines, and a footer. There are two footers: `receipt_footer` for customer-facing sale receipts (NULL = "Thank you, visit again!", '' = none) and `purchase_footer` for supplier-facing purchase documents.
+
+**Endpoints.**
+- `GET /sales/orders/{id}/receipt/pdf?format=a4|thermal`: without `format`, the branch's `receipt_format`. `thermal` is an 80 mm page exactly as long as its content.
+- `GET /purchase/grn/{id}/pdf`, `GET /purchase/bills/{id}/pdf` (the GRN's lines, payments, a round-off derived as grand total minus its parts), `GET /purchase/returns/{id}/pdf`: A4.
+- `GET|PUT /branches/{id}/print-settings`. PUT replaces the whole letterhead except the logo.
+- `GET|PUT|DELETE /branches/{id}/print-settings/logo`. PUT takes the raw image as the body.
+- `GET /branches/{id}/print-settings/preview?kind=receipt|purchase&format=`: a sample document under the saved letterhead.
+- Writes need `branch.print_settings` (Merchant Admin, Branch Manager). Reads are open.
+
+**Design.**
+- **Rendered server-side** with `go-pdf/fpdf` and an embedded Geist font (it has the ₹ glyph). The web admin and the POS get the same bytes, as with `GET .../receipt/print`.
+- **Domain packages build documents from their own loaders.** Sales reuses `loadReceiptDataTx`; `internal/documents` lays the page out and never queries a sale or a GRN itself.
+- **Branch scope.** `branch_print_settings` carries the restrictive branch-scope policy, so a Branch Manager configures only their own branch and gets 404 for another. Document PDFs inherit the scope of the row they render.
+- **Logo storage.** The logo is stored in the row (BYTEA, ≤ 512 KB). It is decoded and re-encoded on upload, which strips metadata and anything the PDF writer can't embed. A logo that later fails to decode is dropped from the page, so the document itself never fails.
+- **Thermal slip.** The ESC/POS print (`printing.BuildReceipt`) now carries the letterhead name, header and receipt footer as text. The raster logo stays PDF-only because logo printing differs per printer model.
+- **Audit.** Settings and logo changes are written to `audit_logs`.
+
+**Not done.**
+- Sales returns (credit notes) have no PDF yet.
+- No email/WhatsApp attachment of the PDF (`receipt/notify` still sends text).
+- A sale still queued offline on the POS has no PDF until it syncs.
+- The A4 receipt shows tax per line, not an HSN-wise GST breakup.
+
+### 3.52 Soft delete, the activity log, attendance with location (`migrations/050`–`052`, 2026-10-17)
+
+**Root cause of the "could not build document" PDF error.** Migration 049 had never been applied to the host database the compose `api` connects to (only to the compose database), so `LoadLetterhead`'s join on `branch_print_settings` failed for every sale receipt, GRN, bill and return PDF. Migrations 036–048 had been applied there by hand without being recorded in `ops.schema_migrations`; they are now recorded, and 049–052 applied through `scripts/local-db.ps1`. The two PDF handlers now log the underlying error, so a repeat shows up in `docker logs`.
+
+**Customers.** Email is optional on `POST /customers`, the walk-in path of `POST /sales/orders/{id}/customer`, and `PATCH /customers/{id}` (`""` clears it). When an email is given it must look like an address (`customers.ValidEmail`). An empty email is stored as NULL, and notifications already skip a blank recipient.
+
+**Soft delete (`internal/softdelete`, migration 050).** Every user-facing DELETE now stamps `deleted_at`/`deleted_by` and writes an `audit_logs` delete entry with the row as it was. This covers categories, brands, tax slabs, attribute values, price lists and their items, price rules, scheduled price changes, promotions, coupons, roles, report templates, draft quotations and their lines, draft journal vouchers, and cart lines. A RESTRICTIVE RLS policy hides deleted rows, so the existing queries needed no changes. Only `db.IncludeDeleted` (`app.include_deleted = 'on'`) sees or writes them. Name and code uniques became partial (live rows only); document numbers stay fully unique. `GET /recycle-bin` and `POST /recycle-bin/{entity}/{id}/restore` (`recycle_bin.manage`) list and restore masters and drafts; restoring a price list restores the items deleted with it. Assignments are still removed physically, but are now audited: user↔role, category↔attribute, plus the internal rewrites listed in the migration header.
+
+**Activity log (`internal/activity`, migration 051).** One `activity_logs` row per POS or web-admin request, written off the request path; when the queue is full the request writes its own row, so nothing is dropped. Each row records the user, client (`X-Client`), terminal (`X-Terminal-Id`), IP, route, status (403s included), duration, and the request body with credentials masked. Logins are covered through `internal/reqmeta`. Settings are per merchant in `audit_settings`: on/off, reads, bodies, and excluded modules (`audit` can't be excluded). `GET/PUT /audit/settings`, `GET /audit/activity`, `GET /audit/modules`. Changing the settings is written to `audit_logs`. The record-change trail (`audit_logs`) stays always on, as the Companies (Accounts) Rules require. CORS now allows `X-Client` and `X-Terminal-Id`; any new client header must be added there too, or every browser request fails at preflight.
+
+**Attendance (migration 052).** Check-in and check-out take an optional `{latitude, longitude, accuracy_m}`. The server records the IP, user agent, client and the merchant's own terminal, and classifies the punch against the branch's geofence (`branch_geofences`), allowing for the fix's accuracy. `attendance_settings` controls punch sources, whether a location is required, and the geofence mode (`off`/`flag`/`block`). A paired POS terminal counts as a location. Work dates and late/early minutes use the branch timezone. Check-out closes the open punch from the last 20 hours, so a shift past midnight can still clock out. New endpoints: `GET /hr/attendance/me`, plus (all `hr.manage`) `GET /hr/attendance/register`, `POST /hr/attendance/mark`, `GET/PUT /hr/attendance/settings`, `GET /hr/attendance/geofences` and `PUT /hr/attendance/geofences/{branch_id}`. `PATCH /hr/attendance/{id}` now also corrects times, and requires a valid status. Corrections and marks stamp who, when and why, and go to `audit_logs`.
+
+**Not done.**
+- No retention or purge for `activity_logs` (same reasoning as `audit_logs`). It is unpartitioned; partition it once volume warrants.
+- Offline POS sales are logged when they sync (`/sync/push`), not when they were rung up.
+- Geolocation on Linux tills isn't available through geolocator; those punches rely on the terminal.
+
+### 3.53 Purchase invoice import from a CSV template (`internal/purchase/import.go`, 2026-10-17)
+
+**Why.** Supplier invoices arrive as PDFs, and the first seven were booked by a one-off script that wasn't kept (§3.48). This is the repeatable path: the invoice's lines go into a CSV template, the screen previews what will happen, and one commit books it.
+
+**Endpoints:** `GET /purchase/imports/template[?sample=1]`, `POST /purchase/imports/preview`, `POST /purchase/imports/commit`. The body is `{supplier_id, branch_id, invoice_number, invoice_date, due_date?, freight_amount?, other_charges?, invoice_total?, csv, matches?}`. Web admin: Purchasing › Import Invoice.
+
+**Template columns:**
+- Always required: `item_name`, `quantity`, `unit_cost` (the rate before GST).
+- `gst_rate` is the supplier's GST on the line.
+- `line_total` is the printed line total, cross-checked against quantity × rate + GST.
+- Matching keys: `sku`, `barcode`.
+- For a new product: `mrp` and `sale_gst_rate` (required); `selling_price` (defaults to the MRP); `hsn_code`, `category`, `brand`.
+- `batch_no` and `expiry_date`: required only for batch-tracked products.
+- Common supplier headings are accepted as aliases (Items, Qty., Rate, GST %), as are values like "36 PCS" and "₹ 1,100".
+
+**Matching.** In order: the user's choice (`matches[row]`: a variant id, or `"new"`), then barcode, then SKU, then the exact name (case and spacing ignored). A similar name is only offered as a suggestion, never applied: MERCURY + GREEN WOT (MRP ₹125) is not MERCURY + GREEN (MRP ₹85). A matched line adds to that product's stock and reports an MRP that differs from the system's.
+
+**New products** go through catalog's own create path (`catalog.CreateSimpleProduct`): SKU = the normalised item name, as the existing catalogue does, and a generated barcode when the line has none. They are indexed in product search after commit. The category must already exist (a leaf name, or `Parent > Child`); a missing brand is created. A sale GST rate is required, because a product with no tax slab would be billed tax-free. Creating products needs `catalog.manage`.
+
+**Commit** re-resolves everything server-side and books it in one transaction:
+- brands and products;
+- a GRN completed on the invoice date (stock in, Weighted Average Cost);
+- the bill, with the invoice's GST, date and round-off.
+
+`CompleteGRN` and `CreateBill` now share their cores (`completeGRNTx`, `createBillTx`) with it, so their behaviour is unchanged. The lines must reconcile with `invoice_total` to within ₹1; the difference becomes round-off. A supplier invoice number can be imported once.
+
+**Verified** on a copy of the live database with SPORTS COM invoice SC/SL/26-27/4900 (`PurchaseInvoices/8.csv`):
+- 28 lines: 3 restocked, 25 new products, 11 new brands.
+- Taxable ₹26,804.41 + GST ₹98.59 = ₹26,903.00, matching the print to the paisa.
+- Ledger: Dr Inventory / Dr GST Input / Cr Payable, dated 13 Oct.
+- A second import of the same invoice is refused.
+- The screen was driven in Chrome against the same copy.
 
 ## 4. What Phase 0 concretely delivers against this design
 

@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../api/api_client.dart';
 import '../local/offline_store.dart';
+import '../printing/document_saver.dart' as doc_saver;
 import '../printing/printer_service.dart';
 import 'device_id.dart';
 
@@ -53,6 +54,7 @@ class AppSession extends ChangeNotifier {
   }) {
     api.canRefresh = () => !_isIdle;
     api.onSessionExpired = _endSession;
+    api.terminalId = posTerminalId;
   }
 
   // ---------------------------------------------------------------------
@@ -859,6 +861,42 @@ class AppSession extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  /// Where downloaded documents are written — the device's Downloads
+  /// folder (lib/printing/document_saver.dart). Swappable in tests.
+  Future<String> Function(String filename, List<int> bytes) saveDocument = doc_saver.saveDocument;
+
+  /// Downloads the current sale's receipt as a PDF and saves it on the
+  /// device; returns the saved path, or null with [lastError] set. A sale
+  /// still queued offline has no server copy to render yet.
+  Future<String?> downloadReceipt({String? format}) async {
+    if (currentOrder == null || _currentOrderIsLocal) {
+      _lastError = 'The receipt PDF is available once this sale has synced';
+      notifyListeners();
+      return null;
+    }
+    return downloadReceiptFor(currentOrder!.orderId, format: format);
+  }
+
+  /// Any server sale's receipt PDF (Phase 13 history too). [format] 'a4' or
+  /// 'thermal'; null = the branch's default paper.
+  Future<String?> downloadReceiptFor(String orderId, {String? format}) async {
+    _lastError = null;
+    try {
+      final file = await api.receiptPdf(orderId, format: format);
+      return await saveDocument(file.filename, file.bytes);
+    } on ApiException catch (e) {
+      _lastError = e.message;
+    } on SocketException {
+      _lastError = "Can't reach the server — the receipt PDF needs a connection";
+    } on http.ClientException {
+      _lastError = "Can't reach the server — the receipt PDF needs a connection";
+    } catch (e) {
+      _lastError = 'Could not download the receipt: $e';
+    }
+    notifyListeners();
+    return null;
   }
 
   /// Starts a fresh cart, discarding any in-progress (un-checked-out) one.

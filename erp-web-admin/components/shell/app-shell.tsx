@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/lib/permissions";
 import { CommandPalette } from "./command-palette";
+import { AttendanceButton } from "./attendance-button";
 import { PlanLocked, SubscriptionBanner } from "./plan";
 
 const COLLAPSED_KEY = "nav.collapsed";
@@ -220,6 +221,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </>
             ) : null}
           </nav>
+          <AttendanceButton />
           <ThemeSwitch />
           <span className="hidden max-w-48 truncate text-xs text-muted-foreground md:inline" title={roleLabel}>
             {roleLabel}

@@ -11,6 +11,7 @@ import (
 
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/reqmeta"
 )
 
 type PinLoginHandler struct {
@@ -60,6 +61,7 @@ func (h *PinLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not resolve terminal")
 		return
 	}
+	reqmeta.SetActor(ctx, tenantID, "") // the activity log records the attempt under this merchant
 	if status != "active" {
 		httpx.Error(w, http.StatusForbidden, "TERMINAL_UNAVAILABLE", "this terminal is not active")
 		return
@@ -111,6 +113,7 @@ func (h *PinLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "pin login failed")
 		return
 	}
+	reqmeta.SetActor(ctx, tenantID, u.id)
 
 	if u.status != "active" {
 		httpx.Error(w, http.StatusForbidden, "ACCOUNT_INACTIVE", "this account is not active")

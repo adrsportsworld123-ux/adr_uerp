@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"erp-core-go/internal/accounting"
+	"erp-core-go/internal/activity"
 	"erp-core-go/internal/ai"
 	"erp-core-go/internal/ai/llm"
 	"erp-core-go/internal/approvals"
@@ -17,6 +18,7 @@ import (
 	"erp-core-go/internal/customers"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/dependencies"
+	"erp-core-go/internal/documents"
 	"erp-core-go/internal/einvoice"
 	"erp-core-go/internal/gst"
 	"erp-core-go/internal/hr"
@@ -34,12 +36,13 @@ import (
 	"erp-core-go/internal/reports"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/search"
+	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/subscriptions"
 	"erp-core-go/internal/sync"
 	"erp-core-go/internal/terminals"
 )
 
-func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int, reportRunner *reportbuilder.Runner) http.Handler {
+func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int, reportRunner *reportbuilder.Runner, activityLog *activity.Recorder) http.Handler {
 	r := chi.NewRouter()
 	r.Use(CORS)
 	r.Use(middleware.RequestID)
@@ -66,9 +69,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
 	syncH := &sync.Handler{DB: database}
-	pur := &purchase.Handler{DB: database}
+	pur := &purchase.Handler{DB: database, Search: searchClient}
 	acct := &accounting.Handler{DB: database}
 	br := &branches.Handler{DB: database}
+	docs := &documents.Handler{DB: database}
 	srch := &search.Handler{DB: database, Client: searchClient}
 	cust := &customers.Handler{DB: database}
 	promo := &promotions.Handler{DB: database}
@@ -100,8 +104,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 
 	r.Route("/api/v1", func(api chi.Router) {
 		// Unauthenticated
-		api.Post("/auth/login", login.ServeHTTP)
-		api.Post("/auth/pin-login", pinLogin.ServeHTTP)
+		// The activity log records sign-ins too; the handlers report the
+		// merchant and user they resolved (internal/reqmeta).
+		api.With(activityLog.Middleware).Post("/auth/login", login.ServeHTTP)
+		api.With(activityLog.Middleware).Post("/auth/pin-login", pinLogin.ServeHTTP)
 		api.Post("/auth/refresh", refresh.ServeHTTP)
 		api.Post("/auth/forgot-password", passwordReset.ForgotPassword)
 		api.Post("/auth/reset-password", passwordReset.ResetPassword)
@@ -131,6 +137,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		// authn.FromContext(ctx), never from a client-supplied parameter.
 		api.Group(func(protected chi.Router) {
 			protected.Use(authn.RequireAuth(issuer))
+			// Every POS and web-admin action, refusals included — so it
+			// sits before the scope, plan and permission checks below.
+			protected.Use(activityLog.Middleware)
 			// Phase 15: own-branch vs all-branches data scope, enforced by RLS.
 			protected.Use(authn.BranchScopeMiddleware(database))
 			// Phase 16: the merchant's plan: read-only once expired, plan
@@ -253,6 +262,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/sales/orders/{id}/recall", orders.Recall)
 			protected.Get("/sales/orders/{id}/receipt", orders.GetReceipt)
 			protected.Get("/sales/orders/{id}/receipt/print", orders.PrintReceipt)
+			protected.Get("/sales/orders/{id}/receipt/pdf", orders.DownloadReceipt)
 			protected.Post("/sales/orders/{id}/receipt/notify", orders.NotifyReceipt)
 			protected.Post("/sales/orders/{id}/lines", orders.AddLine)
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
@@ -332,14 +342,21 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/purchase/grn/{id}", pur.GetGRN)
 			protected.Post("/purchase/grn/{id}/lines", pur.AddGRNLine)
 			protected.Post("/purchase/grn/{id}/complete", pur.CompleteGRN)
+			protected.Get("/purchase/grn/{id}/pdf", pur.DownloadGRN)
 
+			// Supplier invoice import from the CSV template (import.go).
+			protected.Get("/purchase/imports/template", pur.ImportTemplate)
+			protected.Post("/purchase/imports/preview", pur.PreviewImport)
+			protected.Post("/purchase/imports/commit", pur.CommitImport)
 			protected.Post("/purchase/bills", pur.CreateBill)
 			protected.Get("/purchase/bills", pur.ListBills)
 			protected.Get("/purchase/bills/{id}", pur.GetBill)
 			protected.Post("/purchase/bills/{id}/payments", pur.RecordBillPayment)
+			protected.Get("/purchase/bills/{id}/pdf", pur.DownloadBill)
 
 			protected.Post("/purchase/returns", pur.CreatePurchaseReturn)
 			protected.Get("/purchase/returns", pur.ListPurchaseReturns)
+			protected.Get("/purchase/returns/{id}/pdf", pur.DownloadPurchaseReturn)
 
 			protected.Get("/accounting/accounts", acct.ListAccounts)
 			protected.Post("/accounting/accounts", acct.CreateAccount)
@@ -390,6 +407,17 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(subscriptions.Limit(database, subscriptions.LimitBranches)).Post("/branches", br.CreateBranch)
 			protected.Get("/branches", br.ListBranches)
 			protected.With(subscriptions.Limit(database, subscriptions.LimitBranches)).Patch("/branches/{id}", br.UpdateBranch)
+
+			// Document letterhead (internal/documents, migrations/049):
+			// reads open (the POS and every document render need it),
+			// writes gated.
+			printSettings := authn.RequirePermission(database, "branch.print_settings")
+			protected.Get("/branches/{id}/print-settings", docs.GetSettings)
+			protected.With(printSettings).Put("/branches/{id}/print-settings", docs.UpdateSettings)
+			protected.Get("/branches/{id}/print-settings/logo", docs.GetLogo)
+			protected.With(printSettings).Put("/branches/{id}/print-settings/logo", docs.UploadLogo)
+			protected.With(printSettings).Delete("/branches/{id}/print-settings/logo", docs.DeleteLogo)
+			protected.Get("/branches/{id}/print-settings/preview", docs.Preview)
 
 			protected.Post("/branch-transfers", br.CreateTransfer)
 			protected.Get("/branch-transfers", br.ListTransfers)
@@ -450,6 +478,21 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Get("/audit-logs", auditH.ListLogs)
 			protected.With(authn.RequirePermission(database, "audit.view")).
 				Get("/audit-logs/verify", auditH.VerifyChain)
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/audit/activity", activityLog.ListActivity)
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/audit/modules", activityLog.ListModules)
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/audit/settings", activityLog.GetSettings)
+			protected.With(authn.RequirePermission(database, "audit.configure")).
+				Put("/audit/settings", activityLog.UpdateSettings)
+
+			// Soft-deleted masters and drafts (migrations/050).
+			bin := &softdelete.Handler{DB: database}
+			protected.With(authn.RequirePermission(database, "recycle_bin.manage")).
+				Get("/recycle-bin", bin.List)
+			protected.With(authn.RequirePermission(database, "recycle_bin.manage")).
+				Post("/recycle-bin/{entity}/{id}/restore", bin.RestoreHandler)
 
 			protected.Post("/pricing/calculate", prc.Calculate)
 			// Merchant-wide pricing defaults (migrations/033): currently
@@ -519,6 +562,21 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/hr/shifts", hrH.ListShifts)
 			protected.Post("/hr/attendance/clock-in", hrH.ClockIn)
 			protected.Post("/hr/attendance/clock-out", hrH.ClockOut)
+			// Check-in/out evidence, the day register, rules and geofences
+			// (migrations/052).
+			protected.Get("/hr/attendance/me", hrH.MyAttendance)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Get("/hr/attendance/register", hrH.Register)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/attendance/mark", hrH.MarkAttendance)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Get("/hr/attendance/settings", hrH.GetAttendanceSettings)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Put("/hr/attendance/settings", hrH.UpdateAttendanceSettings)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Get("/hr/attendance/geofences", hrH.ListGeofences)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Put("/hr/attendance/geofences/{branch_id}", hrH.SetGeofence)
 			protected.Get("/hr/attendance", hrH.ListAttendance)
 			protected.With(authn.RequirePermission(database, "hr.manage")).
 				Patch("/hr/attendance/{id}", hrH.CorrectAttendance)

@@ -50,7 +50,7 @@ class _ShiftChip extends StatelessWidget {
   }
 }
 
-enum _MenuAction { heldOrders, salesHistory, productSearch, productLookup, syncNow, syncQueue, printer, signOut }
+enum _MenuAction { attendance, heldOrders, salesHistory, productSearch, productLookup, syncNow, syncQueue, printer, signOut }
 
 class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
   final bool busy;
@@ -140,6 +140,11 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                 icon: const Icon(Icons.more_vert),
                 onSelected: onMenu,
                 itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: _MenuAction.attendance,
+                    enabled: !offline,
+                    child: const ListTile(leading: Icon(Icons.badge_outlined), title: Text('Attendance · check in / out')),
+                  ),
                   PopupMenuItem(
                     value: _MenuAction.heldOrders,
                     enabled: !offline,

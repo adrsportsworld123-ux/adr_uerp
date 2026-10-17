@@ -31,6 +31,7 @@ import (
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/sales"
+	"erp-core-go/internal/softdelete"
 )
 
 type Handler struct {
@@ -324,18 +325,14 @@ func (h *Handler) DeleteQuotation(w http.ResponseWriter, r *http.Request) {
 	quotationID := chi.URLParam(r, "id")
 
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM quotations WHERE id = $1 AND status = 'draft'`, quotationID)
-		if err != nil {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM quotations WHERE id::text = $1 FOR UPDATE`, quotationID).Scan(&status); err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			var exists string
-			if err := tx.QueryRow(ctx, `SELECT id FROM quotations WHERE id = $1`, quotationID).Scan(&exists); err != nil {
-				return err
-			}
+		if status != "draft" {
 			return errQuotationNotDraft
 		}
-		return nil
+		return softdelete.Delete(ctx, tx, "quotations", quotationID, claims.UserID, "")
 	})
 
 	switch {

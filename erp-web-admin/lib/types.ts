@@ -124,6 +124,25 @@ export interface Branch {
   status: string;
 }
 
+// GET/PUT /branches/{id}/print-settings (erp-core-go internal/documents):
+// the letterhead every downloadable document of the branch carries.
+export interface PrintSettings {
+  branch_id: string;
+  display_name: string;
+  address: string;
+  phone: string;
+  email: string;
+  header_text: string;
+  receipt_footer: string | null; // null = the default "Thank you, visit again!"
+  purchase_footer: string;
+  show_logo: boolean;
+  show_gstin: boolean;
+  receipt_format: "a4" | "thermal";
+  has_logo: boolean;
+  logo_updated_at: string | null;
+  updated_at: string | null;
+}
+
 export interface TransferLine {
   line_id: string;
   variant_id: string;
@@ -809,6 +828,116 @@ export interface AuditVerifyResult {
   legacy_rows_skipped: number;
   broken_at_id: number | null;
   broken_reason: string | null;
+}
+
+// Mirrors internal/activity (migrations/051): one row per POS / web-admin request.
+export interface ActivityEntry {
+  id: number;
+  occurred_at: string;
+  user_id: string | null;
+  user_name: string | null;
+  branch_id: string | null;
+  branch_name: string | null;
+  terminal_id: string | null;
+  terminal_name: string | null;
+  client: "pos" | "web" | "api";
+  method: string;
+  route: string;
+  path: string;
+  module: string;
+  entity_id: string | null;
+  status_code: number;
+  duration_ms: number;
+  ip: string | null;
+  user_agent: string | null;
+  request_id: string | null;
+  request_body: unknown;
+}
+
+export interface AuditSettings {
+  activity_log_enabled: boolean;
+  log_read_requests: boolean;
+  capture_request_body: boolean;
+  disabled_modules: string[];
+  updated_at: string | null;
+  updated_by: string | null;
+  entity_audit_trail: "always_on";
+}
+
+// Mirrors internal/softdelete (migrations/050).
+export interface RecycleBinItem {
+  entity: string;
+  id: string;
+  label: string;
+  deleted_at: string;
+  deleted_by: string | null;
+  deleted_by_name: string | null;
+}
+
+// Mirrors internal/hr/attendance.go (migrations/052).
+export interface PunchEvidence {
+  latitude?: number;
+  longitude?: number;
+  accuracy_m?: number;
+  ip?: string;
+  user_agent?: string;
+  source?: "pos" | "web" | "api" | "manual";
+  terminal_id?: string;
+  distance_m?: number;
+  geofence?: "inside" | "outside" | "unknown" | "not_configured";
+}
+
+export interface AttendanceRecord {
+  id: string;
+  user_id: string;
+  work_date: string;
+  clock_in?: string;
+  clock_out?: string;
+  status: "present" | "half_day" | "leave" | "absent";
+  hours_worked?: string;
+  late_minutes?: number;
+  early_departure_minutes?: number;
+  branch_id?: string;
+  branch_name?: string;
+  clock_in_evidence: PunchEvidence;
+  clock_out_evidence: PunchEvidence;
+  corrected_by?: string;
+  corrected_at?: string;
+  correction_reason?: string;
+}
+
+export interface AttendanceSettings {
+  require_location: boolean;
+  geofence_mode: "off" | "flag" | "block";
+  allow_web: boolean;
+  allow_pos: boolean;
+  updated_at: string | null;
+}
+
+export interface Geofence {
+  branch_id: string;
+  branch_name: string;
+  latitude: number;
+  longitude: number;
+  radius_m: number;
+  enabled: boolean;
+  updated_at: string;
+}
+
+export interface MyAttendance {
+  open: AttendanceRecord | null;
+  today: AttendanceRecord | null;
+  settings: AttendanceSettings;
+  geofence: Geofence | null;
+}
+
+export interface AttendanceRegisterRow {
+  user_id: string;
+  name: string;
+  employee_code: string | null;
+  designation: string | null;
+  home_branch_id: string | null;
+  attendance: AttendanceRecord | null;
 }
 
 // Mirrors internal/einvoice.

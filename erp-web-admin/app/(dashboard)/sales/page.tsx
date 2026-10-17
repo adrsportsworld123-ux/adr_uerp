@@ -19,6 +19,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Column, DataTable } from "@/components/data/data-table";
 import { PageHeader } from "@/components/data/page-header";
 import { StatusChip } from "@/components/data/status-chip";
+import { DownloadPdfButton } from "@/components/data/document-actions";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
 import { useLiveRefresh } from "@/components/data/use-live-refresh";
@@ -210,6 +211,11 @@ function SalesView() {
         onClearFilters={() => update({ q: "", status: "", filters: { channel: "", branch_id: "", payment_method: "", from: "", to: "" } })}
         empty={{ title: "No sales yet", body: "Sales appear here as soon as a till, the online store or the back office completes one." }}
         onRowClick={(o) => router.push(`/sales/${o.order_id}`)}
+        rowActions={(o) =>
+          o.status !== "cart" && o.status !== "held" ? (
+            <DownloadPdfButton path={`/api/v1/sales/orders/${o.order_id}/receipt/pdf`} label={`Download receipt ${o.order_number}`} size="icon-sm" />
+          ) : null
+        }
       />
     </div>
   );
