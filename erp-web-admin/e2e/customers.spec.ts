@@ -49,13 +49,13 @@ test("register a B2C customer, register a B2B customer, and search/filter", asyn
     await page.fill("#gstin", "29ABCDE1234F1Z5");
     await page.click('button[type="submit"]');
     await page.waitForURL(/\/customers\/[0-9a-f-]+/);
-    await expect(page.getByText("B2B")).toBeVisible();
+    await expect(page.getByText("b2b", { exact: true })).toBeVisible(); // not the "B2B Quotations" link
     await expect(page.getByText("29ABCDE1234F1Z5")).toBeVisible();
   });
 
   await test.step("find the new B2C customer by searching for their unique phone", async () => {
     await page.goto("/customers");
     await page.fill("#q", `9${unique}`);
-    await expect(page.getByRole("cell", { name: `E2E Walkin ${unique}` })).toBeVisible();
+    await expect(page.getByRole("cell", { name: `E2E Walkin ${unique}`, exact: true })).toBeVisible();
   });
 });

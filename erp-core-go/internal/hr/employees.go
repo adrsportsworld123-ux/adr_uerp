@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -257,6 +258,14 @@ func (h *Handler) GetEmployee(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateEmployeeRequest struct {
+	// Name/Phone/Email/Status (migrations/054's uniform master lifecycle):
+	// editable like every other master. Email is the sign-in name, unique
+	// among live employees. Status active/inactive: an inactive employee
+	// can't sign in; reactivating clears a date of exit (a rehire).
+	Name           *string `json:"name"`
+	Phone          *string `json:"phone"`
+	Email          *string `json:"email"`
+	Status         *string `json:"status"`
 	BranchID       *string `json:"branch_id"`
 	Designation    *string `json:"designation"`
 	Department     *string `json:"department"`
@@ -290,8 +299,52 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Status != nil && *req.Status != "active" && *req.Status != "inactive" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be active or inactive")
+		return
+	}
+	for _, f := range []*string{req.Name, req.Email} {
+		if f != nil && strings.TrimSpace(*f) == "" {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name and email can't be empty")
+			return
+		}
+	}
+	if req.Status != nil && *req.Status == "inactive" && id == claims.UserID {
+		httpx.Error(w, http.StatusConflict, "SELF_DEACTIVATE", "you can't deactivate your own account")
+		return
+	}
+
 	var resp employeeResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if req.Status != nil && *req.Status == "inactive" {
+			var others int
+			if err := tx.QueryRow(ctx, `
+				SELECT count(DISTINCT ur.user_id) FROM user_roles ur JOIN users u ON u.id = ur.user_id AND u.status = 'active'
+				JOIN role_permissions rp ON rp.role_id = ur.role_id JOIN permissions p ON p.id = rp.permission_id
+				WHERE p.code = 'rbac.manage' AND ur.user_id::text <> $1`, id).Scan(&others); err != nil {
+				return err
+			}
+			var holds bool
+			if err := tx.QueryRow(ctx, `
+				SELECT EXISTS (SELECT 1 FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+				               JOIN permissions p ON p.id = rp.permission_id WHERE ur.user_id::text = $1 AND p.code = 'rbac.manage')`, id).Scan(&holds); err != nil {
+				return err
+			}
+			if holds && others == 0 {
+				return errLastAdmin
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE users SET
+			  name = COALESCE(NULLIF(trim($2::text), ''), name),
+			  phone = CASE WHEN $3::text IS NULL THEN phone ELSE NULLIF(trim($3::text), '') END,
+			  email = COALESCE(NULLIF(lower(trim($4::text)), ''), email),
+			  status = COALESCE($5::text, status),
+			  date_of_exit = CASE WHEN $5::text = 'active' THEN NULL ELSE date_of_exit END
+			WHERE id = $1`,
+			id, req.Name, req.Phone, req.Email, req.Status); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, `
 			UPDATE users SET
 			  branch_id = COALESCE($2, branch_id),
@@ -325,12 +378,23 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "no employee with this id")
 		return
+	} else if errors.Is(err, errLastAdmin) {
+		httpx.Error(w, http.StatusConflict, "LAST_RBAC_HOLDER", "this would leave no one able to manage roles and permissions")
+		return
+	} else if isUniqueViolation(err) {
+		httpx.Error(w, http.StatusConflict, "DUPLICATE", "another employee already has this email, phone or employee code")
+		return
 	} else if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update employee")
 		return
 	}
+	if req.Status != nil || req.RoleID != nil {
+		authn.InvalidateScopes()
+	}
 	httpx.JSON(w, http.StatusOK, resp)
 }
+
+var errLastAdmin = errors.New("last rbac.manage holder")
 
 func loadEmployee(ctx context.Context, tx pgx.Tx, id string, resp *employeeResponse) error {
 	if err := tx.QueryRow(ctx, `

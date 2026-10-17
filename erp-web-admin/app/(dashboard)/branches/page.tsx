@@ -7,16 +7,16 @@
 // and reports are untouched, and it still appears in history and reports.
 import { Suspense, useState } from "react";
 import Link from "next/link";
-import { FileText, Pencil, Power } from "lucide-react";
+import { FileText } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Branch } from "@/lib/types";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { AlertModal } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Column, DataTable } from "@/components/data/data-table";
 import { EditDialog, EditField } from "@/components/data/edit-dialog";
+import { MasterRowActions } from "@/components/data/master-actions";
 import { PageHeader } from "@/components/data/page-header";
 import { StatusChip } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
@@ -41,17 +41,6 @@ function BranchesView() {
   const { state, update, apiQuery, activeFilterCount } = useListState({ sort: "created", dir: "desc", status: "all" });
   const list = useServerList<Branch>("/api/v1/branches", "branches", apiQuery);
   const [editing, setEditing] = useState<Branch | null>(null);
-  const [deactivating, setDeactivating] = useState<Branch | null>(null);
-
-  async function setStatus(b: Branch, status: "active" | "inactive") {
-    try {
-      await api.patch(`/api/v1/branches/${b.branch_id}`, { status });
-      toast.success(`${status === "active" ? "Activated" : "Deactivated"} “${b.name}”`);
-      list.reload();
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : "Could not update branch");
-    }
-  }
 
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -102,9 +91,7 @@ function BranchesView() {
             onRowClick={setEditing}
             rowActions={(b) => (
               <>
-                <Button variant="ghost" size="icon-sm" aria-label={`Edit ${b.name}`} title="Edit" onClick={() => setEditing(b)}>
-                  <Pencil />
-                </Button>
+                <MasterRowActions name={b.name} noun="branch" status={b.status} onEdit={() => setEditing(b)} onChanged={list.reload} />
                 <Link
                   href={`/branches/${b.branch_id}/print-settings`}
                   className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
@@ -114,15 +101,15 @@ function BranchesView() {
                 >
                   <FileText />
                 </Link>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`${b.status === "active" ? "Deactivate" : "Activate"} ${b.name}`}
-                  title={b.status === "active" ? "Deactivate" : "Activate"}
-                  onClick={() => (b.status === "active" ? setDeactivating(b) : setStatus(b, "active"))}
-                >
-                  <Power className={b.status === "active" ? "" : "text-pay"} />
-                </Button>
+                <MasterRowActions
+                  name={b.name}
+                  noun="branch"
+                  status={b.status}
+                  setStatus={(next) => api.patch(`/api/v1/branches/${b.branch_id}`, { status: next })}
+                  deactivateNote="Its POS terminals stop accepting sign-ins and can't be paired until you reactivate it. Stock, sales, transfers and reports are untouched."
+                  remove={{ entity: "branch", id: b.branch_id, path: `/api/v1/branches/${b.branch_id}`, permission: "master_data.delete" }}
+                  onChanged={list.reload}
+                />
               </>
             )}
           />
@@ -150,32 +137,6 @@ function BranchesView() {
           </Button>
         </form>
       </div>
-
-      <AlertModal
-        open={!!deactivating}
-        onOpenChange={(o) => !o && setDeactivating(null)}
-        title={`Deactivate “${deactivating?.name ?? ""}”?`}
-        actions={
-          <>
-            <Button variant="outline" onClick={() => setDeactivating(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                const b = deactivating!;
-                setDeactivating(null);
-                setStatus(b, "inactive");
-              }}
-            >
-              Deactivate branch
-            </Button>
-          </>
-        }
-      >
-        Its POS terminals stop accepting sign-ins and can&rsquo;t be paired until you reactivate it. Stock, sales, transfers and reports
-        are untouched.
-      </AlertModal>
 
       {editing && (
         <EditDialog

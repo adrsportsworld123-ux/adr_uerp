@@ -43,9 +43,12 @@ export function AttendanceButton() {
   }, []);
   useEffect(load, [load]);
 
+  // Any number of check-ins a day (migrations/053): checked in while a
+  // session is open; otherwise the button always offers a new check-in.
   const checkedIn = me?.open != null;
-  const doneToday = !checkedIn && me?.today?.clock_out != null;
   const action = checkedIn ? "out" : "in";
+  const workedToday = me?.today?.hours_worked && Number(me.today.hours_worked) > 0 ? me.today.hours_worked : null;
+  const sessionsToday = me?.today?.sessions?.length ?? 0;
 
   async function locate() {
     setLocating(true);
@@ -85,9 +88,14 @@ export function AttendanceButton() {
 
   return (
     <>
-      <Button variant={checkedIn ? "outline" : "default"} size="sm" onClick={start} disabled={doneToday} title={doneToday ? "You've checked out for today" : undefined}>
+      <Button
+        variant={checkedIn ? "outline" : "default"}
+        size="sm"
+        onClick={start}
+        title={workedToday ? `${workedToday} h worked today over ${sessionsToday} session(s)` : undefined}
+      >
         <Clock aria-hidden />
-        {checkedIn ? `In since ${time(me.open?.clock_in)} · Check out` : doneToday ? "Done for today" : "Check in"}
+        {checkedIn ? `In since ${time(me.open_since ?? me.open?.clock_in)} · Check out` : sessionsToday > 0 ? "Check in again" : "Check in"}
       </Button>
       <Modal
         open={open}

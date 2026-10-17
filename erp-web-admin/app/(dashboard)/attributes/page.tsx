@@ -22,11 +22,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect, categoryOption } from "@/components/data/search-select";
+import { StatusChip } from "@/components/data/status-chip";
+import { EditDialog } from "@/components/data/edit-dialog";
+import { MasterRowActions } from "@/components/data/master-actions";
 
 const INPUT_TYPE_LABEL: Record<string, string> = { select: "Select (controlled list)", text: "Free text", number: "Number" };
 
 export default function AttributesPage() {
   const [attributes, setAttributes] = useState<CatalogAttribute[]>([]);
+  const [editingAttr, setEditingAttr] = useState<CatalogAttribute | null>(null);
   const [newAttrName, setNewAttrName] = useState("");
   const [newAttrType, setNewAttrType] = useState<"select" | "text" | "number">("select");
   const [creatingAttr, setCreatingAttr] = useState(false);
@@ -160,6 +164,19 @@ export default function AttributesPage() {
                 <div className="flex items-center gap-2">
                   <span className="font-medium">{a.name}</span>
                   <Badge variant="outline">{INPUT_TYPE_LABEL[a.input_type]}</Badge>
+                  <StatusChip status={a.status ?? "active"} />
+                  <div className="ml-auto flex">
+                    <MasterRowActions
+                      name={a.name}
+                      noun="attribute"
+                      status={a.status ?? "active"}
+                      onEdit={() => setEditingAttr(a)}
+                      setStatus={(next) => api.patch(`/api/v1/attributes/${a.attribute_id}`, { status: next })}
+                      deactivateNote="Products that already use it keep their values; it can't be added to new category attribute sets."
+                      remove={{ entity: "attribute", id: a.attribute_id, path: `/api/v1/attributes/${a.attribute_id}`, permission: "catalog.manage" }}
+                      onChanged={reloadAttributes}
+                    />
+                  </div>
                 </div>
                 {a.input_type === "select" && (
                   <div className="flex flex-col gap-2">
@@ -198,6 +215,22 @@ export default function AttributesPage() {
           </div>
         </CardContent>
       </Card>
+
+      {editingAttr && (
+        <EditDialog
+          open
+          onOpenChange={(o) => !o && setEditingAttr(null)}
+          title="Edit attribute"
+          description="Once product variants use an attribute, its name can't change."
+          fields={[{ key: "name", label: "Name", required: true }]}
+          initial={{ name: editingAttr.name }}
+          onSave={async (changes) => {
+            await api.patch(`/api/v1/attributes/${editingAttr.attribute_id}`, changes);
+            toast.success(`Saved attribute “${changes.name ?? editingAttr.name}”`);
+            reloadAttributes();
+          }}
+        />
+      )}
 
       <Card>
         <CardHeader>

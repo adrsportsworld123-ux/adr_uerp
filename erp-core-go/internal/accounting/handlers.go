@@ -3,12 +3,17 @@ package accounting
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
+	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 )
@@ -26,7 +31,8 @@ type accountResponse struct {
 	Status    string `json:"status"`
 }
 
-// ListAccounts: GET /accounting/accounts
+// ListAccounts: GET /accounting/accounts[?status=active|inactive] — every
+// account unless a status is named.
 func (h *Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -35,7 +41,8 @@ func (h *Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	accounts := []accountResponse{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, code, name, account_type, is_system, status FROM chart_of_accounts ORDER BY code`)
+		rows, err := tx.Query(ctx, `SELECT id, code, name, account_type, is_system, status FROM chart_of_accounts
+			WHERE ($1 = '' OR $1 = 'all' OR status = $1) ORDER BY code`, r.URL.Query().Get("status"))
 		if err != nil {
 			return err
 		}
@@ -385,4 +392,103 @@ func (h *Handler) CashBook(w http.ResponseWriter, r *http.Request) {
 
 func formatMoney(v float64) string {
 	return strconv.FormatFloat(v, 'f', 2, 64)
+}
+
+type updateAccountRequest struct {
+	Code   *string `json:"code"`
+	Name   *string `json:"name"`
+	Type   *string `json:"account_type"`
+	Status *string `json:"status"` // active | inactive
+}
+
+var errSystemAccount = errors.New("system account")
+var errAccountUsed = errors.New("account has postings")
+
+// UpdateAccount: PATCH /accounting/accounts/{id} (accounting.manage) —
+// omitted = keep. A system account (one the books post to automatically)
+// can be renamed only: its code, type and status are fixed. A custom
+// account's code and type can change only while nothing has been posted
+// to it; an inactive account can't be used in a new journal voucher
+// (vouchers.go already refuses it), and its history is untouched.
+func (h *Handler) UpdateAccount(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var req updateAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	if req.Type != nil {
+		switch *req.Type {
+		case "asset", "liability", "equity", "income", "expense":
+		default:
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "account_type must be one of asset, liability, equity, income, expense")
+			return
+		}
+	}
+	if req.Status != nil && *req.Status != "active" && *req.Status != "inactive" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be active or inactive")
+		return
+	}
+	for _, f := range []*string{req.Code, req.Name} {
+		if f != nil && strings.TrimSpace(*f) == "" {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "code and name can't be empty")
+			return
+		}
+	}
+
+	var resp accountResponse
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var cur accountResponse
+		if err := tx.QueryRow(ctx, `SELECT id, code, name, account_type, is_system, status FROM chart_of_accounts WHERE id::text = $1 FOR UPDATE`, id).
+			Scan(&cur.AccountID, &cur.Code, &cur.Name, &cur.Type, &cur.IsSystem, &cur.Status); err != nil {
+			return err
+		}
+		changes := func(p *string, cur string) bool { return p != nil && strings.TrimSpace(*p) != cur }
+		if cur.IsSystem && (changes(req.Code, cur.Code) || changes(req.Type, cur.Type) || changes(req.Status, cur.Status)) {
+			return errSystemAccount
+		}
+		if changes(req.Code, cur.Code) || changes(req.Type, cur.Type) {
+			var used bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM journal_lines WHERE account_id::text = $1)`, id).Scan(&used); err != nil {
+				return err
+			}
+			if used {
+				return errAccountUsed
+			}
+		}
+		if err := tx.QueryRow(ctx, `
+			UPDATE chart_of_accounts SET
+			  code = COALESCE(NULLIF(trim($2::text), ''), code),
+			  name = COALESCE(NULLIF(trim($3::text), ''), name),
+			  account_type = COALESCE($4::text, account_type),
+			  status = COALESCE($5::text, status)
+			WHERE id::text = $1
+			RETURNING id, code, name, account_type, is_system, status`,
+			id, req.Code, req.Name, req.Type, req.Status,
+		).Scan(&resp.AccountID, &resp.Code, &resp.Name, &resp.Type, &resp.IsSystem, &resp.Status); err != nil {
+			return err
+		}
+		return audit.Log(ctx, tx, audit.Entry{EntityType: "chart_of_accounts", EntityID: resp.AccountID, Action: "update",
+			PerformedBy: claims.UserID, Before: cur, After: resp})
+	})
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "account not found")
+	case errors.Is(err, errSystemAccount):
+		httpx.Error(w, http.StatusConflict, "SYSTEM_ACCOUNT", "this is a system account the books post to automatically — only its name can change")
+	case errors.Is(err, errAccountUsed):
+		httpx.Error(w, http.StatusConflict, "IN_USE", "entries have been posted to this account — its code and type can't change")
+	case errors.As(err, &pgErr) && pgErr.Code == "23505":
+		httpx.Error(w, http.StatusConflict, "DUPLICATE_CODE", "another account (possibly a deleted one in the Recycle Bin) already uses this code")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update the account")
+	default:
+		httpx.JSON(w, http.StatusOK, resp)
+	}
 }

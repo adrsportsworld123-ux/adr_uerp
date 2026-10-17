@@ -25,7 +25,16 @@ Map<String, dynamic> _record({String? clockOut}) => {
       'clock_out_evidence': <String, dynamic>{},
     };
 
-(AppSession, List<http.Request>) _setup({bool checkedIn = false}) {
+Map<String, dynamic> _closedDay() => {
+      ..._record(clockOut: '2026-10-17 17:00:00+05:30'),
+      'hours_worked': '6.50',
+      'sessions': [
+        {'id': 's1', 'clock_in': '2026-10-17 09:00:00+05:30', 'clock_out': '2026-10-17 13:00:00+05:30', 'minutes': 240},
+        {'id': 's2', 'clock_in': '2026-10-17 14:30:00+05:30', 'clock_out': '2026-10-17 17:00:00+05:30', 'minutes': 150},
+      ],
+    };
+
+(AppSession, List<http.Request>) _setup({bool checkedIn = false, bool checkedOutToday = false}) {
   final requests = <http.Request>[];
   final client = MockClient((r) async {
     requests.add(r);
@@ -34,7 +43,8 @@ Map<String, dynamic> _record({String? clockOut}) => {
       return http.Response(
           jsonEncode({
             'open': checkedIn ? _record() : null,
-            'today': checkedIn ? _record() : null,
+            'open_since': checkedIn ? '2026-10-17 09:02:00+05:30' : null,
+            'today': checkedIn ? _record() : (checkedOutToday ? _closedDay() : null),
             'settings': {'require_location': false, 'geofence_mode': 'flag', 'allow_web': true, 'allow_pos': true},
             'geofence': {'branch_name': 'MG Road', 'radius_m': 200},
           }),
@@ -105,5 +115,21 @@ void main() {
     final punch = requests.singleWhere((r) => r.url.path.endsWith('/clock-out'));
     expect(jsonDecode(punch.body), isEmpty);
     expect(punch.headers['X-Terminal-Id'], 'terminal-test');
+  });
+
+  testWidgets("after checking out, the employee can check in again; the day's sessions are listed", (tester) async {
+    final (session, requests) = _setup(checkedOutToday: true);
+    await tester.pumpWidget(_app(session, () async => const DeviceFix.found(12.834, 80.17, 10)));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Checked out'), findsOneWidget);
+    expect(find.textContaining('6.50 h worked'), findsOneWidget);
+    expect(find.byKey(const Key('attendance-session-0')), findsOneWidget);
+    expect(find.byKey(const Key('attendance-session-1')), findsOneWidget);
+    expect(find.text('Check in again'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('attendance-punch')));
+    await tester.pumpAndSettle();
+    expect(requests.where((r) => r.url.path.endsWith('/clock-in')), hasLength(1));
   });
 }

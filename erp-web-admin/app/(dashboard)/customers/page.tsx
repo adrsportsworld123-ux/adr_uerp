@@ -4,13 +4,17 @@
 // server-side search across name, phone, email, GSTIN and company;
 // type/segment/status filters; sort by name, spend, orders or recency;
 // paging in the URL. A row opens the customer's detail page.
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
+import { toast } from "sonner";
+import { api } from "@/lib/api-client";
 import { Customer } from "@/lib/types";
 import { buttonVariants } from "@/components/ui/button";
 import { Column, DataTable } from "@/components/data/data-table";
+import { EditDialog, EditField } from "@/components/data/edit-dialog";
+import { MasterRowActions } from "@/components/data/master-actions";
 import { PageHeader } from "@/components/data/page-header";
 import { StatusChip, Tone } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
@@ -22,6 +26,15 @@ const SEGMENT: Record<Customer["segment"], { label: string; tone: Tone }> = {
   new: { label: "New", tone: "teal" },
   dormant: { label: "Dormant", tone: "muted" },
 };
+
+const EDIT_FIELDS: EditField[] = [
+  { key: "name", label: "Name", required: true },
+  { key: "phone", label: "Phone", type: "tel", half: true, required: true },
+  { key: "email", label: "Email (optional)", type: "email", half: true },
+  { key: "company_name", label: "Company", half: true },
+  { key: "gstin", label: "GSTIN", upper: true, half: true, hint: "Required for a B2B customer" },
+  { key: "address", label: "Address" },
+];
 
 function rupees(v: string) {
   const n = Number(v);
@@ -87,6 +100,7 @@ function CustomersList() {
     filterKeys: ["customer_type", "segment"],
   });
   const list = useServerList<Customer>("/api/v1/customers", "customers", apiQuery);
+  const [editing, setEditing] = useState<Customer | null>(null);
   const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
 
   return (
@@ -151,7 +165,41 @@ function CustomersList() {
           ),
         }}
         onRowClick={(c) => router.push(`/customers/${c.customer_id}`)}
+        rowActions={(c) => (
+          <MasterRowActions
+            name={c.name || c.phone}
+            noun="customer"
+            status={c.status}
+            onEdit={() => setEditing(c)}
+            setStatus={(next) => api.patch(`/api/v1/customers/${c.customer_id}`, { status: next })}
+            deactivateNote="Their purchase history, loyalty points and credit stay as they are; they can't be picked for new sales until reactivated."
+            remove={{ entity: "customer", id: c.customer_id, path: `/api/v1/customers/${c.customer_id}`, permission: "master_data.delete" }}
+            onChanged={list.reload}
+          />
+        )}
       />
+      {editing && (
+        <EditDialog
+          open
+          onOpenChange={(o) => !o && setEditing(null)}
+          title="Edit customer"
+          description={editing.name}
+          fields={EDIT_FIELDS}
+          initial={{
+            name: editing.name,
+            phone: editing.phone,
+            email: editing.email,
+            company_name: editing.company_name,
+            gstin: editing.gstin,
+            address: editing.address,
+          }}
+          onSave={async (changes) => {
+            await api.patch(`/api/v1/customers/${editing.customer_id}`, changes);
+            toast.success(`Saved customer “${changes.name ?? editing.name}”`);
+            list.reload();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -239,6 +239,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Post("/attributes", taxonomy.CreateAttribute)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Patch("/attributes/{id}", taxonomy.UpdateAttribute)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Post("/attributes/{id}/values", taxonomy.CreateAttributeValue)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Delete("/attributes/{id}/values/{value_id}", taxonomy.DeleteAttributeValue)
@@ -359,6 +361,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/purchase/returns/{id}/pdf", pur.DownloadPurchaseReturn)
 
 			protected.Get("/accounting/accounts", acct.ListAccounts)
+			protected.With(authn.RequirePermission(database, "accounting.manage")).
+				Patch("/accounting/accounts/{id}", acct.UpdateAccount)
 			protected.Post("/accounting/accounts", acct.CreateAccount)
 			protected.Post("/accounting/journal-entries", acct.CreateManualJournalEntry)
 			// Phase 14: the ledger browsable + exportable, journal vouchers with an
@@ -487,6 +491,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "audit.configure")).
 				Put("/audit/settings", activityLog.UpdateSettings)
 
+			// Delete for every master that had none (migrations/054).
+			registerMasterDeletes(protected, database)
+
 			// Soft-deleted masters and drafts (migrations/050).
 			bin := &softdelete.Handler{DB: database}
 			protected.With(authn.RequirePermission(database, "recycle_bin.manage")).
@@ -560,6 +567,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "hr.manage")).
 				Post("/hr/shifts", hrH.CreateShift)
 			protected.Get("/hr/shifts", hrH.ListShifts)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Patch("/hr/shifts/{id}", hrH.UpdateShift)
 			protected.Post("/hr/attendance/clock-in", hrH.ClockIn)
 			protected.Post("/hr/attendance/clock-out", hrH.ClockOut)
 			// Check-in/out evidence, the day register, rules and geofences
@@ -569,6 +578,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Get("/hr/attendance/register", hrH.Register)
 			protected.With(authn.RequirePermission(database, "hr.manage")).
 				Post("/hr/attendance/mark", hrH.MarkAttendance)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/attendance/{id}/sessions", hrH.AddSession)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Patch("/hr/attendance/sessions/{id}", hrH.CorrectSession)
 			protected.With(authn.RequirePermission(database, "hr.manage")).
 				Get("/hr/attendance/settings", hrH.GetAttendanceSettings)
 			protected.With(authn.RequirePermission(database, "hr.manage")).

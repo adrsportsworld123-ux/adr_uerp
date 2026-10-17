@@ -67,7 +67,7 @@ test("check in from the header, then see it on the register", async ({ page, con
   await context.setGeolocation({ latitude: 12.834, longitude: 80.17, accuracy: 20 });
   await login(page);
   const header = page.locator("header");
-  const button = header.getByRole("button", { name: /Check in|Check out|Done for today/ });
+  const button = header.getByRole("button", { name: /Check in|In since/ });
   await expect(button).toBeVisible();
   if ((await button.textContent())?.includes("Check in")) {
     await button.click();
@@ -76,7 +76,7 @@ test("check in from the header, then see it on the register", async ({ page, con
     await dialog.getByRole("button", { name: "Check in now" }).click();
     await expect(page.getByText(/Checked in at/)).toBeVisible();
   }
-  await expect(header.getByRole("button", { name: /In since|Done for today/ })).toBeVisible();
+  await expect(header.getByRole("button", { name: /In since/ })).toBeVisible();
 
   await page.goto("/hr/attendance");
   await expect(page.getByRole("heading", { name: "Attendance" })).toBeVisible();

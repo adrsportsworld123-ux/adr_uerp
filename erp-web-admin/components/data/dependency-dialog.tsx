@@ -57,6 +57,9 @@ export function DeleteWithDependencies({
   const [report, setReport] = useState<DependencyReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The server's own reason when it refuses for a rule rather than a
+  // reference it can list (a branch still holding stock).
+  const [reason, setReason] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -69,6 +72,7 @@ export function DeleteWithDependencies({
       cancelled = true;
       setReport(null);
       setError(null);
+      setReason(null);
     };
   }, [open, entity, id]);
 
@@ -83,6 +87,7 @@ export function DeleteWithDependencies({
       if (e instanceof ApiError && e.code === "IN_USE") {
         const deps = (e.details as { dependencies?: Dependency[] } | undefined)?.dependencies ?? [];
         setReport({ dependencies: deps, deletable: false });
+        if (deps.length === 0) setReason(e.message);
       } else {
         toast.error(e instanceof Error ? e.message : "Delete failed");
       }
@@ -140,7 +145,7 @@ export function DeleteWithDependencies({
             It&rsquo;s used by the records below, which must keep it. Deactivating hides it from pickers for new records and
             leaves all history unchanged. You can reactivate it any time.
           </p>
-          <DependencyList deps={report.dependencies.filter((d) => d.blocking)} />
+          {reason ? <p className="text-foreground">{reason}</p> : <DependencyList deps={report.dependencies.filter((d) => d.blocking)} />}
         </div>
       )}
       {report && !blocked && (

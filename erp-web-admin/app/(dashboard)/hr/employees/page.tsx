@@ -18,6 +18,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlertModal } from "@/components/ui/dialog";
 import { Column, DataTable } from "@/components/data/data-table";
+import { EditDialog, EditField } from "@/components/data/edit-dialog";
+import { MasterRowActions } from "@/components/data/master-actions";
 import { PageHeader } from "@/components/data/page-header";
 import { StatusChip } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
@@ -39,8 +41,22 @@ const columns: Column<Employee>[] = [
   {
     key: "status",
     header: "Status",
-    cell: (e) => (e.date_of_exit ? <StatusChip status="exited" tone="muted" label={`Exited ${e.date_of_exit}`} /> : <StatusChip status="active" />),
+    cell: (e) =>
+      e.date_of_exit ? <StatusChip status="exited" tone="muted" label={`Exited ${e.date_of_exit}`} /> : <StatusChip status={e.status} />,
   },
+];
+
+const EDIT_FIELDS: EditField[] = [
+  { key: "name", label: "Name", required: true },
+  { key: "email", label: "Email (sign-in)", type: "email", required: true, half: true },
+  { key: "phone", label: "Phone", type: "tel", half: true },
+  { key: "designation", label: "Designation", half: true },
+  { key: "department", label: "Department", half: true },
+  { key: "pan_number", label: "PAN", upper: true, half: true },
+  { key: "uan_number", label: "UAN", half: true },
+  { key: "esi_number", label: "ESI number", half: true },
+  { key: "bank_account_no", label: "Bank account", half: true },
+  { key: "bank_ifsc", label: "IFSC", upper: true, half: true },
 ];
 
 function EmployeesView() {
@@ -51,6 +67,7 @@ function EmployeesView() {
   const { state, update, apiQuery, activeFilterCount } = useListState({ sort: "created", dir: "desc", status: "all" });
   const list = useServerList<Employee>("/api/v1/hr/employees", "employees", apiQuery);
   const [confirmExit, setConfirmExit] = useState(false);
+  const [editing, setEditing] = useState<Employee | null>(null);
 
   const [name, setName] = useState("");
   const [employeeCode, setEmployeeCode] = useState("");
@@ -76,7 +93,7 @@ function EmployeesView() {
   }, [reloadList]);
   useEffect(() => {
     api.get<{ roles: Role[] }>("/api/v1/hr/roles").then((d) => setRoles(d.roles)).catch(() => {});
-    api.get<{ shifts: Shift[] }>("/api/v1/hr/shifts").then((d) => setShifts(d.shifts)).catch(() => {});
+    api.get<{ shifts: Shift[] }>("/api/v1/hr/shifts?status=active").then((d) => setShifts(d.shifts)).catch(() => {});
     api.get<{ branches: Branch[] }>("/api/v1/branches").then((d) => setBranches(d.branches)).catch(() => {});
   }, []);
 
@@ -256,6 +273,18 @@ function EmployeesView() {
         }
         empty={{ title: "No employees yet", body: "Add staff above to give them a login and include them in payroll." }}
         onRowClick={selectEmployee}
+        rowActions={(e) => (
+          <MasterRowActions
+            name={e.name}
+            noun="employee"
+            status={e.status}
+            onEdit={() => setEditing(e)}
+            setStatus={(next) => api.patch(`/api/v1/hr/employees/${e.id}`, { status: next })}
+            deactivateNote="They can't sign in to the POS or this app until reactivated. Their sales, attendance and payslips stay as they are."
+            remove={{ entity: "employee", id: e.id, path: `/api/v1/hr/employees/${e.id}`, permission: "hr.manage" }}
+            onChanged={list.reload}
+          />
+        )}
       />
 
       {selected && (
@@ -333,6 +362,32 @@ function EmployeesView() {
             </div>
           </CardContent>
         </Card>
+      )}
+      {editing && (
+        <EditDialog
+          open
+          onOpenChange={(o) => !o && setEditing(null)}
+          title="Edit employee"
+          description={editing.name}
+          fields={EDIT_FIELDS}
+          initial={{
+            name: editing.name,
+            email: editing.email ?? "",
+            phone: editing.phone ?? "",
+            designation: editing.designation ?? "",
+            department: editing.department ?? "",
+            pan_number: editing.pan_number ?? "",
+            uan_number: editing.uan_number ?? "",
+            esi_number: editing.esi_number ?? "",
+            bank_account_no: editing.bank_account_no ?? "",
+            bank_ifsc: editing.bank_ifsc ?? "",
+          }}
+          onSave={async (changes) => {
+            await api.patch(`/api/v1/hr/employees/${editing.id}`, changes);
+            toast.success(`Saved employee “${changes.name ?? editing.name}”`);
+            list.reload();
+          }}
+        />
       )}
       <AlertModal
         open={confirmExit}

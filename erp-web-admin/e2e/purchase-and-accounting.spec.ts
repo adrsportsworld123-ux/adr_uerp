@@ -38,9 +38,9 @@ test("supplier → GRN → bill → payment → day book, end to end", async ({ 
 
   await test.step("chart of accounts shows seeded system accounts", async () => {
     await page.goto("/accounting/chart-of-accounts");
-    await expect(page.getByRole("cell", { name: "1001" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "1001", exact: true })).toBeVisible();
     await expect(page.getByRole("cell", { name: "Cash", exact: true })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "4001" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "4001", exact: true })).toBeVisible();
   });
 
   let grnNumber = "";

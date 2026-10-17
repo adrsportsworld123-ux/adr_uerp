@@ -67,6 +67,10 @@ type attendanceResponse struct {
 	CorrectedBy      *string       `json:"corrected_by,omitempty"`
 	CorrectedAt      *string       `json:"corrected_at,omitempty"`
 	CorrectionReason *string       `json:"correction_reason,omitempty"`
+	// Sessions: every check-in/check-out pair of the day, oldest first
+	// (migrations/053). The fields above summarise them.
+	Sessions    []sessionResponse `json:"sessions"`
+	sessionsRaw string
 }
 
 // attendanceSelect is shared by every read path that returns an
@@ -82,7 +86,7 @@ type attendanceResponse struct {
 // Punch times are compared with the shift in the branch's own timezone
 // (the database's when the row has no branch), so the result doesn't
 // depend on the server's TimeZone setting.
-const attendanceSelect = `
+var attendanceSelect = `
 	SELECT a.id, a.user_id, a.work_date::text, a.clock_in::text, a.clock_out::text, a.status, a.hours_worked::text,
 	       CASE WHEN a.clock_in IS NOT NULL AND s.start_time IS NOT NULL
 	            THEN GREATEST(0, ROUND(EXTRACT(EPOCH FROM ((a.clock_in AT TIME ZONE z.tz)::time - s.start_time)) / 60)::int)
@@ -95,7 +99,7 @@ const attendanceSelect = `
 	       a.clock_in_user_agent, a.clock_in_source, a.clock_in_terminal_id::text, a.clock_in_distance_m, a.clock_in_geofence,
 	       a.clock_out_latitude::float8, a.clock_out_longitude::float8, a.clock_out_accuracy_m::float8, a.clock_out_ip,
 	       a.clock_out_user_agent, a.clock_out_source, a.clock_out_terminal_id::text, a.clock_out_distance_m, a.clock_out_geofence,
-	       a.corrected_by::text, a.corrected_at::text, a.correction_reason
+	       a.corrected_by::text, a.corrected_at::text, a.correction_reason, ` + sessionsAggregate + `
 	FROM attendance a
 	LEFT JOIN users u ON u.id = a.user_id
 	LEFT JOIN shifts s ON s.id = u.shift_id
@@ -104,11 +108,15 @@ const attendanceSelect = `
 
 func scanAttendance(row pgx.Row, a *attendanceResponse) error {
 	in, out := &a.ClockInEvidence, &a.ClockOutEvidence
-	return row.Scan(&a.ID, &a.UserID, &a.WorkDate, &a.ClockIn, &a.ClockOut, &a.Status, &a.HoursWorked,
+	if err := row.Scan(&a.ID, &a.UserID, &a.WorkDate, &a.ClockIn, &a.ClockOut, &a.Status, &a.HoursWorked,
 		&a.LateMinutes, &a.EarlyDepartureMinutes, &a.BranchID, &a.BranchName,
 		&in.Latitude, &in.Longitude, &in.AccuracyM, &in.IP, &in.UserAgent, &in.Source, &in.TerminalID, &in.DistanceM, &in.Geofence,
 		&out.Latitude, &out.Longitude, &out.AccuracyM, &out.IP, &out.UserAgent, &out.Source, &out.TerminalID, &out.DistanceM, &out.Geofence,
-		&a.CorrectedBy, &a.CorrectedAt, &a.CorrectionReason)
+		&a.CorrectedBy, &a.CorrectedAt, &a.CorrectionReason, &a.sessionsRaw); err != nil {
+		return err
+	}
+	a.Sessions = decodeSessions(a.sessionsRaw)
+	return nil
 }
 
 // ---------------------------------------------------------------------
@@ -305,7 +313,7 @@ func writePunchError(w http.ResponseWriter, err error, what string) {
 	case errors.Is(err, errClockInRequired):
 		httpx.Error(w, http.StatusConflict, "CLOCK_IN_REQUIRED", "you haven't clocked in today")
 	case errors.Is(err, errAlreadyClockedOut):
-		httpx.Error(w, http.StatusConflict, "ALREADY_CLOCKED_OUT", "you've already clocked out today")
+		httpx.Error(w, http.StatusConflict, "ALREADY_CLOCKED_OUT", "you're already checked out — check in to start a new session")
 	default:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not "+what)
 	}
@@ -314,11 +322,11 @@ func writePunchError(w http.ResponseWriter, err error, what string) {
 // ClockIn: POST /hr/attendance/clock-in {latitude?, longitude?, accuracy_m?}
 // — self-service, operates on the caller's own record (claims.UserID),
 // never a body-supplied employee id, so one employee can never punch in
-// on another's behalf. Idempotent: a repeat call the same day leaves the
-// original clock_in time (and its location) untouched (ON CONFLICT DO
-// NOTHING) rather than erroring or resetting it. The body is optional
-// unless the merchant requires a location; the work date is the branch's
-// local date.
+// on another's behalf. Opens a new session (migrations/053): an employee
+// can check in again after checking out, any number of times a day. While
+// a session is open a repeat check-in changes nothing and answers the day
+// as it is (a double tap is harmless). The body is optional unless the
+// merchant requires a location; the work date is the branch's local date.
 func (h *Handler) ClockIn(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -333,23 +341,47 @@ func (h *Handler) ClockIn(w http.ResponseWriter, r *http.Request) {
 
 	var resp attendanceResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := lockPunches(ctx, tx, claims.UserID); err != nil {
+			return err
+		}
+		if _, attendanceID, err := openSession(ctx, tx, claims.UserID); err == nil {
+			return scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &resp)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 		branchID, err := punchContext(ctx, tx, claims.UserID, claims.BranchID, &ev)
 		if err != nil {
 			return err
 		}
+		// The day's summary row: created by the first check-in, reused by
+		// the next ones (recalcDay keeps its first check-in).
+		var attendanceID string
+		if err := tx.QueryRow(ctx, `
+			WITH d AS (SELECT (now() AT TIME ZONE COALESCE((SELECT timezone FROM branches WHERE id = $2::uuid), current_setting('TimeZone')))::date AS day),
+			     ins AS (
+			       INSERT INTO attendance (id, merchant_id, user_id, branch_id, work_date, clock_in, status)
+			       SELECT gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2::uuid, d.day, now(), 'present' FROM d
+			       ON CONFLICT (user_id, work_date) DO NOTHING
+			       RETURNING id)
+			SELECT id::text FROM ins
+			UNION ALL
+			SELECT a.id::text FROM attendance a, d WHERE a.user_id = $1 AND a.work_date = d.day
+			LIMIT 1`, claims.UserID, branchID).Scan(&attendanceID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO attendance (id, merchant_id, user_id, branch_id, work_date, clock_in, status,
+			INSERT INTO attendance_sessions (merchant_id, attendance_id, user_id, branch_id, clock_in,
 			    clock_in_latitude, clock_in_longitude, clock_in_accuracy_m, clock_in_ip, clock_in_user_agent,
 			    clock_in_source, clock_in_terminal_id, clock_in_distance_m, clock_in_geofence)
-			SELECT gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2::uuid,
-			       (now() AT TIME ZONE COALESCE((SELECT timezone FROM branches WHERE id = $2::uuid), current_setting('TimeZone')))::date,
-			       now(), 'present', $3, $4, $5, $6, $7, $8, $9::uuid, $10, $11
-			ON CONFLICT (user_id, work_date) DO NOTHING`,
-			claims.UserID, branchID, ev.Latitude, ev.Longitude, ev.AccuracyM, ev.IP, ev.UserAgent,
+			VALUES (current_setting('app.tenant_id')::uuid, $1::uuid, $2, $3::uuid, now(), $4, $5, $6, $7, $8, $9, $10::uuid, $11, $12)`,
+			attendanceID, claims.UserID, branchID, ev.Latitude, ev.Longitude, ev.AccuracyM, ev.IP, ev.UserAgent,
 			ev.Source, ev.TerminalID, ev.DistanceM, ev.Geofence); err != nil {
 			return err
 		}
-		return loadTodayAttendance(ctx, tx, claims.UserID, &resp)
+		if err := recalcDay(ctx, tx, attendanceID); err != nil {
+			return err
+		}
+		return scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &resp)
 	})
 	if err != nil {
 		writePunchError(w, err, "clock in")
@@ -360,8 +392,8 @@ func (h *Handler) ClockIn(w http.ResponseWriter, r *http.Request) {
 
 // ClockOut: POST /hr/attendance/clock-out {latitude?, longitude?, accuracy_m?}
 // — self-service, same reasoning as ClockIn. Closes the caller's open
-// punch from the last 20 hours rather than strictly "today's", so a shift
-// that runs past midnight can still clock out.
+// session from the last 20 hours rather than strictly "today's", so a
+// shift that runs past midnight can still clock out.
 func (h *Handler) ClockOut(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -376,20 +408,18 @@ func (h *Handler) ClockOut(w http.ResponseWriter, r *http.Request) {
 
 	var resp attendanceResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var openID string
-		err := tx.QueryRow(ctx, `
-			SELECT id::text FROM attendance
-			WHERE user_id = $1 AND clock_in IS NOT NULL AND clock_out IS NULL AND clock_in > now() - interval '20 hours'
-			ORDER BY clock_in DESC LIMIT 1
-			FOR UPDATE`, claims.UserID).Scan(&openID)
+		if err := lockPunches(ctx, tx, claims.UserID); err != nil {
+			return err
+		}
+		sessionID, attendanceID, err := openSession(ctx, tx, claims.UserID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			var doneToday bool
+			var recentlyOut bool
 			if err := tx.QueryRow(ctx, `
-				SELECT EXISTS (SELECT 1 FROM attendance WHERE user_id = $1 AND clock_out IS NOT NULL AND clock_out > now() - interval '20 hours')`,
-				claims.UserID).Scan(&doneToday); err != nil {
+				SELECT EXISTS (SELECT 1 FROM attendance_sessions WHERE user_id = $1 AND clock_out > now() - interval '20 hours')`,
+				claims.UserID).Scan(&recentlyOut); err != nil {
 				return err
 			}
-			if doneToday {
+			if recentlyOut {
 				return errAlreadyClockedOut
 			}
 			return errClockInRequired
@@ -400,17 +430,19 @@ func (h *Handler) ClockOut(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
-			UPDATE attendance SET clock_out = now(),
-			  hours_worked = ROUND(EXTRACT(EPOCH FROM (now() - clock_in)) / 3600.0, 2),
+			UPDATE attendance_sessions SET clock_out = GREATEST(now(), clock_in + interval '1 second'),
 			  clock_out_latitude = $2, clock_out_longitude = $3, clock_out_accuracy_m = $4, clock_out_ip = $5,
 			  clock_out_user_agent = $6, clock_out_source = $7, clock_out_terminal_id = $8::uuid,
 			  clock_out_distance_m = $9, clock_out_geofence = $10
 			WHERE id::text = $1`,
-			openID, ev.Latitude, ev.Longitude, ev.AccuracyM, ev.IP, ev.UserAgent, ev.Source, ev.TerminalID,
+			sessionID, ev.Latitude, ev.Longitude, ev.AccuracyM, ev.IP, ev.UserAgent, ev.Source, ev.TerminalID,
 			ev.DistanceM, ev.Geofence); err != nil {
 			return err
 		}
-		return scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, openID), &resp)
+		if err := recalcDay(ctx, tx, attendanceID); err != nil {
+			return err
+		}
+		return scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &resp)
 	})
 	if err != nil {
 		writePunchError(w, err, "clock out")
@@ -420,12 +452,15 @@ func (h *Handler) ClockOut(w http.ResponseWriter, r *http.Request) {
 }
 
 type myAttendanceResponse struct {
-	// Open is the punch waiting for a check-out (possibly yesterday's, for
-	// a shift past midnight); Today is today's row, open or closed.
-	Open     *attendanceResponse `json:"open"`
-	Today    *attendanceResponse `json:"today"`
-	Settings attendanceSettings  `json:"settings"`
-	Geofence *geofence           `json:"geofence"` // the caller's branch fence, when one is set
+	// Open is the day with a session waiting for a check-out (possibly
+	// yesterday's, for a shift past midnight), OpenSince when that session
+	// began; Today is today's row, open or closed.
+	Open          *attendanceResponse `json:"open"`
+	OpenSessionID string              `json:"open_session_id,omitempty"`
+	OpenSince     string              `json:"open_since,omitempty"`
+	Today         *attendanceResponse `json:"today"`
+	Settings      attendanceSettings  `json:"settings"`
+	Geofence      *geofence           `json:"geofence"` // the caller's branch fence, when one is set
 }
 
 // MyAttendance: GET /hr/attendance/me — what a check-in button needs to
@@ -442,12 +477,17 @@ func (h *Handler) MyAttendance(w http.ResponseWriter, r *http.Request) {
 		if resp.Settings, err = loadAttendanceSettings(ctx, tx); err != nil {
 			return err
 		}
-		var open attendanceResponse
-		err = scanAttendance(tx.QueryRow(ctx, attendanceSelect+`
-			WHERE a.user_id = $1 AND a.clock_in IS NOT NULL AND a.clock_out IS NULL AND a.clock_in > now() - interval '20 hours'
-			ORDER BY a.clock_in DESC LIMIT 1`, claims.UserID), &open)
-		if err == nil {
-			resp.Open = &open
+		if sessionID, attendanceID, err := openSession(ctx, tx, claims.UserID); err == nil {
+			var open attendanceResponse
+			if err := scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &open); err != nil {
+				return err
+			}
+			resp.Open, resp.OpenSessionID = &open, sessionID
+			for _, s := range open.Sessions {
+				if s.ID == sessionID {
+					resp.OpenSince = s.ClockIn
+				}
+			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
@@ -697,10 +737,21 @@ func (h *Handler) CorrectAttendance(w http.ResponseWriter, r *http.Request) {
 			badRange = true
 			return errors.New("clock_out before clock_in")
 		}
+		if setIn || setOut {
+			// Times live on the sessions (migrations/053). A day with one
+			// session (or none yet) is corrected through it; a day with
+			// several needs the session itself named.
+			if len(before.Sessions) > 1 {
+				return errHasSessions
+			}
+			if err := syncSingleSession(ctx, tx, id, before.Sessions, claims.UserID, strings.TrimSpace(req.Reason)); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE attendance SET hours_worked = CASE WHEN clock_in IS NOT NULL AND clock_out IS NOT NULL
 			    THEN ROUND(EXTRACT(EPOCH FROM (clock_out - clock_in)) / 3600.0, 2) END
-			WHERE id::text = $1`, id); err != nil {
+			WHERE id::text = $1 AND NOT EXISTS (SELECT 1 FROM attendance_sessions s WHERE s.attendance_id = attendance.id)`, id); err != nil {
 			return err
 		}
 		if err := scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, id), &resp); err != nil {
@@ -712,6 +763,10 @@ func (h *Handler) CorrectAttendance(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case badRange:
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "clock_out must be after clock_in")
+	case errors.Is(err, errHasSessions):
+		httpx.Error(w, http.StatusConflict, "ATTENDANCE_HAS_SESSIONS", "this day has several check-in sessions — correct the session instead (PATCH /hr/attendance/sessions/{id})")
+	case errors.Is(err, errSessionOverlap):
+		httpx.Error(w, http.StatusConflict, "SESSION_OVERLAP", "these times overlap another check-in session of this employee")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "no attendance record with this id")
 	case err != nil:
@@ -795,6 +850,9 @@ func (h *Handler) MarkAttendance(w http.ResponseWriter, r *http.Request) {
 			exists = true
 			return nil
 		} else if err != nil {
+			return err
+		}
+		if err := syncSingleSession(ctx, tx, id, nil, claims.UserID, strings.TrimSpace(req.Reason)); err != nil {
 			return err
 		}
 		if err := scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, id), &resp); err != nil {
@@ -1006,4 +1064,49 @@ func loadTodayAttendance(ctx context.Context, tx pgx.Tx, userID string, resp *at
 	row := tx.QueryRow(ctx, attendanceSelect+`
 		WHERE a.user_id = $1 AND a.work_date = (now() AT TIME ZONE z.tz)::date`, userID)
 	return scanAttendance(row, resp)
+}
+
+var errHasSessions = errors.New("several sessions")
+
+// syncSingleSession makes a day's one session carry the day row's times
+// after an HR edit or a manual mark: updated when it exists, created
+// (source manual) when the day has a check-in but no session, and the day
+// summary rebuilt from it. A day without a check-in (leave, absence) has
+// no session.
+func syncSingleSession(ctx context.Context, tx pgx.Tx, attendanceID string, sessions []sessionResponse, correctedBy, reason string) error {
+	var userID string
+	var branchID *string
+	var in *time.Time
+	var out *time.Time
+	if err := tx.QueryRow(ctx, `SELECT user_id::text, branch_id::text, clock_in, clock_out FROM attendance WHERE id::text = $1`, attendanceID).
+		Scan(&userID, &branchID, &in, &out); err != nil {
+		return err
+	}
+	if in == nil {
+		return nil
+	}
+	except := ""
+	if len(sessions) == 1 {
+		except = sessions[0].ID
+	}
+	if err := checkOverlap(ctx, tx, userID, except, *in, out); err != nil {
+		return err
+	}
+	if except != "" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE attendance_sessions SET clock_in = $2, clock_out = $3,
+			  clock_out_source = CASE WHEN $3::timestamptz IS NOT NULL AND clock_out_source IS NULL THEN 'manual' ELSE clock_out_source END,
+			  corrected_by = $4, corrected_at = now(), correction_reason = NULLIF($5, '')
+			WHERE id::text = $1`, except, *in, out, correctedBy, reason); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(ctx, `
+		INSERT INTO attendance_sessions (merchant_id, attendance_id, user_id, branch_id, clock_in, clock_out,
+		    clock_in_source, clock_out_source, corrected_by, corrected_at, correction_reason)
+		VALUES (current_setting('app.tenant_id')::uuid, $1::uuid, $2::uuid, $3::uuid, $4, $5,
+		    'manual', CASE WHEN $5::timestamptz IS NOT NULL THEN 'manual' END, $6, now(), NULLIF($7, ''))`,
+		attendanceID, userID, branchID, *in, out, correctedBy, reason); err != nil {
+		return err
+	}
+	return recalcDay(ctx, tx, attendanceID)
 }

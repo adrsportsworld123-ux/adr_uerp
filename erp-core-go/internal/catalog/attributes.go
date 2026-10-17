@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -45,6 +46,7 @@ type attributeResponse struct {
 	AttributeID string                   `json:"attribute_id"`
 	Name        string                   `json:"name"`
 	InputType   string                   `json:"input_type"` // "select" | "text" | "number"
+	Status      string                   `json:"status"`     // active | inactive (migrations/054)
 	Values      []attributeValueResponse `json:"values"`     // only meaningful for input_type "select"
 }
 
@@ -61,14 +63,15 @@ func (h *TaxonomyHandler) ListAttributes(w http.ResponseWriter, r *http.Request)
 	}
 	list := []attributeResponse{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, name, input_type FROM attributes ORDER BY name`)
+		rows, err := tx.Query(ctx, `SELECT id, name, input_type, status FROM attributes
+			WHERE ($1 = '' OR $1 = 'all' OR status = $1) ORDER BY name`, r.URL.Query().Get("status"))
 		if err != nil {
 			return err
 		}
 		var attrs []attributeResponse
 		for rows.Next() {
 			var a attributeResponse
-			if err := rows.Scan(&a.AttributeID, &a.Name, &a.InputType); err != nil {
+			if err := rows.Scan(&a.AttributeID, &a.Name, &a.InputType, &a.Status); err != nil {
 				rows.Close()
 				return err
 			}
@@ -468,4 +471,82 @@ func validateAttributeCombo(ctx context.Context, tx pgx.Tx, categoryID *string, 
 		}
 	}
 	return nil
+}
+
+type updateAttributeRequest struct {
+	Name      *string `json:"name"`
+	InputType *string `json:"input_type"`
+	Status    *string `json:"status"` // active | inactive
+}
+
+var errAttributeInUse = errors.New("attribute in use")
+
+// UpdateAttribute: PATCH /attributes/{id} (catalog.manage) — omitted =
+// keep. Variants store their values under the attribute's name
+// (attribute_combo), so the name and input type can't change once a
+// variant uses it; deactivating hides it from new category attribute sets
+// and leaves existing variants as they are.
+func (h *TaxonomyHandler) UpdateAttribute(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	var req updateAttributeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	if req.Status != nil && *req.Status != "active" && *req.Status != "inactive" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be active or inactive")
+		return
+	}
+	if req.InputType != nil && *req.InputType != "select" && *req.InputType != "text" && *req.InputType != "number" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "input_type must be select, text or number")
+		return
+	}
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name can't be empty")
+		return
+	}
+	var resp attributeResponse
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var name, inputType string
+		if err := tx.QueryRow(ctx, `SELECT name, input_type FROM attributes WHERE id::text = $1 FOR UPDATE`, chi.URLParam(r, "id")).Scan(&name, &inputType); err != nil {
+			return err
+		}
+		renamed := req.Name != nil && strings.TrimSpace(*req.Name) != name
+		retyped := req.InputType != nil && *req.InputType != inputType
+		if renamed || retyped {
+			var used bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM product_variants WHERE attribute_combo ? $1 OR attribute_combo ? lower($1))`, name).Scan(&used); err != nil {
+				return err
+			}
+			if used {
+				return errAttributeInUse
+			}
+		}
+		if err := tx.QueryRow(ctx, `
+			UPDATE attributes SET name = COALESCE(NULLIF(trim($2::text), ''), name), input_type = COALESCE($3::text, input_type),
+			  status = COALESCE($4::text, status)
+			WHERE id::text = $1
+			RETURNING id, name, input_type, status`, chi.URLParam(r, "id"), req.Name, req.InputType, req.Status,
+		).Scan(&resp.AttributeID, &resp.Name, &resp.InputType, &resp.Status); err != nil {
+			return err
+		}
+		resp.Values = []attributeValueResponse{}
+		return nil
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "attribute not found")
+	case errors.Is(err, errAttributeInUse):
+		httpx.Error(w, http.StatusConflict, "IN_USE", "product variants use this attribute — its name and input type can't change (deactivate it instead)")
+	case isUniqueViolation(err):
+		httpx.Error(w, http.StatusConflict, "DUPLICATE_NAME", "an attribute with this name already exists")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not update the attribute")
+	default:
+		httpx.JSON(w, http.StatusOK, resp)
+	}
 }

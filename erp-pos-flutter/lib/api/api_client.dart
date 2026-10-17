@@ -1037,6 +1037,10 @@ class AttendanceRecord {
   final int? clockInDistanceM;
   final int? clockOutDistanceM;
 
+  /// Every check-in/check-out pair of the day, oldest first (several a
+  /// day are allowed — erp-core-go migrations/053).
+  final List<AttendanceSession> sessions;
+
   const AttendanceRecord({
     required this.id,
     required this.workDate,
@@ -1048,6 +1052,7 @@ class AttendanceRecord {
     this.clockOutGeofence,
     this.clockInDistanceM,
     this.clockOutDistanceM,
+    this.sessions = const [],
   });
 
   factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
@@ -1065,13 +1070,32 @@ class AttendanceRecord {
       clockOutGeofence: outEv['geofence'] as String?,
       clockInDistanceM: inEv['distance_m'] as int?,
       clockOutDistanceM: outEv['distance_m'] as int?,
+      sessions: (json['sessions'] as List<dynamic>? ?? const [])
+          .map((e) => AttendanceSession.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
+  }
+}
+
+/// One check-in/check-out pair within a day.
+class AttendanceSession {
+  final String id;
+  final DateTime? clockIn;
+  final DateTime? clockOut;
+  final int? minutes;
+
+  const AttendanceSession({required this.id, this.clockIn, this.clockOut, this.minutes});
+
+  factory AttendanceSession.fromJson(Map<String, dynamic> json) {
+    DateTime? t(String k) => json[k] == null ? null : DateTime.tryParse((json[k] as String).replaceFirst(' ', 'T'))?.toLocal();
+    return AttendanceSession(id: json['id'] as String, clockIn: t('clock_in'), clockOut: t('clock_out'), minutes: json['minutes'] as int?);
   }
 }
 
 /// GET /hr/attendance/me.
 class MyAttendance {
   final AttendanceRecord? open;
+  final DateTime? openSince; // when the open session began
   final AttendanceRecord? today;
   final bool requireLocation;
   final String geofenceMode; // off | flag | block
@@ -1081,6 +1105,7 @@ class MyAttendance {
 
   const MyAttendance({
     this.open,
+    this.openSince,
     this.today,
     this.requireLocation = false,
     this.geofenceMode = 'flag',
@@ -1090,13 +1115,14 @@ class MyAttendance {
   });
 
   bool get checkedIn => open != null;
-  bool get doneToday => open == null && today?.clockOut != null;
+  int get sessionsToday => today?.sessions.length ?? 0;
 
   factory MyAttendance.fromJson(Map<String, dynamic> json) {
     final s = (json['settings'] as Map<String, dynamic>?) ?? const {};
     final g = json['geofence'] as Map<String, dynamic>?;
     return MyAttendance(
       open: json['open'] == null ? null : AttendanceRecord.fromJson(json['open'] as Map<String, dynamic>),
+      openSince: json['open_since'] == null ? null : DateTime.tryParse((json['open_since'] as String).replaceFirst(' ', 'T'))?.toLocal(),
       today: json['today'] == null ? null : AttendanceRecord.fromJson(json['today'] as Map<String, dynamic>),
       requireLocation: s['require_location'] as bool? ?? false,
       geofenceMode: s['geofence_mode'] as String? ?? 'flag',

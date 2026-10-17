@@ -219,6 +219,14 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `ATTENDANCE_EXISTS` | 409 | `POST /hr/attendance/mark` | The employee already has a row that day; correct it with `PATCH /hr/attendance/{id}` |
 | `IMPORT_INVALID` | 400 | `POST /purchase/imports/commit` | The invoice has errors (unknown category, missing MRP, totals off by ₹1 or more, already imported…); `details.preview` is the full preview with each error on its line |
 | `IMPORT_CONFLICT` | 409 | `POST /purchase/imports/commit` | Creating a product collided (a barcode or SKU taken since the preview); nothing was saved |
+| `ATTENDANCE_HAS_SESSIONS` | 409 | `PATCH /hr/attendance/{id}` | The day has several check-in sessions; correct their times with `PATCH /hr/attendance/sessions/{id}` |
+| `SESSION_OVERLAP` | 409 | `PATCH /hr/attendance/sessions/{id}`, `POST /hr/attendance/{id}/sessions`, `PATCH /hr/attendance/{id}` | The times overlap another session of the same employee |
+| `IN_USE` | 409 | every master `DELETE` | Something still uses the record (`details.dependencies`, or a rule in the message) — deactivate instead |
+| `SYSTEM_ACCOUNT` | 409 | `PATCH`/`DELETE /accounting/accounts/{id}` | A system account can only be renamed |
+| `SELF_DELETE` / `SELF_DEACTIVATE` | 409 | `DELETE`/`PATCH /hr/employees/{id}` | You can't delete or deactivate your own account |
+| `LAST_RBAC_HOLDER` | 409 | `DELETE`/`PATCH /hr/employees/{id}` | No one else could manage roles and permissions |
+| `LAST_BRANCH` | 409 | `DELETE /branches/{id}` | The merchant's only branch |
+| `DUPLICATE` / `DUPLICATE_CODE` | 409 | `PATCH /hr/employees/{id}`, `PATCH /accounting/accounts/{id}` | Email/phone/employee code, or account code, already used (an account code also by a deleted account) |
 
 ### 3.1 Auth
 
@@ -1889,6 +1897,53 @@ The OpenSearch `terms` query was checked read-only on the live index (Cricket: 0
 - Ledger: Dr Inventory / Dr GST Input / Cr Payable, dated 13 Oct.
 - A second import of the same invoice is refused.
 - The screen was driven in Chrome against the same copy.
+
+### 3.54 Several check-ins a day; one lifecycle for every master (`migrations/053`, `054`, 2026-10-17)
+
+**Attendance sessions (053).** Every check-in opens an `attendance_sessions` row carrying its own evidence (location, accuracy, IP, device, terminal, geofence), and the next check-out closes it. An employee can check in again after checking out, any number of times a day.
+
+The day's `attendance` row stays one per employee per day, as the summary:
+- first check-in;
+- last check-out (none while a session is open);
+- `hours_worked` = the sum of the closed sessions, so breaks between sessions don't count.
+
+`recalcDay` rebuilds the summary whenever a session changes, so payroll and every existing read are unchanged. A repeat check-in while checked in does nothing; punches are serialised per employee with a transaction advisory lock, not a unique index, so a check-out forgotten days ago never blocks later check-ins. Responses carry `sessions`, and `GET /hr/attendance/me` adds `open_since`.
+
+HR edits sessions with `PATCH /hr/attendance/sessions/{id}` and adds a missed one with `POST /hr/attendance/{id}/sessions` (both `hr.manage`, a reason required, overlaps refused, audited). The day-level `PATCH` still edits the times of a day with a single session. Existing punches were backfilled as one session each.
+
+**Master lifecycle (054).** Every master answers create / edit / activate-deactivate / delete the same way.
+
+| Master | What was added |
+|---|---|
+| Customers | `DELETE /customers/{id}` (`master_data.delete`) |
+| Suppliers | `DELETE /suppliers/{id}` (`master_data.delete`) |
+| Branches | `DELETE /branches/{id}` (`master_data.delete`). Refused for the last branch or one still holding stock; deactivates its terminals |
+| Employees | `PATCH` takes name, phone, email and status; `DELETE /hr/employees/{id}` (`hr.manage`). Never yourself, never the last role administrator |
+| Chart of accounts | `PATCH /accounting/accounts/{id}` and `DELETE` (`accounting.manage`). System accounts: rename only. Code and type are fixed once posted to. `GET ?status=` |
+| Shifts | `status` column; `PATCH /hr/shifts/{id}` and `DELETE` (`hr.manage`); `GET ?status=` |
+| Attributes | `status` column; `PATCH /attributes/{id}` and `DELETE` (`catalog.manage`). Name and type are fixed once variants use the attribute |
+
+Categories, brands and tax slabs (GST) already had all four.
+
+Every delete goes through `softdelete.MasterDelete`:
+1. the row is locked;
+2. the master's own rules are checked;
+3. the foreign keys pointing at it are counted (`internal/dependencies`, minus the tables in `dependencies.SkipFor`, which belong to the record rather than use it);
+4. the answer is 409 `IN_USE` with the list, or a soft delete into the Recycle Bin (migrations/050 mechanics; restorable).
+
+`GET /dependencies/{entity}/{id}` uses the same skip lists, so the web admin's dialog and the delete always agree.
+
+Uniqueness covers live rows only for branch code and employee email, phone and employee code. Account codes stay fully unique.
+
+POS terminals keep activate/deactivate only: `pos_terminals` has no RLS (PIN login reads it before a tenant is known), so it can't take the soft-delete policy.
+
+**Web admin.** One shared `MasterRowActions` (Edit, Activate/Deactivate with confirmation, Delete with the dependency preflight) is used on customers, suppliers, branches, employees, chart of accounts, shifts and attributes. The attendance register lists each day's sessions with their evidence, Edit per session and "+ Add session". Check-in in the header and on the POS offers "Check in again" after a check-out.
+
+**Verified:**
+- 38 API checks against a copy of the live database.
+- `master-lifecycle.spec.ts` (5 tests) in Chrome on both the live copy and the seed data.
+- Regression: the customers, HR & payroll, promotions, Phase 11 masters, purchase-and-accounting and audit/attendance specs (24 tests) pass. Three pre-existing assertions were made exact, because the new row-action buttons share text with cell names.
+- POS: 52 tests pass, including a check-in-again test.
 
 ## 4. What Phase 0 concretely delivers against this design
 

@@ -74,7 +74,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final me = await api.myAttendance();
       if (!mounted) return;
       setState(() => _me = me);
-      if (!me.doneToday) _locate();
+      _locate();
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (_) {
@@ -149,55 +149,57 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        me.doneToday
-                            ? 'Done for today'
-                            : me.checkedIn
-                                ? 'Checked in since ${_time(me.open!.clockIn)}'
+                        me.checkedIn
+                            ? 'Checked in since ${_time(me.openSince ?? me.open!.clockIn)}'
+                            : me.sessionsToday > 0
+                                ? 'Checked out'
                                 : 'Not checked in yet',
                         key: const Key('attendance-status'),
                         style: theme.textTheme.headlineSmall,
                         textAlign: TextAlign.center,
                       ),
-                      if (me.doneToday)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            '${_time(me.today!.clockIn)} – ${_time(me.today!.clockOut)} · ${me.today!.hoursWorked ?? '0'} h',
+                      if (me.sessionsToday > 0) ...[
+                        const SizedBox(height: 12),
+                        Text('Today · ${me.today!.hoursWorked ?? '0.00'} h worked', textAlign: TextAlign.center, style: theme.textTheme.titleSmall),
+                        const SizedBox(height: 4),
+                        for (final (i, s) in me.today!.sessions.indexed)
+                          Text(
+                            '#${i + 1}  ${_time(s.clockIn)} – ${s.clockOut == null ? 'now' : _time(s.clockOut)}'
+                            '${s.minutes == null ? '' : '  (${s.minutes! ~/ 60}h ${s.minutes! % 60}m)'}',
+                            key: Key('attendance-session-$i'),
                             textAlign: TextAlign.center,
                           ),
-                        ),
-                      const SizedBox(height: 24),
-                      if (!me.doneToday) ...[
-                        ListTile(
-                          leading: _locating
-                              ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
-                              : Icon(_fix?.ok == true ? Icons.location_on : Icons.location_off_outlined),
-                          title: Text(_locating
-                              ? 'Getting the location…'
-                              : _fix?.ok == true
-                                  ? 'Location found (±${_fix!.accuracyM!.round()} m)'
-                                  : (_fix?.problem ?? '')),
-                          subtitle: Text(me.geofenceBranch != null
-                              ? 'Checked against ${me.geofenceBranch}\'s ${me.geofenceRadiusM} m area. This terminal and its network address are recorded too.'
-                              : 'This terminal and its network address are recorded with the time.'),
-                          trailing: !_locating && _fix?.ok != true ? TextButton(onPressed: _locate, child: const Text('Retry')) : null,
-                        ),
-                        const SizedBox(height: 16),
-                        FilledButton.icon(
-                          key: const Key('attendance-punch'),
-                          onPressed: _busy || _locating || !me.allowPos ? null : _punch,
-                          icon: _busy
-                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                              : Icon(me.checkedIn ? Icons.logout : Icons.login),
-                          label: Text(me.checkedIn ? 'Check out' : 'Check in'),
-                          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
-                        ),
-                        if (!me.allowPos)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 8),
-                            child: Text('Your company has turned off checking in from the POS.', textAlign: TextAlign.center),
-                          ),
                       ],
+                      const SizedBox(height: 24),
+                      ListTile(
+                        leading: _locating
+                            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                            : Icon(_fix?.ok == true ? Icons.location_on : Icons.location_off_outlined),
+                        title: Text(_locating
+                            ? 'Getting the location…'
+                            : _fix?.ok == true
+                                ? 'Location found (±${_fix!.accuracyM!.round()} m)'
+                                : (_fix?.problem ?? '')),
+                        subtitle: Text(me.geofenceBranch != null
+                            ? 'Checked against ${me.geofenceBranch}\'s ${me.geofenceRadiusM} m area. This terminal and its network address are recorded too.'
+                            : 'This terminal and its network address are recorded with the time.'),
+                        trailing: !_locating && _fix?.ok != true ? TextButton(onPressed: _locate, child: const Text('Retry')) : null,
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        key: const Key('attendance-punch'),
+                        onPressed: _busy || _locating || !me.allowPos ? null : _punch,
+                        icon: _busy
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : Icon(me.checkedIn ? Icons.logout : Icons.login),
+                        label: Text(me.checkedIn ? 'Check out' : (me.sessionsToday > 0 ? 'Check in again' : 'Check in')),
+                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+                      ),
+                      if (!me.allowPos)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: Text('Your company has turned off checking in from the POS.', textAlign: TextAlign.center),
+                        ),
                       if (_error != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),

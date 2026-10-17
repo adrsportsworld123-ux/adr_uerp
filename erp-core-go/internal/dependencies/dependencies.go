@@ -127,6 +127,19 @@ var entities = map[string]string{
 	"product":   "products",
 	"promotion": "promotions",
 	"coupon":    "coupons",
+	"employee":  "users",
+	"account":   "chart_of_accounts",
+	"shift":     "shifts",
+	"attribute": "attributes",
+}
+
+// SkipFor: referencing tables that belong to the record rather than use
+// it, per entity — the same lists the masters' DELETE handlers pass
+// (internal/httpserver/masters.go), so the dialog and the delete agree.
+var SkipFor = map[string][]string{
+	"branch":    {"stock_levels", "pos_terminals", "branch_print_settings", "branch_geofences", "user_branches"},
+	"employee":  {"refresh_tokens", "password_history", "password_reset_tokens", "user_roles", "user_branches"},
+	"attribute": {"attribute_values", "category_attributes"},
 }
 
 type Handler struct {
@@ -164,7 +177,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		if entity == "product" {
 			deps, err = productDependencies(ctx, tx, id)
 		} else {
-			deps, err = Count(ctx, tx, table, []string{id})
+			deps, err = Count(ctx, tx, table, []string{id}, SkipFor[entity]...)
 		}
 		return err
 	})

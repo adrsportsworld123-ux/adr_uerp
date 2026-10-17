@@ -39,11 +39,19 @@ var binEntities = map[string]binEntity{
 	"report_template":  {Table: "report_templates", Label: "t.name"},
 	"quotation":        {Table: "quotations", Label: "t.quote_number"},
 	"journal_voucher":  {Table: "journal_vouchers", Label: "t.voucher_number"},
+	"customer":         {Table: "customers", Label: "COALESCE(t.name, '') || COALESCE(' · ' || t.phone, '')"},
+	"supplier":         {Table: "suppliers", Label: "t.name"},
+	"branch":           {Table: "branches", Label: "t.name || ' (' || t.code || ')'"},
+	"employee":         {Table: "users", Label: "t.name || COALESCE(' · ' || t.employee_code, '')"},
+	"account":          {Table: "chart_of_accounts", Label: "t.code || ' ' || t.name"},
+	"shift":            {Table: "shifts", Label: "t.name"},
+	"attribute":        {Table: "attributes", Label: "t.name"},
 }
 
 // binOrder fixes the listing order of the "all entities" view.
 var binOrder = []string{"category", "brand", "tax_slab", "attribute_value", "price_list", "price_rule",
-	"scheduled_change", "promotion", "coupon", "role", "report_template", "quotation", "journal_voucher"}
+	"scheduled_change", "promotion", "coupon", "role", "report_template", "quotation", "journal_voucher",
+	"customer", "supplier", "branch", "employee", "account", "shift", "attribute"}
 
 type Handler struct {
 	DB *db.DB
@@ -147,7 +155,7 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not restore the record")
 	default:
-		if e.Table == "roles" {
+		if e.Table == "roles" || e.Table == "users" || e.Table == "branches" {
 			authn.InvalidateScopes()
 		}
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "restored"})

@@ -751,6 +751,7 @@ export interface CatalogAttribute {
   attribute_id: string;
   name: string;
   input_type: "select" | "text" | "number";
+  status?: string; // active | inactive (migrations/054)
   values: AttributeValue[];
 }
 
@@ -904,6 +905,20 @@ export interface AttendanceRecord {
   corrected_by?: string;
   corrected_at?: string;
   correction_reason?: string;
+  // Every check-in/check-out pair of the day, oldest first (migrations/053);
+  // the fields above summarise them.
+  sessions: AttendanceSession[];
+}
+
+export interface AttendanceSession {
+  id: string;
+  clock_in: string;
+  clock_out?: string;
+  minutes?: number;
+  clock_in_evidence: PunchEvidence;
+  clock_out_evidence: PunchEvidence;
+  corrected_at?: string;
+  correction_reason?: string;
 }
 
 export interface AttendanceSettings {
@@ -926,6 +941,8 @@ export interface Geofence {
 
 export interface MyAttendance {
   open: AttendanceRecord | null;
+  open_session_id?: string;
+  open_since?: string;
   today: AttendanceRecord | null;
   settings: AttendanceSettings;
   geofence: Geofence | null;
@@ -994,6 +1011,7 @@ export interface Shift {
   name: string;
   start_time: string;
   end_time: string;
+  status: string;
 }
 
 export interface SalaryStructure {
