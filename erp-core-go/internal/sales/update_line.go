@@ -61,11 +61,15 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 			return errOrderNotEditable
 		}
 
+		byHand, err := h.discountsNeedReapplying(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
 		cleared, err := clearDiscountLayers(ctx, tx, orderID)
 		if err != nil {
 			return err
 		}
-		resp.DiscountsCleared = cleared
+		resp.DiscountsCleared = cleared && byHand
 
 		var variantID string
 		var oldQuantity float64
@@ -157,7 +161,10 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		return recalcOrderTotals(ctx, tx, orderID, &resp)
+		if err := recalcOrderTotals(ctx, tx, orderID, &resp); err != nil {
+			return err
+		}
+		return h.refreshPromotions(ctx, tx, orderID, claims.UserID, &resp)
 	})
 
 	switch {

@@ -37,6 +37,33 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   String? _message;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoApplyPromotions());
+  }
+
+  /// Opening the sheet applies every eligible promotion (best price per
+  /// line, internal/promotions/apply.go) before money is taken. The
+  /// server call is a re-evaluation, so opening the sheet again never
+  /// stacks a second discount. "Complete sale" waits for it (_working).
+  /// Says so only when the total dropped; a failure stays quiet — the
+  /// "Apply promotions" button is still there to retry.
+  Future<void> _autoApplyPromotions() async {
+    final session = context.read<AppSession>();
+    final order = session.currentOrder;
+    if (order == null || order.lines.isEmpty || session.isCurrentOrderLocal || session.offlineMode) return;
+    final before = double.tryParse(order.discountTotal) ?? 0;
+    setState(() => _working = true);
+    final ok = await session.applyPromotions();
+    if (!mounted) return;
+    final after = double.tryParse(session.currentOrder?.discountTotal ?? '') ?? before;
+    setState(() {
+      _working = false;
+      if (ok && after > before + 0.004) _message = 'Promotions applied: ${formatRupeesNum(after - before)} off';
+    });
+  }
+
+  @override
   void dispose() {
     _tenderedController.dispose();
     _referenceController.dispose();

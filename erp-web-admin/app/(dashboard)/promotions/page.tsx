@@ -523,6 +523,9 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
                 <SelectItem value="stackable">Stackable</SelectItem>
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              Each item gets the offer that takes the most off it. Stackable offers combine with each other; exclusive ones never combine.
+            </p>
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="promoStarts">Starts</Label>

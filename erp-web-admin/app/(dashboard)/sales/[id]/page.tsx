@@ -5,6 +5,11 @@
 // discounts, returns, the ledger entries it caused and its audit trail.
 // The back office's after-sale actions run on the same rules as the till:
 // - Void: sales.void, a reason, only a completed sale with no returns.
+// - Void held order / Release cart (erp-core-go void_held.go): an unpaid
+//   order is dropped — its reserved items go back on sale; its own cashier
+//   may, anyone else needs sales.void, and another cashier's cart touched
+//   in the last 15 minutes is refused (the server decides all of this, so
+//   the button isn't pre-disabled).
 // - Return / refund: the merchant's return policy (manager approval when
 //   set, the return window), proportional refund, optional restock.
 // - Correct a payment method (FRD §3 "Bill Modification"): a manager's
@@ -86,7 +91,9 @@ export default function SaleDetailPage() {
   if (!sale) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   const completed = sale.status === "finalized" || sale.status === "partially_refunded" || sale.status === "refunded";
-  const canVoid = sale.status === "finalized" && sale.returns.length === 0;
+  const held = sale.status === "held";
+  const unsold = held || sale.status === "cart";
+  const canVoid = (sale.status === "finalized" && sale.returns.length === 0) || unsold;
   const canReturn = sale.status === "finalized" || sale.status === "partially_refunded";
 
   return (
@@ -116,11 +123,17 @@ export default function SaleDetailPage() {
             </Button>
             <Button
               variant="outline"
-              disabled={!canVoid || !can("sales.void")}
-              title={!can("sales.void") ? missingPermissionHint("sales.void") : !canVoid ? "Only a completed sale with no returns can be voided" : undefined}
+              disabled={!canVoid || (!unsold && !can("sales.void"))}
+              title={
+                !unsold && !can("sales.void")
+                  ? missingPermissionHint("sales.void")
+                  : !canVoid
+                    ? "Only a completed sale with no returns, a held order or an open cart can be voided"
+                    : undefined
+              }
               onClick={() => setVoiding(true)}
             >
-              <Ban /> Void
+              <Ban /> {held ? "Void held order" : sale.status === "cart" ? "Release cart" : "Void"}
             </Button>
           </>
         }
@@ -323,13 +336,21 @@ export default function SaleDetailPage() {
 }
 
 function VoidDialog({ sale, onClose, onDone }: { sale: SaleDetail; onClose: () => void; onDone: () => void }) {
+  const held = sale.status === "held";
+  const cart = sale.status === "cart";
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit() {
     setBusy(true);
     try {
-      await api.post(`/api/v1/sales/orders/${sale.order_id}/void`, { reason: reason.trim() });
-      toast.success(`Voided ${sale.order_number}`);
+      await api.post(`/api/v1/sales/orders/${sale.order_id}/${held ? "void-held" : cart ? "release" : "void"}`, { reason: reason.trim() });
+      toast.success(
+        held
+          ? `Held order ${sale.order_number} voided — its items are back on sale`
+          : cart
+            ? `Cart ${sale.order_number} released — its items are back on sale`
+            : `Voided ${sale.order_number}`,
+      );
       onClose();
       onDone();
     } catch (e) {
@@ -341,15 +362,19 @@ function VoidDialog({ sale, onClose, onDone }: { sale: SaleDetail; onClose: () =
     <Modal
       open
       onOpenChange={(o) => !o && onClose()}
-      title={`Void ${sale.order_number}?`}
-      description="Voiding reverses the whole sale: stock goes back and the ledger entry is reversed. Use a return for part of a sale."
+      title={held ? `Void held order ${sale.order_number}?` : cart ? `Release cart ${sale.order_number}?` : `Void ${sale.order_number}?`}
+      description={
+        held || cart
+          ? `Nothing was sold: the items it reserved go back on sale, and any coupon or loyalty points it used are given back. It ${held ? "can't be recalled" : "can't be continued"} afterwards.`
+          : "Voiding reverses the whole sale: stock goes back and the ledger entry is reversed. Use a return for part of a sale."
+      }
       footer={
         <>
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="destructive" disabled={busy || !reason.trim()} onClick={submit}>
-            Void sale
+            {held ? "Void held order" : cart ? "Release cart" : "Void sale"}
           </Button>
         </>
       }

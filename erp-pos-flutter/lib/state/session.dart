@@ -772,6 +772,29 @@ class AppSession extends ChangeNotifier {
     }
   }
 
+  /// Voids a held cart (online only: it releases server-side stock holds).
+  /// False with [lastError] set when it can't.
+  Future<bool> voidHeldOrder(String orderId, String reason) async {
+    if (offlineMode) {
+      _lastError = 'Not available offline';
+      notifyListeners();
+      return false;
+    }
+    _lastError = null;
+    try {
+      await api.voidHeldOrder(orderId: orderId, reason: reason);
+      return true;
+    } on ApiException catch (e) {
+      _lastError = e.message;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _lastError = 'Could not reach the server';
+      notifyListeners();
+      return false;
+    }
+  }
+
   /// Recalls a held cart back into the active one. Refuses if there's
   /// already an unsaved live cart in progress — recalling would otherwise
   /// silently orphan it — the cashier holds or finishes it first.

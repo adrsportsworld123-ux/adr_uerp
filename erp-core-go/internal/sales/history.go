@@ -45,8 +45,11 @@ type historyOrder struct {
 }
 
 // historyStatuses are the states a history list can show; cart and held
-// orders are work in progress, not history.
-var historyStatuses = map[string]bool{"finalized": true, "voided": true, "refunded": true, "partially_refunded": true}
+// orders are work in progress, not history — listed only when asked for
+// with status=open (both together), so a stuck cart can be found and
+// released (Release). The summary counts finished sales only, so an open
+// order never reaches its totals.
+var historyStatuses = map[string]bool{"finalized": true, "voided": true, "refunded": true, "partially_refunded": true, "held_voided": true, "open": true}
 
 // historyFilter is shared by the list and the summary so both always
 // describe the same set of orders.
@@ -76,11 +79,12 @@ const historyWhere = `
 	JOIN pos_terminals t ON t.id = so.pos_terminal_id
 	JOIN users u ON u.id = so.cashier_id
 	LEFT JOIN customers c ON c.id = so.customer_id
-	WHERE so.status <> 'cart' AND so.status <> 'held'
+	WHERE (so.status NOT IN ('cart', 'held') OR $4 = 'open')
+	  AND (so.status <> 'held_voided' OR $4 = 'held_voided')
 	  AND ($1 = '' OR so.pos_terminal_id::text = $1)
 	  AND ($2 = '' OR so.branch_id::text = $2)
 	  AND ($3 = '' OR so.cashier_id::text = $3)
-	  AND ($4 = '' OR so.status = $4)
+	  AND ($4 = '' OR so.status = $4 OR ($4 = 'open' AND so.status IN ('cart', 'held')))
 	  AND ($5 = '' OR EXISTS (SELECT 1 FROM payments p WHERE p.sales_order_id = so.id AND p.method = $5))
 	  AND ($6 = '' OR so.order_number ILIKE '%' || $6 || '%' OR c.name ILIKE '%' || $6 || '%' OR c.phone ILIKE '%' || $6 || '%')
 	  AND ($7 = '' OR (COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone)::date >= $7::date)
@@ -97,7 +101,7 @@ func (f historyFilter) validate(w http.ResponseWriter) bool {
 		return false
 	}
 	if f.status != "" && !historyStatuses[f.status] {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be finalized, voided, refunded or partially_refunded")
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "status must be finalized, voided, refunded, partially_refunded, held_voided or open")
 		return false
 	}
 	for _, d := range []string{f.from, f.to} {

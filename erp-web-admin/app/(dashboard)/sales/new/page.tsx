@@ -6,15 +6,22 @@
 // tax, promotions, credit limits, open-price rules and stock reservation are
 // the same code and give the same totals to the paisa. Needs
 // sales.backoffice; shifts don't apply to the back office.
+//
+// Promotions apply on the server as items go in (erp-core-go
+// promotions.Reapply, best price per line), so each line shows its offer.
+// "Discard sale" releases the cart (POST .../release): its stock goes back
+// on sale at once instead of sitting reserved; leaving the page with items
+// in the cart asks first.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Minus, Plus, Trash2, UserRound, X } from "lucide-react";
+import { Ban, Loader2, Minus, Plus, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
 import { Branch, CartOrder, Customer } from "@/lib/types";
 import { METHOD_LABEL, qty, rupees } from "@/lib/format";
 import { missingPermissionHint, usePermissions } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/data/page-header";
@@ -34,7 +41,8 @@ export default function NewSalePage() {
   const { can } = usePermissions();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState(SEED_BRANCH_ID);
-  const [cartKey] = useState(newKey); // a retried "open cart" reuses the same cart
+  const [cartKey, setCartKey] = useState(newKey); // a retried "open cart" reuses the same cart; a new one after a discard
+  const [discarding, setDiscarding] = useState(false);
   const [order, setOrder] = useState<CartOrder | null>(null);
   const [picked, setPicked] = useState<VariantOption | null>(null);
   const [addQty, setAddQty] = useState("1");
@@ -78,6 +86,29 @@ export default function NewSalePage() {
 
   const allowed = can("sales.backoffice");
   const oid = order?.order_id;
+  const unfinished = !!order?.lines?.length;
+
+  // Leaving with items in the cart would leave their stock reserved.
+  useEffect(() => {
+    if (!unfinished) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unfinished]);
+
+  const discard = () =>
+    run(async () => {
+      if (!oid) return;
+      await api.post(`/api/v1/sales/orders/${oid}/release`, { reason: "Discarded from the back-office New sale page" });
+      setDiscarding(false);
+      setOrder(null);
+      setCustomer(null);
+      setPayments([{ method: "cash", amount: "", reference: "" }]);
+      setDiscount("");
+      setDiscountReason("");
+      setCartKey(newKey());
+      toast.success("Sale discarded — its items are back on sale");
+    });
 
   async function run<T>(fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(true);
@@ -208,7 +239,34 @@ export default function NewSalePage() {
       <PageHeader
         title="New sale"
         description="Rung up in the back office with the till's own rules: prices, tax, promotions, credit limits and stock are the same code."
+        actions={
+          oid ? (
+            <Button variant="outline" disabled={busy} onClick={() => setDiscarding(true)}>
+              <Ban /> Discard sale
+            </Button>
+          ) : undefined
+        }
       />
+      {discarding && (
+        <Modal
+          open
+          onOpenChange={(o) => !o && setDiscarding(false)}
+          title="Discard this sale?"
+          description="Nothing is sold: the items go back on sale and the cart is kept only as a released record."
+          footer={
+            <>
+              <Button variant="outline" onClick={() => setDiscarding(false)}>
+                Keep selling
+              </Button>
+              <Button variant="destructive" disabled={busy} onClick={discard}>
+                Discard sale
+              </Button>
+            </>
+          }
+        >
+          {null}
+        </Modal>
+      )}
       {!allowed && <p className="text-sm text-muted-foreground">{missingPermissionHint("sales.backoffice")}</p>}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -289,6 +347,11 @@ export default function NewSalePage() {
                         {l.sku}
                         {l.open_price ? " · open price" : ""}
                       </div>
+                      {Number(l.discount_amount) > 0 && (
+                        <div className="text-xs font-medium text-pay" data-testid="line-discount">
+                          Offer −{rupees(l.discount_amount)}
+                        </div>
+                      )}
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex items-center justify-center gap-1">

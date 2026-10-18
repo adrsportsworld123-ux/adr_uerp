@@ -174,6 +174,8 @@ function SalesView() {
               <option value="partially_refunded">Partly refunded</option>
               <option value="refunded">Refunded</option>
               <option value="voided">Voided</option>
+              <option value="open">Open carts &amp; held</option>
+              <option value="held_voided">Released (unsold)</option>
             </select>
             <select aria-label="Channel" value={f.channel} onChange={(e) => setFilter("channel", e.target.value)} className={selectClass}>
               <option value="">All channels</option>

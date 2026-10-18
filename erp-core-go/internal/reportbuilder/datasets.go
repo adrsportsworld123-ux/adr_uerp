@@ -92,7 +92,7 @@ var Datasets = []Dataset{
 			LEFT JOIN pos_terminals t ON t.id = so.pos_terminal_id
 			LEFT JOIN customers c ON c.id = so.customer_id
 			LEFT JOIN users u ON u.id = so.cashier_id`,
-		where: "so.status <> 'cart'",
+		where: "so.status NOT IN ('cart', 'held_voided')", // a dropped hold was never a sale (migrations/055)
 		Fields: []Field{
 			{"date", "Date", TDate, "(" + saleTime + " " + istDate},
 			{"month", "Month", TText, "to_char(" + saleTime + " " + istMonth},

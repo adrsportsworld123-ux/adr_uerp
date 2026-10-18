@@ -209,3 +209,19 @@ func clearDiscountLayers(ctx context.Context, tx pgx.Tx, orderID string) (bool, 
 	}
 	return true, nil
 }
+
+// ClearDiscountLayers is clearDiscountLayers for internal/promotions,
+// which re-plans a cart's promotions from scratch when they are its only
+// layers: every line back to undiscounted, every layer row removed.
+func ClearDiscountLayers(ctx context.Context, tx pgx.Tx, orderID string) error {
+	_, err := clearDiscountLayers(ctx, tx, orderID)
+	return err
+}
+
+// LoadOrder returns the order's current snapshot, the shape every cart
+// endpoint responds with.
+func LoadOrder(ctx context.Context, tx pgx.Tx, orderID string) (orderResponse, error) {
+	var resp orderResponse
+	err := loadOrder(ctx, tx, orderID, &resp)
+	return resp, err
+}

@@ -43,6 +43,7 @@ String statusLabel(String status) => switch (status) {
       'refunded' => 'Refunded',
       'partially_refunded' => 'Partly refunded',
       'held' => 'On hold',
+      'held_voided' => 'Released',
       'cart' => 'In progress',
       _ => status,
     };

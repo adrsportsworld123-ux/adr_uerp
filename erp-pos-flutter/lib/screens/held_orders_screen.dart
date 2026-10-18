@@ -14,6 +14,10 @@ import '../state/session.dart';
 ///
 /// Pops with the recalled order's `unavailableLines` (possibly empty) on a
 /// successful recall, or nothing (`null`) if the cashier backs out.
+///
+/// Each row can also be voided (internal/sales/void_held.go): a reason is
+/// required; its stock holds go back on sale at once. Voiding another
+/// cashier's hold needs sales.void — the server says so if it's missing.
 class HeldOrdersScreen extends StatefulWidget {
   const HeldOrdersScreen({super.key});
 
@@ -58,6 +62,21 @@ class _HeldOrdersScreenState extends State<HeldOrdersScreen> {
     Navigator.of(context).pop(result.unavailableLines);
   }
 
+  Future<void> _void(HeldOrderSummary order) async {
+    if (_busy) return;
+    final reason = await showDialog<String>(context: context, builder: (_) => _VoidHeldDialog(order: order));
+    if (reason == null || !mounted) return;
+    setState(() => _busy = true);
+    final session = context.read<AppSession>();
+    final ok = await session.voidHeldOrder(order.orderId, reason);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? 'Held order ${order.orderNumber} voided — its items are back on sale' : (session.lastError ?? 'Could not void'))),
+    );
+    if (ok) _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -82,12 +101,79 @@ class _HeldOrdersScreenState extends State<HeldOrdersScreen> {
                             '${o.lineCount} item(s)',
                           ].join(' · '),
                         ),
-                        trailing: Text('₹${o.grandTotal}'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('₹${o.grandTotal}'),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              key: Key('void-held-${o.orderId}'),
+                              tooltip: 'Void this held order',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: _busy ? null : () => _void(o),
+                            ),
+                          ],
+                        ),
                         onTap: () => _recall(o),
                       );
                     },
                   ),
                 ),
+    );
+  }
+}
+
+/// Asks why the hold is being dropped; pops with the reason, or null.
+class _VoidHeldDialog extends StatefulWidget {
+  final HeldOrderSummary order;
+
+  const _VoidHeldDialog({required this.order});
+
+  @override
+  State<_VoidHeldDialog> createState() => _VoidHeldDialogState();
+}
+
+class _VoidHeldDialogState extends State<_VoidHeldDialog> {
+  final _reason = TextEditingController();
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reason = _reason.text.trim();
+    return AlertDialog(
+      title: Text('Void held order ${widget.order.orderNumber}?'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("${widget.order.lineCount} item(s) · ₹${widget.order.grandTotal}. The items go back on sale; it can't be recalled afterwards."),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('void-held-reason'),
+              controller: _reason,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Reason', hintText: 'e.g. Customer left', border: OutlineInputBorder()),
+              onChanged: (_) => setState(() {}),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          key: const Key('void-held-confirm'),
+          style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+          onPressed: reason.isEmpty ? null : () => Navigator.pop(context, reason),
+          child: const Text('Void'),
+        ),
+      ],
     );
   }
 }

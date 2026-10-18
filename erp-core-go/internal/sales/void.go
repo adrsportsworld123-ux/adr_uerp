@@ -105,7 +105,7 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if _, err := tx.Exec(ctx, `
-			UPDATE sales_orders SET status = 'voided', void_reason = $1 WHERE id = $2`, req.Reason, orderID); err != nil {
+			UPDATE sales_orders SET status = 'voided', void_reason = $1, voided_at = now(), voided_by = $3::uuid WHERE id = $2`, req.Reason, orderID, claims.UserID); err != nil {
 			return err
 		}
 

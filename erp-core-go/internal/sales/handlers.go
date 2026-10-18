@@ -51,6 +51,11 @@ type Handler struct {
 	// safe default there, so a zero-value Handler in a test/tool never
 	// silently un-extends a hold's reservations.
 	HoldDurationMinutes int
+	// OnCartChange is optional (nil: carts are left as they are). Wired
+	// to promotions.Reapply, it re-plans the cart's promotions after a
+	// line is added, changed or removed and after a customer is attached
+	// (cart_change.go), so the discount shows as items go in.
+	OnCartChange CartChangeHook
 }
 
 type orderResponse struct {
@@ -300,13 +305,18 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if override == nil {
-			resp, err = AddLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity)
-			return err
+			if resp, err = AddLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity); err != nil {
+				return err
+			}
+		} else {
+			if resp, err = addLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity, override); err != nil {
+				return err
+			}
+			if err := auditOpenPriceLine(ctx, tx, orderID, req.VariantID, claims.UserID, *override); err != nil {
+				return err
+			}
 		}
-		if resp, err = addLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity, override); err != nil {
-			return err
-		}
-		return auditOpenPriceLine(ctx, tx, orderID, req.VariantID, claims.UserID, *override)
+		return h.refreshPromotions(ctx, tx, orderID, claims.UserID, &resp)
 	})
 
 	var ope *openPriceError
@@ -554,6 +564,10 @@ func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
 
 		// Undo the cart's discounts first: they were sized against the
 		// cart with this line in it (see clearDiscountLayers).
+		byHand, err := h.discountsNeedReapplying(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
 		cleared, err := clearDiscountLayers(ctx, tx, orderID)
 		if err != nil {
 			return err
@@ -567,8 +581,8 @@ func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
 		if err := recalcOrderTotals(ctx, tx, orderID, &resp); err != nil {
 			return err
 		}
-		resp.DiscountsCleared = cleared
-		return nil
+		resp.DiscountsCleared = cleared && byHand
+		return h.refreshPromotions(ctx, tx, orderID, claims.UserID, &resp)
 	})
 
 	switch {

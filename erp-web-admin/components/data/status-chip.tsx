@@ -27,6 +27,8 @@ const statusTone: Record<string, Tone> = {
   discontinued: "muted",
   pending: "warn",
   held: "info",
+  held_voided: "muted",
+  cart: "info",
   partially_paid: "warn",
   unpaid: "warn",
   submitted: "warn",

@@ -76,6 +76,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	srch := &search.Handler{DB: database, Client: searchClient}
 	cust := &customers.Handler{DB: database}
 	promo := &promotions.Handler{DB: database}
+	orders.OnCartChange = promotions.Reapply
 	gstH := &gst.Handler{DB: database}
 	auditH := &audit.Handler{DB: database}
 	hrH := &hr.Handler{DB: database}
@@ -280,6 +281,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/sales/orders/{id}/checkout", orders.Checkout)
 			protected.With(authn.RequirePermission(database, "sales.void")).
 				Post("/sales/orders/{id}/void", orders.Void)
+			// A held order: its own cashier, or sales.void (checked in-handler).
+			protected.Post("/sales/orders/{id}/void-held", orders.VoidHeld)
+			protected.Post("/sales/orders/{id}/release", orders.Release)
 			// Phase 13 returns: any cashier may start one; whether a manager
 			// must approve is the merchant's setting (sales_settings).
 			// Phase 14: the back office's full view of a sale, and its payment-method correction.

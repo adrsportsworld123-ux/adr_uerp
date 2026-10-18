@@ -58,8 +58,8 @@ func (h *Handler) AttachCustomer(w http.ResponseWriter, r *http.Request) {
 	var resp attachCustomerResponse
 	resp.OrderID = orderID
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var orderExists string
-		if err := tx.QueryRow(ctx, `SELECT id FROM sales_orders WHERE id = $1`, orderID).Scan(&orderExists); err != nil {
+		var orderStatus string
+		if err := tx.QueryRow(ctx, `SELECT status FROM sales_orders WHERE id = $1`, orderID).Scan(&orderStatus); err != nil {
 			return err
 		}
 
@@ -83,6 +83,10 @@ func (h *Handler) AttachCustomer(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		resp.CustomerID = customerID
+		// A customer's segment can bring a promotion in (target_segment).
+		if orderStatus == "cart" {
+			return h.runCartHook(ctx, tx, orderID, claims.UserID)
+		}
 		return nil
 	})
 

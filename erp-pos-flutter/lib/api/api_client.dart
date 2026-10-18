@@ -1604,6 +1604,19 @@ class ApiClient {
     );
   }
 
+  /// Drops a held order for good (erp-core-go internal/sales/void_held.go):
+  /// its stock holds are released and any coupon/points given back; the
+  /// order is kept as 'held_voided'. The cashier who held it may do this;
+  /// anyone else needs sales.void (403 otherwise).
+  Future<void> voidHeldOrder({required String orderId, required String reason}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/void-held'),
+      headers: _authHeaders,
+      body: jsonEncode({'reason': reason}),
+    );
+    _decode(resp);
+  }
+
   Future<List<HeldOrderSummary>> listHeldOrders(String branchId) async {
     final uri = Uri.parse('$baseUrl/api/v1/sales/orders/held').replace(queryParameters: {'branch_id': branchId});
     final resp = await _http.get(uri, headers: _authHeaders);

@@ -219,6 +219,9 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `ATTENDANCE_EXISTS` | 409 | `POST /hr/attendance/mark` | The employee already has a row that day; correct it with `PATCH /hr/attendance/{id}` |
 | `IMPORT_INVALID` | 400 | `POST /purchase/imports/commit` | The invoice has errors (unknown category, missing MRP, totals off by ₹1 or more, already imported…); `details.preview` is the full preview with each error on its line |
 | `IMPORT_CONFLICT` | 409 | `POST /purchase/imports/commit` | Creating a product collided (a barcode or SKU taken since the preview); nothing was saved |
+| `ORDER_NOT_HELD` | 409 | `POST /sales/orders/{id}/void-held` | Only a held order can be voided this way (a completed sale uses `/void`) |
+| `ORDER_NOT_RELEASABLE` | 409 | `POST /sales/orders/{id}/release` | Only an open cart or a held order can be released (a completed sale is voided) |
+| `CART_IN_USE` | 409 | `POST /sales/orders/{id}/release` | Another cashier's cart was worked on within the 15-minute reservation window |
 | `ATTENDANCE_HAS_SESSIONS` | 409 | `PATCH /hr/attendance/{id}` | The day has several check-in sessions; correct their times with `PATCH /hr/attendance/sessions/{id}` |
 | `SESSION_OVERLAP` | 409 | `PATCH /hr/attendance/sessions/{id}`, `POST /hr/attendance/{id}/sessions`, `PATCH /hr/attendance/{id}` | The times overlap another session of the same employee |
 | `IN_USE` | 409 | every master `DELETE` | Something still uses the record (`details.dependencies`, or a rule in the message) — deactivate instead |
@@ -1964,6 +1967,92 @@ Quantities come from Postgres on every request, never from the search index, whi
 - On a copy of the live database: search and pricing quantities match `stock_levels`.
 - Chrome: the brand and category filters narrow the search, the Available column shows, and the price dialog opens.
 - Seed regression: the pricing (override, bulk), tax-inclusive, barcode, products and session-expiry specs pass.
+
+### 3.56 Voiding a held order (`internal/sales/void_held.go`, `migrations/055`, 2026-10-17)
+
+`POST /sales/orders/{id}/void-held {reason}` drops a parked cart for good.
+
+**What it does.** Nothing was sold, so nothing is reversed:
+- active stock reservations are released, so the items are sellable at once rather than when the hold expires;
+- batch allocations are released;
+- any coupon use and redeemed loyalty points are given back (the statements `clearDiscountLayers` uses);
+- the order becomes `held_voided`, with `void_reason`, `voided_at` and `voided_by`;
+- its lines and totals stay as the record;
+- an `audit_logs` entry carries the reason.
+
+**Who may.** The cashier who held it, or anyone with `sales.void`, checked in the handler. A reason is required. A second void, or a recall afterwards, is refused.
+
+**Why its own status.** `voided` means a reversed sale, and is counted by sales history, the shift X/Z void count and the AI per-cashier void-rate anomaly. A dropped hold would distort all three. So `held_voided` is listed in sales history only with `?status=held_voided`, and the report builder's Sales dataset leaves it out. Finalized-sale voids now also stamp `voided_at`/`voided_by`.
+
+**Clients.**
+- POS: Held Orders → a delete button per row, with a required-reason dialog. Tapping a row still recalls it.
+- Web admin: on a held order's sale page, "Void held order" (the server decides permission); a "Hold voided" filter on Sales.
+
+**Verified** on the seed data: 14 API checks (reservations released, 403 for another cashier without `sales.void`, own-cashier void, double void, recall refused, history and summary untouched, audit entry); the POS widget test; and the `void-held-order.spec.ts` and Phase 14 admin-sales browser specs.
+
+**Ops script.** `scripts/release-order.ps1 -OrderId <id> -Reason "…" [-By <email>] [-Commit]` (with `release-order.sql`) does the same release for a stuck open cart or held order that the POS can no longer reach. It runs as a dry run unless `-Commit` is given. It refuses an order that isn't `cart`/`held`, or one with a captured payment. It writes the audit entry with the `internal/audit/log.go` checksum formula, so `GET /audit-logs/verify` stays valid.
+
+### 3.57 Category promotions include sub-categories (`internal/promotions/apply.go`, 2026-10-17)
+
+The bug: a category-level promotion matched only products filed directly under its category. Products usually sit under a leaf category (Cricket > Cricket Pad), so a promotion on "Cricket" missed 101 of its 103 products, even though the web form says "Includes its sub-categories".
+
+The fix: `loadEligiblePromotionDefs` now loads each category promotion's subtree with `db.CategorySubtree`, the same helper product search and pricing filters use. `matchLines` matches a line whose category is anywhere in that subtree. Product-level and order-level promotions are unchanged.
+
+**Verified:** `apply_test.go`. Also checked on a copy of the live data: a cart with a Cricket Pad item, a Cricket item and a Footwear item got 30% off the first two and nothing off the third.
+
+### 3.58 Best price per line; promotions apply when the payment sheet opens (2026-10-17)
+
+**Best price per line** (`planPromotions`). The old rule: when any exclusive promotion was eligible, only the single largest one applied to the whole order. So "Cricket 30%" beat "Cricket Pad 40%" and the pad was charged at 30%. Now:
+1. Each promotion is evaluated on all the lines it matches, and each line's share of its discount is worked out pro rata.
+2. Each line goes to the exclusive promotion with the largest share for it. When the stackable promotions' combined share for a line is larger, the line goes to them instead.
+3. On a tie, the more specific promotion wins: a product promotion beats a category one, a narrower category beats a wider one, and any of them beats an order-wide promotion.
+4. Each promotion is re-evaluated on the lines it won. One that no longer qualifies there (a volume tier or BOGO set now short) is dropped and the plan is remade without it, so its lines fall back to their next-best offer.
+
+Each promotion's discount is still one `sales_order_discounts` layer, applied only to the lines it won.
+
+**Idempotent.** `POST /sales/orders/{id}/promotions/apply` is now a re-evaluation; before, each call added another layer, so calling it twice took 30% and then 30% of the rest.
+- When promotions are the cart's only discounts, they are re-planned from the undiscounted cart. Nothing is written when the plan is unchanged (the response carries `unchanged: true`). Otherwise the promotion layers are cleared and the new plan applied, which picks up a customer attached since, or a promotion that started or ended.
+- When a coupon, manual or loyalty discount sits on top of applied promotions, the cart is left exactly as it is. A line edit already clears every layer (`clearDiscountLayers`), so the next call starts over.
+
+**POS.** The payment sheet calls apply when it opens, for a server-backed cart while online. "Complete sale" waits for it to finish. The cashier sees "Promotions applied: ₹X off" only when the total dropped; a failure stays quiet, and the **Apply promotions** button is still there to retry. In the web admin, the promotion form's Stacking field explains the best-price rule.
+
+**Verified:**
+- `apply_test.go`: best price per line; a weaker sub-category offer losing; a tie going to the more specific offer; stackable against exclusive; fallback when a winner no longer qualifies; `samePlan`.
+- 13 API checks on a copy of the live data:
+  - a second sheet-open leaves the cart unchanged, with one layer;
+  - adding a "Cricket Pad 40%" offer re-plans the same cart (pad 40%, kit 30%);
+  - a weaker 20% pad offer never wins;
+  - with the 40% offer off, the pad gets 30%, not 20%;
+  - a manual discount on top is left alone;
+  - after a line removal the promotions re-apply.
+
+### 3.59 Promotions as items go in; releasing an open cart (2026-10-17)
+
+**Promotions on every cart change.** `sales.Handler.OnCartChange` (wired to `promotions.Reapply` in the router) runs after:
+- adding a line, changing a quantity or removing a line (their responses already carry the discount);
+- attaching a customer, whose segment can bring a promotion in.
+
+It runs in a savepoint (`cart_change.go`): a promotion that fails to evaluate is logged and rolled back, and never costs the cashier the scan. Same idempotent rules as §3.58, so the payment sheet's call is now normally `unchanged`.
+
+`discounts_cleared` on a line edit is now true only when a discount applied **by hand** (manual, coupon, loyalty) was undone; promotions alone come straight back. Adding a line doesn't clear layers (unchanged): with a manual discount already on the cart, a new line gets no promotion until a line edit clears and re-plans everything.
+
+**Releasing an unpaid order.** `POST /sales/orders/{id}/release {reason}` is VoidHeld (§3.56) for an open cart as well as a held order: same steps, same `held_voided` status, shown as **"Released"**. `/void-held` keeps its held-only behaviour.
+- Someone else's cart that is still being worked on (an active stock reservation, i.e. a line added within the 15-minute reservation window, or an empty cart opened within it) → 409 `CART_IN_USE`. The cart's own cashier may release it at any time.
+- Anything other than `cart`/`held` → 409 `ORDER_NOT_RELEASABLE`.
+- `GET /sales/orders?status=open` lists open carts and held orders together (never in the default list); the summary still counts finished sales only.
+
+**Web admin.**
+- The sale page shows **Release cart** for an open cart.
+- The Sales list has an **Open carts & held** filter; `held_voided` is labelled "Released (unsold)".
+- **New sale** shows each line's offer as it's added ("Offer −₹200.00"), has **Discard sale** (releases the cart and starts a fresh one) and warns before the browser leaves a sale with items in it. Abandoned back-office sales were the source of the stuck carts found on 2026-10-17.
+
+**Verified.**
+- Go tests pass; POS 53 tests pass.
+- The new `release-cart-promotions.spec.ts` passes, along with `void-held-order`, `phase14-admin-sales` and `promotions`. It covers: offer on add, Discard sale releasing the stock, a till cart found under Open carts & held, `CART_IN_USE` for another user, and release by its own cashier.
+- Nine other cart-touching specs were run as well:
+  - `price-lists`, `phase16-report-builder`, `credit`, `documents`, `notifications`, `pharmacy` and others passed.
+  - `einvoice`, `fixed-discount` (the seed bat's price has drifted), `grocery`, `payment-gateway-reconciliation` and `phase10-pricing` fail identically against an API built from the previous commit, so they predate this change.
+  - `phase15-approval-policies` is stale: the Inventory screen's product field became a typeahead. When it times out it leaves `stock_adjust_approval_above` at 100, which blocks later specs' stock top-ups; reset it after such a run.
 
 ## 4. What Phase 0 concretely delivers against this design
 
