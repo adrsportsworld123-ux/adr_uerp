@@ -133,6 +133,13 @@ It also reopens the keypad after a failed approval PIN. Offline, the device enfo
 
 **GST split (2026-10-19).** The cart totals, receipt screen and Z report show CGST + SGST (or IGST, or the merchant's single tax such as VAT) from the server's `tax_breakup` (erp-core-go `phase0_1_design.md` §3.68). `AppSession.taxRegime` (from `GET /tax/regime`, loaded in `refreshShift()`, kept for offline) lets `taxRowsFor(order)` split an offline cart locally with the server's rule (`TaxBreakup.local`). Tested in `test/tax_breakup_test.dart`; the billing goldens show the CGST/SGST rows. Money is shown in the branch's currency (`PosCurrency` in `lib/ui/format.dart`, set from `/tax/regime` in `refreshShift()`; INR groups 1,23,456, others 123,456); use `formatRupees` / `PosCurrency.symbol`, never a literal ₹. The return confirmation shows the credit note's tax (§3.69). The open-price keypad takes an optional Description (§3.70): online it's sent with the line; offline it's stored in `pending_order_lines.description` (local DB v6) and sent with `/sync/push`. The receipt screen hides SKUs when the branch's `show_sku` is off.
 
+**Grid order and tile colours (§3.71).**
+- **Order:** when the branch's Sales Policy says so (`AppSession.openPriceFirst`, from the sales settings' branch list), open-price items come first on the grid. Online, the server sorts (`searchProducts(branchId:)`); offline, `OfflineStore.searchCatalog(openPriceFirst:)` does.
+- **Colour:** tiles take the product's `pos_color`, or for an open-price item the standard open-price colour (`tileAccent()`), with an "Open price" label.
+- **Local DB:** v7 adds `catalog.pos_color` and resets `last_pull_at` once, so every product gets its colour.
+
+Tested in `test/product_grid_test.dart` (own SQLite folder, so the billing goldens are untouched).
+
 **Shifts (Phase 13).** `lib/screens/shift_screen.dart` has three parts:
 - `ShiftScreen`: open with a float, the X report, and cash in/out via `CashMovementDialog`, which keeps one idempotency key across retries
 - `CloseShiftScreen`: a denomination count with live variance. When the count doesn't match, it asks for a reason and a manager's code and PIN. It syncs offline sales before counting.

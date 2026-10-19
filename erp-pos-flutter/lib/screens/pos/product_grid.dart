@@ -234,15 +234,24 @@ class _ProductTile extends StatelessWidget {
             : low
                 ? '${formatQty(available.toString())} left'
                 : '${formatQty(available.toString())} in stock';
+    // migrations/063: the product's own colour, else an open-price item's
+    // standard one, marks the tile — a tint, a coloured edge and (for an
+    // open-price item) a label, so colour is never the only signal.
+    final accent = tileAccent(item, pos);
     return Semantics(
       button: true,
-      label: '${item.lookup.productName}, ${formatRupees(item.lookup.sellingPrice)}${stockText != null ? ', $stockText' : ''}. Add to cart.',
+      label: '${item.lookup.productName}${item.openPrice ? ', open price' : ''}, '
+          '${formatRupees(item.lookup.sellingPrice)}${stockText != null ? ', $stockText' : ''}. Add to cart.',
       excludeSemantics: true,
       child: Opacity(
         opacity: out ? 0.55 : 1,
         child: Material(
-          color: theme.colorScheme.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: theme.colorScheme.outline)),
+          key: accent == null ? null : Key('tile-accent-${item.lookup.variantId}'),
+          color: accent == null ? theme.colorScheme.surface : Color.alphaBlend(accent.withValues(alpha: 0.12), theme.colorScheme.surface),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: accent ?? theme.colorScheme.outline, width: accent == null ? 1 : 2),
+          ),
           child: InkWell(
             borderRadius: BorderRadius.circular(12),
             onTap: enabled ? onTap : null,
@@ -252,7 +261,22 @@ class _ProductTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(item.lookup.productName, maxLines: 2, overflow: TextOverflow.ellipsis, style: theme.textTheme.titleSmall),
-                  Text(item.lookup.sku, maxLines: 1, overflow: TextOverflow.ellipsis, style: kMonoStyle.copyWith(fontSize: 11, color: theme.colorScheme.onSurfaceVariant)),
+                  Row(children: [
+                    Flexible(
+                      child: Text(item.lookup.sku,
+                          maxLines: 1, overflow: TextOverflow.ellipsis, style: kMonoStyle.copyWith(fontSize: 11, color: theme.colorScheme.onSurfaceVariant)),
+                    ),
+                    if (item.openPrice) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(6)),
+                        child: Text('Open price',
+                            key: const Key('open-price-badge'),
+                            style: theme.textTheme.labelSmall?.copyWith(color: _onColor(accent!), fontWeight: FontWeight.w600)),
+                      ),
+                    ],
+                  ]),
                   const Spacer(),
                   Row(
                     children: [
@@ -277,3 +301,15 @@ class _ProductTile extends StatelessWidget {
     );
   }
 }
+
+/// A tile's colour (erp-core-go migrations/063): the product's own, else
+/// the standard open-price colour for an open-price item, else none.
+@visibleForTesting
+Color? tileAccent(GridProduct item, PosColors pos) {
+  final hex = item.lookup.posColor;
+  if (hex != null) return Color(int.parse('FF${hex.substring(1)}', radix: 16));
+  return item.openPrice ? pos.plum : null;
+}
+
+/// Black or white text, whichever reads on [c].
+Color _onColor(Color c) => c.computeLuminance() > 0.45 ? Colors.black : Colors.white;

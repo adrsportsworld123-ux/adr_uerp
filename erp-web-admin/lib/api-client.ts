@@ -6,7 +6,7 @@
 // and re-parsing to a JS number here would reintroduce float rounding risk
 // for no benefit (this app only displays them, never does arithmetic).
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
+import { apiBase } from "@/lib/api-base";
 
 // Pre-filled merchant code on the login and forgot-password screens. Set
 // NEXT_PUBLIC_DEFAULT_MERCHANT_CODE per environment (the e2e suite runs
@@ -191,7 +191,7 @@ async function doRefresh(tokenAtStart: string | null): Promise<RefreshOutcome> {
   if (!refreshToken) return "rejected";
   let resp: Response;
   try {
-    resp = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+    resp = await fetch(`${apiBase()}/api/v1/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -232,7 +232,7 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
   if (!isAuthEndpoint && !retried) await ensureFreshSession();
 
   const token = getToken();
-  const resp = await fetch(`${API_BASE_URL}${path}`, {
+  const resp = await fetch(`${apiBase()}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -279,7 +279,7 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
 async function download(path: string, body?: unknown, retried = false): Promise<{ blob: Blob; filename: string }> {
   if (!retried) await ensureFreshSession();
   const token = getToken();
-  const resp = await fetch(`${API_BASE_URL}${path}`, {
+  const resp = await fetch(`${apiBase()}${path}`, {
     method: body === undefined ? "GET" : "POST",
     headers: { "Content-Type": "application/json", "X-Client": "web", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),

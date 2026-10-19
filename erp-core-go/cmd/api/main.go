@@ -54,14 +54,16 @@ func main() {
 			log.Printf("search: ensure index at startup: %v (will retry lazily)", err)
 		} else if count, err := searchClient.Count(ctx); err != nil {
 			log.Printf("search: count documents at startup: %v", err)
-		} else if count == 0 {
+		} else if stale, err := searchClient.CountStale(ctx); count == 0 || (err == nil && stale > 0) {
 			// An index with zero documents at boot means either this is a
 			// brand-new environment or OpenSearch's data was lost since
 			// the last run (no volume, a wiped volume, disaster recovery)
 			// — found live exactly this way once already. Backfill from
 			// Postgres now rather than leaving search silently empty
 			// until someone remembers POST /search/reindex exists.
-			log.Printf("search: index is empty at startup, backfilling from Postgres...")
+			// Also when documents predate a field the search now sorts on
+			// (open_price, migrations/063): a one-time refresh.
+			log.Printf("search: index is empty or out of date at startup, backfilling from Postgres...")
 			if indexed, err := search.BackfillAllTenants(ctx, database, searchClient); err != nil {
 				log.Printf("search: startup backfill: %v", err)
 			} else {

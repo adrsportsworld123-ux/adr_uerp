@@ -33,6 +33,9 @@ type catalogEntry struct {
 	// the device enforces min/max and refuses any price that would need
 	// approval (approval needs the server).
 	OpenPrice *catalog.OpenPrice `json:"open_price"`
+	// POSColor: the product's tile colour (#RRGGBB, migrations/063); "" =
+	// none of its own.
+	POSColor string `json:"pos_color"`
 }
 
 type stockEntry struct {
@@ -75,7 +78,7 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
-			       `+catalog.OpenPriceColumns+`
+			       `+catalog.OpenPriceColumns+`, COALESCE(p.pos_color, '')
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
@@ -94,7 +97,7 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			if err := catalogRows.Scan(&c.Barcode, &c.ProductID, &c.ProductName, &c.HSNCode,
 				&c.VariantID, &c.SKU, &c.SellingPrice, &c.MRP,
 				&c.CGSTRate, &c.SGSTRate, &c.IGSTRate, &c.CessRate, &c.PriceIncludesTax,
-				&opEnabled, &opMin, &opMax, &opAbove); err != nil {
+				&opEnabled, &opMin, &opMax, &opAbove, &c.POSColor); err != nil {
 				return err
 			}
 			c.OpenPrice = catalog.NewOpenPrice(opEnabled, opMin, opMax, opAbove)

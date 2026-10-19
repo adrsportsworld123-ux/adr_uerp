@@ -20,6 +20,9 @@ type Params struct {
 	MinPrice    string
 	MaxPrice    string
 	From, Size  int
+	// OpenPriceFirst lists open-price items before the rest (the POS grid
+	// of a branch that asks for it, migrations/063); otherwise relevance.
+	OpenPriceFirst bool
 }
 
 type Hit struct {
@@ -83,11 +86,15 @@ func (c *Client) Search(ctx context.Context, p Params) (Result, error) {
 	if size <= 0 || size > 200 {
 		size = 50
 	}
+	sort := []any{"_score", map[string]any{"name.keyword": map[string]any{"order": "asc", "unmapped_type": "keyword"}}}
+	if p.OpenPriceFirst {
+		sort = append([]any{map[string]any{"open_price": map[string]any{"order": "desc", "missing": "_last", "unmapped_type": "boolean"}}}, sort...)
+	}
 	body := map[string]any{
 		"from":  p.From,
 		"size":  size,
 		"query": map[string]any{"bool": boolQuery},
-		"sort":  []any{"_score", map[string]any{"name.keyword": map[string]any{"order": "asc", "unmapped_type": "keyword"}}},
+		"sort":  sort,
 	}
 
 	resp, err := c.request(ctx, http.MethodPost, "/"+IndexName+"/_search", body)

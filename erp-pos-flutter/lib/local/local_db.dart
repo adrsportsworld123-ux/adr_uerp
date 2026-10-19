@@ -33,7 +33,9 @@ class LocalDb {
       // checkout waiver an offline sale took (signed, 0 = none).
       // v6 (erp-core-go migrations/062): pending_order_lines.description,
       // an open-price line's own description, sent with /sync/push.
-      version: 6,
+      // v7 (erp-core-go migrations/063): catalog.pos_color, the product's
+      // tile colour; the next pull is a full one so every product gets it.
+      version: 7,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
@@ -59,6 +61,10 @@ class LocalDb {
         if (oldVersion < 6) {
           await db.execute('ALTER TABLE pending_order_lines ADD COLUMN description TEXT');
         }
+        if (oldVersion < 7) {
+          await db.execute('ALTER TABLE catalog ADD COLUMN pos_color TEXT');
+          await db.execute("DELETE FROM sync_meta WHERE key = 'last_pull_at'");
+        }
         if (oldVersion < 5) {
           await db.execute('ALTER TABLE pending_orders ADD COLUMN round_off REAL NOT NULL DEFAULT 0');
         }
@@ -81,7 +87,8 @@ class LocalDb {
             price_includes_tax INTEGER NOT NULL DEFAULT 0,
             open_price_min TEXT,
             open_price_max TEXT,
-            open_price_approval_above TEXT
+            open_price_approval_above TEXT,
+            pos_color TEXT
           )
         ''');
         await db.execute('''

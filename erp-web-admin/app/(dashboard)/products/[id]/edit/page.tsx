@@ -147,6 +147,9 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
   const [collectionId, setCollectionId] = useState(product.collection_id ?? "");
   const [status, setStatus] = useState<string>(product.status);
   const [priceIncludesTax, setPriceIncludesTax] = useState(product.price_includes_tax);
+  // The POS tile colour (migrations/063): "" = none of its own (an
+  // open-price item then shows the POS's standard open-price colour).
+  const [posColor, setPosColor] = useState(product.pos_color ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -161,6 +164,7 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
   if (collectionId !== (product.collection_id ?? "")) changes.collection_id = collectionId;
   if (status !== product.status) changes.status = status;
   if (priceIncludesTax !== product.price_includes_tax) changes.price_includes_tax = priceIncludesTax;
+  if (posColor !== (product.pos_color ?? "")) changes.pos_color = posColor;
   const dirty = Object.keys(changes).length > 0;
 
   async function save(e: React.FormEvent) {
@@ -233,6 +237,38 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
               <input type="checkbox" checked={priceIncludesTax} onChange={(e) => setPriceIncludesTax(e.target.checked)} />
               Prices include GST
             </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <Label htmlFor="pos-color">POS tile colour</Label>
+            <input
+              id="pos-color"
+              type="color"
+              className="h-9 w-14 cursor-pointer rounded border bg-card p-1"
+              value={posColor || "#7445a8"}
+              onChange={(e) => setPosColor(e.target.value.toUpperCase())}
+            />
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Quick colours">
+              {POS_COLORS.map((c) => (
+                <button
+                  key={c.hex}
+                  type="button"
+                  title={c.name}
+                  aria-label={c.name}
+                  aria-pressed={posColor === c.hex}
+                  onClick={() => setPosColor(c.hex)}
+                  className={`size-6 rounded-full border ${posColor === c.hex ? "ring-2 ring-ring ring-offset-1" : ""}`}
+                  style={{ background: c.hex }}
+                />
+              ))}
+            </div>
+            <span className="text-xs text-muted-foreground" data-testid="pos-color-value">
+              {posColor ? posColor : "None — an open-price item uses the standard open-price colour"}
+            </span>
+            {posColor && (
+              <Button type="button" size="sm" variant="ghost" onClick={() => setPosColor("")}>
+                No colour
+              </Button>
+            )}
           </div>
           {priceIncludesTax !== product.price_includes_tax && (
             <p className="text-xs text-warn">
@@ -629,3 +665,16 @@ function AddVariantSection({ productId, attrs, onSaved }: { productId: string; a
     </form>
   );
 }
+
+// Quick picks for the POS tile colour; any colour can be chosen.
+const POS_COLORS = [
+  { name: "Amber", hex: "#F59E0B" },
+  { name: "Orange", hex: "#EA580C" },
+  { name: "Red", hex: "#DC2626" },
+  { name: "Pink", hex: "#DB2777" },
+  { name: "Purple", hex: "#7445A8" },
+  { name: "Blue", hex: "#2563EB" },
+  { name: "Sky", hex: "#0EA5E9" },
+  { name: "Teal", hex: "#0C7486" },
+  { name: "Green", hex: "#16A34A" },
+];

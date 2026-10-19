@@ -83,6 +83,9 @@ type productDetail struct {
 	PriceIncludesTax bool                   `json:"price_includes_tax"`
 	UpdatedAt        string                 `json:"updated_at"`
 	Variants         []productDetailVariant `json:"variants"`
+	// POSColor: the product's tile colour on the POS grid (#RRGGBB,
+	// migrations/063); null = none of its own.
+	POSColor *string `json:"pos_color"`
 }
 
 func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (productDetail, error) {
@@ -90,7 +93,7 @@ func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (produc
 	if err := tx.QueryRow(ctx, `
 		SELECT p.id, p.name, COALESCE(p.short_description,''), COALESCE(p.hsn_code,''),
 		       p.category_id::text, c.name, p.brand_id::text, b.name, p.tax_slab_id::text, ts.name,
-		       p.collection_id::text, col.name, p.product_type, p.status, p.price_includes_tax, p.updated_at::text
+		       p.collection_id::text, col.name, p.product_type, p.status, p.price_includes_tax, p.updated_at::text, p.pos_color
 		FROM products p
 		LEFT JOIN categories c ON c.id = p.category_id
 		LEFT JOIN brands b ON b.id = p.brand_id
@@ -98,7 +101,7 @@ func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (produc
 		LEFT JOIN collections col ON col.id = p.collection_id
 		WHERE p.id = $1`, productID,
 	).Scan(&d.ProductID, &d.Name, &d.ShortDescription, &d.HSNCode, &d.CategoryID, &d.CategoryName, &d.BrandID, &d.BrandName,
-		&d.TaxSlabID, &d.TaxSlabName, &d.CollectionID, &d.CollectionName, &d.ProductType, &d.Status, &d.PriceIncludesTax, &d.UpdatedAt); err != nil {
+		&d.TaxSlabID, &d.TaxSlabName, &d.CollectionID, &d.CollectionName, &d.ProductType, &d.Status, &d.PriceIncludesTax, &d.UpdatedAt, &d.POSColor); err != nil {
 		return d, err
 	}
 
@@ -246,6 +249,14 @@ func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Name = &trimmed
 	}
+	if req.POSColor != nil {
+		c := strings.TrimSpace(*req.POSColor)
+		if c != "" && !posColor.MatchString(c) {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "pos_color must be a colour like #F59E0B, or empty for none")
+			return
+		}
+		req.POSColor = &c
+	}
 
 	var d productDetail
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -301,9 +312,11 @@ func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 				status = COALESCE($7, status),
 				collection_id = CASE WHEN $9::text IS NULL THEN collection_id ELSE NULLIF($9,'')::uuid END,
 				price_includes_tax = COALESCE($10, price_includes_tax),
+				pos_color = CASE WHEN $11::text IS NULL THEN pos_color ELSE NULLIF($11, '') END,
 				updated_at = now()
 			WHERE id = $8`,
 			req.Name, req.ShortDescription, req.HSNCode, req.CategoryID, req.BrandID, req.TaxSlabID, req.Status, productID, req.CollectionID, req.PriceIncludesTax,
+			req.POSColor,
 		); err != nil {
 			return err
 		}
@@ -332,6 +345,7 @@ func productAuditView(d productDetail) map[string]any {
 		"name": d.Name, "short_description": d.ShortDescription, "hsn_code": d.HSNCode,
 		"category_id": d.CategoryID, "brand_id": d.BrandID, "tax_slab_id": d.TaxSlabID,
 		"collection_id": d.CollectionID, "status": d.Status, "price_includes_tax": d.PriceIncludesTax,
+		"pos_color": d.POSColor,
 	}
 }
 

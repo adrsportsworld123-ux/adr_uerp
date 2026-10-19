@@ -14,15 +14,17 @@ import (
 	"erp-core-go/internal/httpx"
 )
 
-// Branch overrides of the sales policy (migrations/062). Today one: whether
-// open-price items take discounts and promotions at that branch. NULL =
-// the merchant's default (sales_settings.open_price_discounts).
+// Branch overrides of the sales policy: whether open-price items take
+// discounts and promotions (migrations/062), and whether the POS grid
+// lists them first (migrations/063). NULL = the merchant's default.
 
 type branchSalesSetting struct {
 	BranchID           string `json:"branch_id"`
 	BranchName         string `json:"branch_name"`
 	OpenPriceDiscounts *bool  `json:"open_price_discounts"` // null = the merchant's
 	Effective          bool   `json:"effective_open_price_discounts"`
+	OpenPriceFirst     *bool  `json:"open_price_first"` // null = the merchant's
+	EffectiveFirst     bool   `json:"effective_open_price_first"`
 }
 
 // salesSettingsResponse is GET/PUT /sales/settings: the merchant's policy
@@ -39,7 +41,8 @@ func loadSalesSettingsResponse(ctx context.Context, tx pgx.Tx) (salesSettingsRes
 		return resp, err
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT b.id::text, b.name, bs.open_price_discounts, app_open_price_discountable(b.id)
+		SELECT b.id::text, b.name, bs.open_price_discounts, app_open_price_discountable(b.id),
+		       bs.open_price_first, app_open_price_first(b.id)
 		FROM branches b LEFT JOIN branch_sales_settings bs ON bs.branch_id = b.id
 		ORDER BY b.name`)
 	if err != nil {
@@ -49,7 +52,7 @@ func loadSalesSettingsResponse(ctx context.Context, tx pgx.Tx) (salesSettingsRes
 	resp.Branches = []branchSalesSetting{}
 	for rows.Next() {
 		var b branchSalesSetting
-		if err := rows.Scan(&b.BranchID, &b.BranchName, &b.OpenPriceDiscounts, &b.Effective); err != nil {
+		if err := rows.Scan(&b.BranchID, &b.BranchName, &b.OpenPriceDiscounts, &b.Effective, &b.OpenPriceFirst, &b.EffectiveFirst); err != nil {
 			return resp, err
 		}
 		resp.Branches = append(resp.Branches, b)
@@ -58,7 +61,8 @@ func loadSalesSettingsResponse(ctx context.Context, tx pgx.Tx) (salesSettingsRes
 }
 
 // UpdateBranchSettings: PUT /sales/settings/branches/{id} — sales.settings.
-// {"open_price_discounts": true | false | null}; null = follow the merchant.
+// {"open_price_discounts": true | false | null, "open_price_first": ...};
+// null = follow the merchant; a field left out keeps what is saved.
 func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -66,34 +70,54 @@ func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	branchID := chi.URLParam(r, "id")
-	var req struct {
-		OpenPriceDiscounts *bool `json:"open_price_discounts"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	field := func(name string) (set bool, v *bool, ok bool) {
+		m, present := raw[name]
+		if !present {
+			return false, nil, true
+		}
+		err := json.Unmarshal(m, &v)
+		return true, v, err == nil
+	}
+	discSet, disc, ok1 := field("open_price_discounts")
+	firstSet, first, ok2 := field("open_price_first")
+	if !ok1 || !ok2 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "open_price_discounts and open_price_first are true, false or null")
 		return
 	}
 	var resp salesSettingsResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var before *bool
+		var beforeDisc, beforeFirst *bool
 		var exists bool
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS (SELECT 1 FROM branches WHERE id::text = $1),
-			       (SELECT open_price_discounts FROM branch_sales_settings WHERE branch_id::text = $1)`, branchID).Scan(&exists, &before); err != nil {
+			       (SELECT open_price_discounts FROM branch_sales_settings WHERE branch_id::text = $1),
+			       (SELECT open_price_first FROM branch_sales_settings WHERE branch_id::text = $1)`, branchID).
+			Scan(&exists, &beforeDisc, &beforeFirst); err != nil {
 			return err
 		}
 		if !exists {
 			return pgx.ErrNoRows
 		}
+		if !discSet {
+			disc = beforeDisc
+		}
+		if !firstSet {
+			first = beforeFirst
+		}
 		var err error
-		if req.OpenPriceDiscounts == nil {
+		if disc == nil && first == nil {
 			_, err = tx.Exec(ctx, `DELETE FROM branch_sales_settings WHERE branch_id::text = $1`, branchID)
 		} else {
 			_, err = tx.Exec(ctx, `
-				INSERT INTO branch_sales_settings (branch_id, merchant_id, open_price_discounts, updated_by)
-				VALUES ($1::uuid, current_setting('app.tenant_id')::uuid, $2, $3)
-				ON CONFLICT (branch_id) DO UPDATE SET open_price_discounts = $2, updated_by = $3, updated_at = now()`,
-				branchID, *req.OpenPriceDiscounts, claims.UserID)
+				INSERT INTO branch_sales_settings (branch_id, merchant_id, open_price_discounts, open_price_first, updated_by)
+				VALUES ($1::uuid, current_setting('app.tenant_id')::uuid, $2, $3, $4)
+				ON CONFLICT (branch_id) DO UPDATE SET open_price_discounts = $2, open_price_first = $3, updated_by = $4, updated_at = now()`,
+				branchID, disc, first, claims.UserID)
 		}
 		if err != nil {
 			return err
@@ -102,7 +126,8 @@ func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		return audit.Log(ctx, tx, audit.Entry{EntityType: "branch_sales_settings", EntityID: branchID, Action: "update", PerformedBy: claims.UserID,
-			Before: map[string]any{"open_price_discounts": before}, After: map[string]any{"open_price_discounts": req.OpenPriceDiscounts}})
+			Before: map[string]any{"open_price_discounts": beforeDisc, "open_price_first": beforeFirst},
+			After:  map[string]any{"open_price_discounts": disc, "open_price_first": first}})
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "branch not found")

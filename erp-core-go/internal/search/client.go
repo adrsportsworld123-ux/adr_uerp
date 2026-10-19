@@ -93,6 +93,8 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 				"mrp":           map[string]any{"type": "double"},
 				"selling_price": map[string]any{"type": "double"},
 				"status":        map[string]any{"type": "keyword"},
+				"open_price":    map[string]any{"type": "boolean"},
+				"pos_color":     map[string]any{"type": "keyword", "index": false},
 			},
 		},
 	}
@@ -106,9 +108,57 @@ func (c *Client) EnsureIndex(ctx context.Context) error {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusBadRequest && bytes.Contains(body, []byte("resource_already_exists_exception")) {
-		return nil
+		return c.ensureNewFields(ctx)
 	}
 	return fmt.Errorf("search: ensure index: %s: %s", resp.Status, string(body))
+}
+
+// ensureNewFields adds fields introduced after an index was created to its
+// mapping (adding a field is always allowed; changing one never is).
+// migrations/063: open_price and pos_color.
+func (c *Client) ensureNewFields(ctx context.Context) error {
+	resp, err := c.request(ctx, http.MethodPut, "/"+IndexName+"/_mapping", map[string]any{
+		"properties": map[string]any{
+			"open_price": map[string]any{"type": "boolean"},
+			"pos_color":  map[string]any{"type": "keyword", "index": false},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("search: ensure mapping: %s: %s", resp.Status, string(body))
+	}
+	return nil
+}
+
+// CountStale counts documents indexed before open_price existed
+// (migrations/063); startup reindexes when there are any, so the POS
+// grid can list open-price items first without a manual reindex.
+func (c *Client) CountStale(ctx context.Context) (int64, error) {
+	resp, err := c.request(ctx, http.MethodPost, "/"+IndexName+"/_count", map[string]any{
+		"query": map[string]any{"bool": map[string]any{"must_not": []any{map[string]any{"exists": map[string]any{"field": "open_price"}}}}},
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("search: count stale: %s: %s", resp.Status, string(body))
+	}
+	var parsed struct {
+		Count int64 `json:"count"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return 0, err
+	}
+	return parsed.Count, nil
 }
 
 // Count returns how many documents are currently in the index — used at

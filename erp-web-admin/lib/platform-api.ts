@@ -5,7 +5,7 @@
 import { ApiError } from "@/lib/api-client";
 import type { Tone } from "@/components/data/status-chip";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
+import { apiBase } from "@/lib/api-base";
 const KEY = "platform.session";
 
 export type PlatformSession = { token: string; expires_at: string; name: string };
@@ -30,7 +30,7 @@ export function clearPlatformSession() {
 }
 
 export async function platformLogin(email: string, password: string): Promise<PlatformSession> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/platform/auth/login`, {
+  const res = await fetch(`${apiBase()}/api/v1/platform/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -46,7 +46,7 @@ export const PLATFORM_SESSION_ENDED = "platform:session-ended";
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const s = getPlatformSession();
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+  const res = await fetch(`${apiBase()}/api/v1${path}`, {
     method,
     headers: { "Content-Type": "application/json", ...(s ? { Authorization: `Bearer ${s.token}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -1522,6 +1522,8 @@ export interface ProductDetail {
   price_includes_tax: boolean;
   updated_at: string;
   variants: ProductDetailVariant[];
+  /** The POS tile colour, #RRGGBB (erp-core-go migrations/063); null = none of its own. */
+  pos_color?: string | null;
 }
 
 // ---------------------------------------------------------------------

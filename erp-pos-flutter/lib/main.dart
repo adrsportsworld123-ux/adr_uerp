@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -19,6 +20,20 @@ const String kApiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://10.0.2.2:8080',
 );
+
+/// The API address to use. On the web, a localhost [configured] address
+/// is moved to the host the page was opened from: the POS opened as
+/// http://10.242.1.193:60076 from another device (LAN, VPN) then reaches
+/// the API on 10.242.1.193 too, instead of "localhost" — the device
+/// itself. Same port and scheme; a real (non-localhost) address, and every
+/// non-web platform, use [configured] as is.
+String resolveApiBaseUrl(String configured, {required bool isWeb, required Uri page}) {
+  if (!isWeb) return configured;
+  const local = {'localhost', '127.0.0.1', '::1'};
+  final api = Uri.tryParse(configured);
+  if (api == null || !local.contains(api.host) || page.host.isEmpty || local.contains(page.host)) return configured;
+  return api.replace(host: page.host).toString().replaceFirst(RegExp(r'/$'), '');
+}
 
 // Development shortcut: run with --dart-define=USE_SEED_TERMINAL=true to
 // skip pairing and use the seed terminal (migrations/002_seed.sql) against
@@ -49,7 +64,7 @@ class PosApp extends StatefulWidget {
 }
 
 class _PosAppState extends State<PosApp> {
-  late final ApiClient _api = widget.api ?? ApiClient(baseUrl: kApiBaseUrl);
+  late final ApiClient _api = widget.api ?? ApiClient(baseUrl: resolveApiBaseUrl(kApiBaseUrl, isWeb: kIsWeb, page: Uri.base));
   TerminalConfig? _config;
   bool _loading = true;
 

@@ -28,7 +28,16 @@ type SalesSettings = {
   round_off_auto: boolean;
   /** migrations/062: whether open-price items take discounts and promotions (the default for every branch). */
   open_price_discounts?: boolean;
-  branches?: { branch_id: string; branch_name: string; open_price_discounts: boolean | null; effective_open_price_discounts: boolean }[];
+  /** migrations/063: the POS grid lists open-price items first (the default for every branch). */
+  open_price_first?: boolean;
+  branches?: {
+    branch_id: string;
+    branch_name: string;
+    open_price_discounts: boolean | null;
+    effective_open_price_discounts: boolean;
+    open_price_first?: boolean | null;
+    effective_open_price_first?: boolean;
+  }[];
 };
 /** The most a merchant may allow (erp-core-go sales.MaxRoundOff). */
 const MAX_ROUND_OFF = 5;
@@ -45,6 +54,7 @@ export default function SalesSettingsPage() {
   const [roundOffMax, setRoundOffMax] = useState("1");
   const [roundOffAuto, setRoundOffAuto] = useState(false);
   const [openPriceDiscounts, setOpenPriceDiscounts] = useState(true);
+  const [openPriceFirst, setOpenPriceFirst] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,6 +71,7 @@ export default function SalesSettingsPage() {
         if (Number(s.round_off_max) > 0) setRoundOffMax(String(Number(s.round_off_max)));
         setRoundOffAuto(s.round_off_auto);
         setOpenPriceDiscounts(s.open_price_discounts ?? true);
+        setOpenPriceFirst(s.open_price_first ?? false);
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load the sales policy"));
   }, []);
@@ -76,6 +87,7 @@ export default function SalesSettingsPage() {
     round_off_max: roundOff ? maxValue : 0,
     round_off_auto: roundOff && roundOffAuto,
     open_price_discounts: openPriceDiscounts,
+    open_price_first: openPriceFirst,
   };
   const dirty =
     saved != null &&
@@ -84,12 +96,13 @@ export default function SalesSettingsPage() {
       saved.shifts_required !== next.shifts_required ||
       Number(saved.round_off_max) !== next.round_off_max ||
       saved.round_off_auto !== next.round_off_auto ||
-      (saved.open_price_discounts ?? true) !== next.open_price_discounts);
+      (saved.open_price_discounts ?? true) !== next.open_price_discounts ||
+      (saved.open_price_first ?? false) !== next.open_price_first);
 
   // A branch's own rule for open-price discounts: saved at once.
-  async function setBranchRule(branchId: string, value: boolean | null) {
+  async function setBranchRule(branchId: string, value: boolean | null, field: "open_price_discounts" | "open_price_first" = "open_price_discounts") {
     try {
-      const s = await api.put<SalesSettings>(`/api/v1/sales/settings/branches/${branchId}`, { open_price_discounts: value });
+      const s = await api.put<SalesSettings>(`/api/v1/sales/settings/branches/${branchId}`, { [field]: value });
       setSaved(s);
       toast.success("Branch rule saved");
     } catch (e) {
@@ -273,6 +286,39 @@ export default function SalesSettingsPage() {
                       </select>
                       <span className="text-xs text-muted-foreground" data-testid="branch-open-price-rule">
                         {b.effective_open_price_discounts ? "discounts apply" : "no discounts"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <label className="flex items-start gap-3 text-sm">
+                <input type="checkbox" className="mt-1" checked={openPriceFirst} onChange={(e) => setOpenPriceFirst(e.target.checked)} />
+                <span>
+                  <span className="font-medium">Show open-price items first on the POS</span>
+                  <span className="block text-muted-foreground">
+                    The till&apos;s product grid lists open-price items before the rest, on the full list and inside every category. Off:
+                    the order the grid has today. Each open-price tile is marked and coloured — the product&apos;s own colour (set on the
+                    product), else the standard open-price colour.
+                  </span>
+                </span>
+              </label>
+              {(saved.branches ?? []).length > 0 && (
+                <ul className="space-y-2 pl-7" aria-label="Grid order by branch">
+                  {(saved.branches ?? []).map((b) => (
+                    <li key={b.branch_id} className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="min-w-40 font-medium">{b.branch_name}</span>
+                      <select
+                        aria-label={`Grid order at ${b.branch_name}`}
+                        value={b.open_price_first == null ? "" : b.open_price_first ? "first" : "normal"}
+                        onChange={(e) => setBranchRule(b.branch_id, e.target.value === "" ? null : e.target.value === "first", "open_price_first")}
+                        className="h-9 rounded-lg border bg-card px-2 text-sm"
+                      >
+                        <option value="">Same as the default</option>
+                        <option value="first">Open-price items first</option>
+                        <option value="normal">The usual order</option>
+                      </select>
+                      <span className="text-xs text-muted-foreground" data-testid="branch-grid-order">
+                        {b.effective_open_price_first ? "open-price first" : "usual order"}
                       </span>
                     </li>
                   ))}

@@ -36,7 +36,9 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
   - **Print settings:** a "Print the SKU" switch.
   - **New sale:** an open-price item takes a description, and the pencil on the line edits it.
 
-  `e2e/users-open-price.spec.ts`. A draft/open PO with no GRN and a draft GRN can be deleted (soft delete, restorable from the Recycle Bin; §3.66). `e2e/purchase-orders.spec.ts` covers PO → two partial GRNs → bills, and delete/restore.
+  `e2e/users-open-price.spec.ts`.
+
+  §3.71: Sales Policy also sets, per branch, whether the POS grid lists open-price items first, and the product edit page has a "POS tile colour" (quick picks or any colour; "No colour" clears it). `e2e/pos-grid.spec.ts`. A draft/open PO with no GRN and a draft GRN can be deleted (soft delete, restorable from the Recycle Bin; §3.66). `e2e/purchase-orders.spec.ts` covers PO → two partial GRNs → bills, and delete/restore.
 - Accounting: Chart of Accounts (list + create custom account), manual Journal Entry (dynamic line builder with client-side balance check), Party Ledger (supplier only — see gap below), Day Book, Cash Book
 - Multi-Branch: Branches (list + create), Branch Transfers (request with barcode-driven line entry → status-driven detail page covering Approve/Reject → Dispatch → Complete-with-optional-discrepancy → Cancel) — `e2e/multi-branch.spec.ts` logs in as three different sessions in sequence (POS User denied approval, Branch Manager approves, POS User dispatches/completes) to verify the permission gate isn't just a UI-level disabled button
 - Pricing: product/variant browse with margin/markup display (`GET /products` — the catalog-browse endpoint this app needed and that endpoint's very first real caller), a cost-plus/target-margin calculator, single-variant editing with the negative-margin block→override flow, and bulk update (preview → apply, no category/brand filter in the UI yet even though the API supports one) — `e2e/pricing.spec.ts` runs as Branch Manager since `pricing.manage` is permission-gated

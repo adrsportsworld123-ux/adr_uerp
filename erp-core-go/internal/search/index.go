@@ -33,6 +33,10 @@ type Document struct {
 	MRP          float64 `json:"mrp"`
 	SellingPrice float64 `json:"selling_price"`
 	Status       string  `json:"status"`
+	// migrations/063: open-price items can be listed first on the POS
+	// grid (Params.OpenPriceFirst), and a product's own tile colour.
+	OpenPrice bool   `json:"open_price"`
+	POSColor  string `json:"pos_color,omitempty"`
 }
 
 // IndexDocument upserts a single document (PUT with an explicit _id is an
@@ -146,7 +150,8 @@ func FetchDocument(ctx context.Context, database *db.DB, tenantID, variantID str
 			       -- Effective status: a non-active PRODUCT hides all its variants
 			       -- (same rule as catalog.SellablePredicate, which this package
 			       -- can't import without a cycle).
-			       CASE WHEN p.status <> 'active' THEN p.status ELSE v.status END
+			       CASE WHEN p.status <> 'active' THEN p.status ELSE v.status END,
+			       v.open_price, COALESCE(p.pos_color, '')
 			FROM product_variants v
 			JOIN products p ON p.id = v.product_id
 			LEFT JOIN categories c ON c.id = p.category_id
@@ -154,7 +159,7 @@ func FetchDocument(ctx context.Context, database *db.DB, tenantID, variantID str
 			WHERE v.id = $1`, variantID).
 			Scan(&doc.VariantID, &doc.ProductID, &doc.MerchantID, &doc.Name, &doc.SKU, &doc.HSNCode,
 				&doc.CategoryID, &doc.CategoryName, &doc.BrandID, &doc.BrandName,
-				&doc.CostPrice, &doc.MRP, &doc.SellingPrice, &doc.Status)
+				&doc.CostPrice, &doc.MRP, &doc.SellingPrice, &doc.Status, &doc.OpenPrice, &doc.POSColor)
 	})
 	return doc, err
 }
@@ -224,7 +229,8 @@ func FetchAllDocuments(ctx context.Context, database *db.DB, tenantID string) ([
 			       -- Effective status: a non-active PRODUCT hides all its variants
 			       -- (same rule as catalog.SellablePredicate, which this package
 			       -- can't import without a cycle).
-			       CASE WHEN p.status <> 'active' THEN p.status ELSE v.status END
+			       CASE WHEN p.status <> 'active' THEN p.status ELSE v.status END,
+			       v.open_price, COALESCE(p.pos_color, '')
 			FROM product_variants v
 			JOIN products p ON p.id = v.product_id
 			LEFT JOIN categories c ON c.id = p.category_id
@@ -237,7 +243,7 @@ func FetchAllDocuments(ctx context.Context, database *db.DB, tenantID string) ([
 			var d Document
 			if err := rows.Scan(&d.VariantID, &d.ProductID, &d.MerchantID, &d.Name, &d.SKU, &d.HSNCode,
 				&d.CategoryID, &d.CategoryName, &d.BrandID, &d.BrandName,
-				&d.CostPrice, &d.MRP, &d.SellingPrice, &d.Status); err != nil {
+				&d.CostPrice, &d.MRP, &d.SellingPrice, &d.Status, &d.OpenPrice, &d.POSColor); err != nil {
 				return err
 			}
 			docs = append(docs, d)

@@ -61,15 +61,31 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The POS names its branch: a branch that lists open-price items
+	// first (migrations/063, app_open_price_first) gets them first, on
+	// the full grid and within any category. Without a branch (the back
+	// office's search) the order is relevance, as before.
+	openPriceFirst := false
+	if b := q.Get("branch_id"); b != "" {
+		err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT app_open_price_first(id) FROM branches WHERE id::text = $1`, b).Scan(&openPriceFirst)
+		})
+		if err != nil && err != pgx.ErrNoRows {
+			httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not read the branch's settings")
+			return
+		}
+	}
+
 	result, err := h.Client.Search(r.Context(), Params{
-		TenantID:    claims.TenantID,
-		Query:       q.Get("q"),
-		CategoryIDs: categoryIDs,
-		BrandID:     q.Get("brand_id"),
-		MinPrice:    q.Get("min_price"),
-		MaxPrice:    q.Get("max_price"),
-		From:        (page - 1) * limit,
-		Size:        limit,
+		TenantID:       claims.TenantID,
+		Query:          q.Get("q"),
+		CategoryIDs:    categoryIDs,
+		BrandID:        q.Get("brand_id"),
+		MinPrice:       q.Get("min_price"),
+		MaxPrice:       q.Get("max_price"),
+		From:           (page - 1) * limit,
+		Size:           limit,
+		OpenPriceFirst: openPriceFirst,
 	})
 	if err != nil {
 		httpx.Error(w, http.StatusServiceUnavailable, "SEARCH_UNAVAILABLE", "product search is temporarily unavailable")
@@ -83,10 +99,35 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 		ids[i] = hit.VariantID
 	}
 	var stock map[string]db.Stock
+	type tile struct {
+		openPrice bool
+		color     string
+	}
+	tiles := map[string]tile{}
 	if err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
-		stock, err = db.StockByVariant(ctx, tx, ids, q.Get("branch_id"))
-		return err
+		if stock, err = db.StockByVariant(ctx, tx, ids, q.Get("branch_id")); err != nil {
+			return err
+		}
+		// The open-price flag and tile colour as they are now, whatever
+		// the index last saw (migrations/063).
+		rows, err := tx.Query(ctx, `
+			SELECT v.id::text, v.open_price, COALESCE(p.pos_color, '')
+			FROM product_variants v JOIN products p ON p.id = v.product_id
+			WHERE v.id::text = ANY($1)`, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var t tile
+			if err := rows.Scan(&id, &t.openPrice, &t.color); err != nil {
+				return err
+			}
+			tiles[id] = t
+		}
+		return rows.Err()
 	}); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not read stock")
 		return
@@ -97,6 +138,9 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	hits := make([]hitWithStock, len(result.Hits))
 	for i, hit := range result.Hits {
+		if t, ok := tiles[hit.VariantID]; ok {
+			hit.OpenPrice, hit.POSColor = t.openPrice, t.color
+		}
 		hits[i] = hitWithStock{Hit: hit, Stock: stock[hit.VariantID]}
 	}
 

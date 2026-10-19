@@ -115,6 +115,7 @@ class OfflineStore {
         'open_price_min': (e['open_price'] as Map<String, dynamic>?)?['min'],
         'open_price_max': (e['open_price'] as Map<String, dynamic>?)?['max'],
         'open_price_approval_above': (e['open_price'] as Map<String, dynamic>?)?['approval_above'],
+        'pos_color': e['pos_color'] is String && (e['pos_color'] as String).isNotEmpty ? e['pos_color'] : null,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
@@ -168,6 +169,7 @@ class OfflineStore {
         openPrice: min == null || max == null
             ? null
             : OpenPriceRange(min: min, max: max, approvalAbove: r['open_price_approval_above'] as String?),
+        posColor: r['pos_color'] as String?,
       ),
       r['cgst_rate'] as double,
       r['sgst_rate'] as double,
@@ -181,8 +183,10 @@ class OfflineStore {
   /// POS product grid and search keep working offline. One row per
   /// variant (the cache is keyed by barcode, so a variant with two
   /// barcodes appears twice there), with its cached available stock.
-  /// An empty query returns the first [limit] products by name.
-  Future<List<CachedCatalogItem>> searchCatalog(String query, {int limit = 40}) async {
+  /// An empty query returns the first [limit] products by name;
+  /// [openPriceFirst] (the branch's Sales Policy, migrations/063) puts
+  /// open-price items ahead of the rest.
+  Future<List<CachedCatalogItem>> searchCatalog(String query, {int limit = 40, bool openPriceFirst = false}) async {
     final db = await LocalDb.instance.db;
     final q = query.trim().toLowerCase();
     // instr() rather than LIKE: a typed % or _ is matched literally, with
@@ -192,7 +196,7 @@ class OfflineStore {
       'FROM catalog c LEFT JOIN stock_cache s ON s.variant_id = c.variant_id '
       "WHERE (? = '' OR instr(lower(c.product_name), ?) > 0 OR instr(lower(c.sku), ?) > 0 OR c.barcode = ?) "
       'GROUP BY c.variant_id '
-      'ORDER BY c.product_name, c.sku '
+      'ORDER BY ${openPriceFirst ? '(c.open_price_min IS NULL), ' : ''}c.product_name, c.sku '
       'LIMIT ?',
       [q, q, q, query.trim(), limit],
     );

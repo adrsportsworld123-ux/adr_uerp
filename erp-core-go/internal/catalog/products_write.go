@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -222,7 +223,12 @@ type updateProductRequest struct {
 	// customer pays ₹1180). Sales already made keep their own snapshot
 	// (sales_order_lines.price_includes_tax); open carts' lines too.
 	PriceIncludesTax *bool `json:"price_includes_tax"`
+	// POSColor: the POS tile colour, "#RRGGBB"; "" clears it (migrations/063).
+	POSColor *string `json:"pos_color"`
 }
+
+// posColor is a tile colour: #RRGGBB.
+var posColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 func nullableUUID(s string) *string {
 	if s == "" {

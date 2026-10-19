@@ -99,6 +99,10 @@ class ProductLookup {
   // the suggested price.
   final OpenPriceRange? openPrice;
 
+  /// The product's own POS tile colour (#RRGGBB, erp-core-go
+  /// migrations/063); null = none.
+  final String? posColor;
+
   ProductLookup({
     required this.productId,
     required this.productName,
@@ -107,6 +111,7 @@ class ProductLookup {
     required this.sellingPrice,
     required this.mrp,
     this.openPrice,
+    this.posColor,
   });
 
   factory ProductLookup.fromJson(Map<String, dynamic> json) => ProductLookup(
@@ -117,8 +122,11 @@ class ProductLookup {
         sellingPrice: json['selling_price'] as String,
         mrp: json['mrp'] as String,
         openPrice: OpenPriceRange.fromJson(json['open_price']),
+        posColor: _color(json['pos_color']),
       );
 }
+
+String? _color(dynamic v) => v is String && RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(v) ? v : null;
 
 /// Mirrors internal/catalog/taxonomy.go's categoryResponse — a flat list
 /// with a self-referencing parent_id, the same materialized-hierarchy
@@ -162,6 +170,11 @@ class ProductSearchResult {
   final double sellingPrice;
   final double mrp;
 
+  /// migrations/063: an open-price item (the grid marks it; the price is
+  /// asked when it's added) and the product's own tile colour.
+  final bool openPrice;
+  final String? posColor;
+
   ProductSearchResult({
     required this.variantId,
     required this.productId,
@@ -171,6 +184,8 @@ class ProductSearchResult {
     this.categoryName,
     required this.sellingPrice,
     required this.mrp,
+    this.openPrice = false,
+    this.posColor,
   });
 
   factory ProductSearchResult.fromJson(Map<String, dynamic> json) => ProductSearchResult(
@@ -182,6 +197,8 @@ class ProductSearchResult {
         categoryName: json['category_name'] as String?,
         sellingPrice: (json['selling_price'] as num).toDouble(),
         mrp: (json['mrp'] as num).toDouble(),
+        openPrice: json['open_price'] as bool? ?? false,
+        posColor: _color(json['pos_color']),
       );
 
   ProductLookup toProductLookup() => ProductLookup(
@@ -191,6 +208,7 @@ class ProductSearchResult {
         sku: sku,
         sellingPrice: sellingPrice.toStringAsFixed(2),
         mrp: mrp.toStringAsFixed(2),
+        posColor: posColor,
       );
 }
 
@@ -1602,10 +1620,13 @@ class ApiClient {
   /// with a `categoryId` set is a valid, common call shape — it means
   /// "browse this whole category," not "search for nothing" (the backend
   /// falls back to match-all when query is blank).
-  Future<List<ProductSearchResult>> searchProducts({String query = '', String? categoryId, int limit = 50}) async {
+  Future<List<ProductSearchResult>> searchProducts({String query = '', String? categoryId, int limit = 50, String? branchId}) async {
     final params = <String, String>{'limit': '$limit'};
     if (query.isNotEmpty) params['q'] = query;
     if (categoryId != null && categoryId.isNotEmpty) params['category_id'] = categoryId;
+    // The branch's grid order (open-price items first, migrations/063)
+    // and its stock beside each hit.
+    if (branchId != null && branchId.isNotEmpty) params['branch_id'] = branchId;
     final uri = Uri.parse('$baseUrl/api/v1/products/search').replace(queryParameters: params);
     final resp = await _http.get(uri, headers: _authHeaders);
     final body = _decode(resp);
@@ -2373,11 +2394,31 @@ class SalesSettings {
   /// Start the payment screen with the paise waived.
   final bool roundOffAuto;
 
-  const SalesSettings({this.shiftsRequired = false, this.roundOffMax = 0, this.roundOffAuto = false});
+  /// migrations/063: whether the grid lists open-price items first — the
+  /// merchant's default, and each branch's resolved value.
+  final bool openPriceFirst;
+  final Map<String, bool> openPriceFirstByBranch;
+
+  const SalesSettings({
+    this.shiftsRequired = false,
+    this.roundOffMax = 0,
+    this.roundOffAuto = false,
+    this.openPriceFirst = false,
+    this.openPriceFirstByBranch = const {},
+  });
+
+  /// The rule for [branchId]: its own, else the merchant's.
+  bool openPriceFirstAt(String branchId) => openPriceFirstByBranch[branchId] ?? openPriceFirst;
 
   factory SalesSettings.fromJson(Map<String, dynamic> j) => SalesSettings(
         shiftsRequired: j['shifts_required'] as bool? ?? false,
         roundOffMax: double.tryParse(j['round_off_max']?.toString() ?? '') ?? 0,
         roundOffAuto: j['round_off_auto'] as bool? ?? false,
+        openPriceFirst: j['open_price_first'] as bool? ?? false,
+        openPriceFirstByBranch: {
+          for (final b in (j['branches'] as List<dynamic>? ?? const []))
+            if ((b as Map<String, dynamic>)['effective_open_price_first'] is bool)
+              b['branch_id'] as String: b['effective_open_price_first'] as bool,
+        },
       );
 }

@@ -51,16 +51,19 @@ type salesSettings struct {
 	// promotions — the merchant's default; branches may override it
 	// (branch_sales.go).
 	OpenPriceDiscounts bool `json:"open_price_discounts"`
+	// migrations/063: the POS grid lists open-price items first (the
+	// merchant's default; branches may override it).
+	OpenPriceFirst bool `json:"open_price_first"`
 }
 
 func loadSalesSettings(ctx context.Context, tx pgx.Tx) (salesSettings, error) {
 	s := salesSettings{ReturnsRequireApproval: true, RoundOffMax: "0.00", OpenPriceDiscounts: true} // the safe default when never configured
 	err := tx.QueryRow(ctx, `
 		SELECT returns_require_approval, return_window_days, shifts_required, round_off_max::text, round_off_auto, round_off_max::float8,
-		       open_price_discounts
+		       open_price_discounts, open_price_first
 		FROM sales_settings`).
 		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays, &s.ShiftsRequired, &s.RoundOffMax, &s.RoundOffAuto, &s.roundOffMax,
-			&s.OpenPriceDiscounts)
+			&s.OpenPriceDiscounts, &s.OpenPriceFirst)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, nil
 	}
@@ -105,6 +108,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		RoundOffMax            *float64 `json:"round_off_max"`
 		RoundOffAuto           *bool    `json:"round_off_auto"`
 		OpenPriceDiscounts     *bool    `json:"open_price_discounts"`
+		OpenPriceFirst         *bool    `json:"open_price_first"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
@@ -134,6 +138,11 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.OpenPriceDiscounts != nil {
 			if _, err := tx.Exec(ctx, `UPDATE sales_settings SET open_price_discounts = $1`, *req.OpenPriceDiscounts); err != nil {
+				return err
+			}
+		}
+		if req.OpenPriceFirst != nil {
+			if _, err := tx.Exec(ctx, `UPDATE sales_settings SET open_price_first = $1`, *req.OpenPriceFirst); err != nil {
 				return err
 			}
 		}

@@ -370,9 +370,9 @@ class AppSession extends ChangeNotifier {
     _lastError = null;
     if (!offlineMode) {
       try {
-        final results = await api.searchProducts(query: query, categoryId: categoryId);
+        final results = await api.searchProducts(query: query, categoryId: categoryId, branchId: branchId);
         return results
-            .map((r) => GridProduct(lookup: r.toProductLookup(), categoryName: r.categoryName, available: null))
+            .map((r) => GridProduct(lookup: r.toProductLookup(), categoryName: r.categoryName, available: null, openPrice: r.openPrice))
             .toList();
       } on ApiException catch (e) {
         if (e.code != 'SEARCH_UNAVAILABLE') {
@@ -387,11 +387,13 @@ class AppSession extends ChangeNotifier {
         notifyListeners();
       }
     }
-    final items = await _offline.searchCatalog(query);
+    final items = await _offline.searchCatalog(query, openPriceFirst: openPriceFirst);
     for (final i in items) {
       _offlineCatalogByVariant[i.product.lookup.variantId] = i.product;
     }
-    return items.map((i) => GridProduct(lookup: i.product.lookup, categoryName: null, available: i.available)).toList();
+    return items
+        .map((i) => GridProduct(lookup: i.product.lookup, categoryName: null, available: i.available, openPrice: i.product.lookup.openPrice != null))
+        .toList();
   }
 
   /// Set when an item needs its price typed (Phase 13 open price): the
@@ -1030,6 +1032,11 @@ class AppSession extends ChangeNotifier {
   double roundOffMax = 0;
   bool roundOffAuto = false;
 
+  /// Sales Policy (migrations/063): this branch lists open-price items
+  /// first on the grid. The server orders the live grid itself; this is
+  /// kept for the offline grid.
+  bool openPriceFirst = false;
+
   /// The branch's tax regime (Tax Settings, erp-core-go migrations/060):
   /// how a cart the server hasn't priced (offline) splits its tax. Last
   /// known values are kept for offline sales.
@@ -1053,6 +1060,7 @@ class AppSession extends ChangeNotifier {
       shiftsRequired = settings.shiftsRequired;
       roundOffMax = settings.roundOffMax;
       roundOffAuto = settings.roundOffAuto;
+      openPriceFirst = settings.openPriceFirstAt(branchId);
       // An older server has no /tax/regime: keep the GST default.
       try {
         taxRegime = await api.taxRegime(branchId);
@@ -1285,5 +1293,8 @@ class GridProduct {
   final String? categoryName;
   final double? available;
 
-  GridProduct({required this.lookup, required this.categoryName, required this.available});
+  /// An open-price item (the tile is marked and coloured, migrations/063).
+  final bool openPrice;
+
+  GridProduct({required this.lookup, required this.categoryName, required this.available, this.openPrice = false});
 }

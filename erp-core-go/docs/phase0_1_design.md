@@ -2376,6 +2376,34 @@ Verified on a fresh database built from all migrations:
 - Go and POS unit tests, including the offline description.
 - `e2e/users-open-price.spec.ts`, plus the tax-split, round-off, phase14-admin-sales and quotations specs.
 
+### 3.71 POS grid: open-price items first per branch, product tile colours (2026-10-19)
+
+`migrations/063_pos_grid.sql`.
+
+- **Open-price items first.**
+  - `sales_settings.open_price_first` is the merchant default (false = today's order). `branch_sales_settings.open_price_first` holds a branch override (NULL = the default), resolved by `app_open_price_first(branch)`.
+  - The setting is on Sales Policy: `open_price_first` on `GET/PUT /sales/settings` and its `branches` list, and in `PUT /sales/settings/branches/{id}`. That PUT now leaves a field that is omitted unchanged and drops the row when both rules are null.
+  - `GET /products/search?branch_id=` (the POS grid, its category filter and its search) sorts open-price items first for such a branch: the index's new `open_price` field, sorted descending ahead of relevance. Without a branch (the back office's search), the order is unchanged.
+  - The offline grid orders its cached catalog the same way, using the session's `openPriceFirst`, which comes from the sales settings' branch list.
+- **Tile colour.**
+  - `products.pos_color` (`#RRGGBB`) is set with `PATCH /products/{id} {"pos_color"}` ("" clears it, audited) and appears on product detail.
+  - Search hits carry `open_price` and `pos_color` (read live from Postgres, whatever the index last saw), and so does the sync-pull catalog.
+  - The POS tints the tile and draws a coloured edge in the product's colour. An open-price item without a colour of its own uses the standard open-price colour (theme plum). An open-price tile is also labelled "Open price", so colour is never the only signal.
+- **Search index:**
+  - `EnsureIndex` adds the two fields to an existing index's mapping.
+  - At startup, the API reindexes when any document lacks `open_price` (`CountStale`), so a deployment needs no manual reindex. On the live index this backfilled 411 documents.
+- **POS:**
+  - Local DB v7 adds `catalog.pos_color` and forces one full pull so every product gets its colour.
+  - `ApiClient.searchProducts` sends `branch_id`.
+  - `GridProduct.openPrice` marks open-price items, and `tileAccent()` picks the colour.
+
+Verified with a throwaway Postgres and a throwaway OpenSearch:
+- A 23-check API script: default order, the branch override both ways and alongside the discount rule, a category filter, a text search, the back office unchanged, the merchant default with an opt-out, colour validation, the colour in hits and in sync pull, clearing it, and audit.
+- The startup self-reindex, after stripping the field from a document.
+- §3.68–3.70's 162 checks re-run.
+- POS widget tests in `test/product_grid_test.dart`; the existing billing goldens are unchanged.
+- `e2e/pos-grid.spec.ts`, plus the users, round-off and phase14 specs.
+
 ## 4. What Phase 0 concretely delivers against this design
 
 1. Run `migrations/001_schema.sql` against your local Postgres (already verified to execute cleanly, RLS included).
