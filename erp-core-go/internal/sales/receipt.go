@@ -40,6 +40,9 @@ type receiptResponse struct {
 	// Additive fields.
 	TaxBreakup    *taxes.Breakup `json:"tax_breakup"`
 	CustomerGSTIN *string        `json:"customer_gstin"`
+	// ShowSKU: whether the branch prints SKUs under item names
+	// (migrations/062). Additive.
+	ShowSKU bool `json:"show_sku"`
 
 	// Not part of the public JSON contract (GetReceipt already predates
 	// notifications and other clients may depend on its exact shape) —
@@ -131,6 +134,7 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 		GrandTotal:    resp.GrandTotal,
 		RoundOff:      resp.RoundOff,
 		PayableTotal:  resp.PayableTotal,
+		HideSKU:       lh.HideSKU,
 	}
 	if b := resp.TaxBreakup; b != nil {
 		for _, t := range b.Rows {
@@ -181,7 +185,8 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 		       u.name, c.name, c.email, c.phone, NULLIF(c.gstin, ''),
 		       so.subtotal::text, so.discount_total::text, so.tax_total::text, so.grand_total::text,
 		       so.round_off::text, (so.grand_total + so.round_off)::text,
-		       so.branch_id, to_char(COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone, 'DD Mon YYYY, HH24:MI')
+		       so.branch_id, to_char(COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone, 'DD Mon YYYY, HH24:MI'),
+		       COALESCE((SELECT ps.show_sku FROM branch_print_settings ps WHERE ps.branch_id = so.branch_id), true)
 		FROM sales_orders so
 		JOIN merchants m ON m.id = so.merchant_id
 		JOIN branches b ON b.id = so.branch_id
@@ -193,7 +198,7 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 		&resp.CashierName, &customerName, &resp.CustomerEmail, &resp.CustomerPhone, &resp.CustomerGSTIN,
 		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal,
 		&resp.RoundOff, &resp.PayableTotal,
-		&resp.BranchID, &resp.DateText); err != nil {
+		&resp.BranchID, &resp.DateText, &resp.ShowSKU); err != nil {
 		return resp, err
 	}
 	resp.FinalizedAt = finalizedAt

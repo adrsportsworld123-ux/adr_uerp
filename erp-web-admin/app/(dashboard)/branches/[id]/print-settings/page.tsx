@@ -34,6 +34,7 @@ type Form = {
   purchase_footer: string;
   show_logo: boolean;
   show_gstin: boolean;
+  show_sku: boolean;
   receipt_format: "a4" | "thermal";
 };
 
@@ -48,6 +49,7 @@ function toForm(s: PrintSettings): Form {
     purchase_footer: s.purchase_footer,
     show_logo: s.show_logo,
     show_gstin: s.show_gstin,
+    show_sku: s.show_sku ?? true,
     receipt_format: s.receipt_format,
   };
 }
@@ -291,6 +293,10 @@ export default function BranchPrintSettingsPage() {
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={form.show_gstin} onChange={(e) => set("show_gstin", e.target.checked)} />
                 Print the GSTIN (a sale receipt with a GSTIN is titled &ldquo;Tax invoice&rdquo;)
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={form.show_sku} onChange={(e) => set("show_sku", e.target.checked)} />
+                Print the SKU under each item on receipts, invoices and quotations (off: the product name only)
               </label>
             </fieldset>
 

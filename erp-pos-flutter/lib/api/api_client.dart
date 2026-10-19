@@ -599,6 +599,9 @@ class ReceiptData {
   /// The tax split as the invoice prints it (migrations/060).
   final TaxBreakup? taxBreakup;
 
+  /// Whether the branch prints SKUs under item names (migrations/062).
+  final bool showSku;
+
   ReceiptData({
     required this.orderNumber,
     required this.status,
@@ -616,6 +619,7 @@ class ReceiptData {
     String? payableTotal,
     required this.payments,
     this.taxBreakup,
+    this.showSku = true,
   }) : payableTotal = payableTotal ?? grandTotal;
 
   bool get hasRoundOff => (double.tryParse(roundOff) ?? 0) < 0;
@@ -641,6 +645,7 @@ class ReceiptData {
             .map((e) => ReceiptPaymentData.fromJson(e as Map<String, dynamic>))
             .toList(),
         taxBreakup: TaxBreakup.fromJson(json['tax_breakup'] as Map<String, dynamic>?),
+        showSku: json['show_sku'] as bool? ?? true,
       );
 }
 
@@ -1635,6 +1640,7 @@ class ApiClient {
     double? unitPrice,
     String? approverCode,
     String? approverPin,
+    String? description,
   }) async {
     final resp = await _http.post(
       Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/lines'),
@@ -1643,6 +1649,7 @@ class ApiClient {
         'variant_id': variantId,
         'quantity': quantity,
         if (unitPrice != null) 'unit_price': unitPrice,
+        if (description != null && description.trim().isNotEmpty) 'description': description.trim(),
         if (approverCode != null && approverCode.isNotEmpty) 'approver_code': approverCode,
         if (approverPin != null && approverPin.isNotEmpty) 'approver_pin': approverPin,
       }),

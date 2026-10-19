@@ -1,6 +1,9 @@
 package printing
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type ReceiptLine struct {
 	ProductName string
@@ -43,6 +46,9 @@ type ReceiptData struct {
 	Taxes         []ReceiptTax
 	TaxSummary    []string
 	PlaceOfSupply string
+	// HideSKU prints each item's name only (branch_print_settings.show_sku,
+	// migrations/062); a SKU that repeats the name is never printed.
+	HideSKU bool
 	// The branch's letterhead (branch_print_settings, internal/documents):
 	// lines under the branch name, and the closing lines. Footer nil keeps
 	// the original "Thank you, visit again!"; an empty, non-nil Footer
@@ -76,7 +82,11 @@ func BuildReceipt(d ReceiptData) []byte {
 		Line(ruleLine)
 
 	for _, l := range d.Lines {
-		b.Line(fmt.Sprintf("%s (%s)", l.ProductName, l.SKU))
+		if d.HideSKU || l.SKU == "" || strings.EqualFold(strings.TrimSpace(l.SKU), strings.TrimSpace(l.ProductName)) {
+			b.Line(l.ProductName)
+		} else {
+			b.Line(fmt.Sprintf("%s (%s)", l.ProductName, l.SKU))
+		}
 		b.Line(fmt.Sprintf("  %s x %s = %s", l.Quantity, l.UnitPrice, l.LineTotal))
 	}
 

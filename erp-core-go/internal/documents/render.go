@@ -68,6 +68,10 @@ type Letterhead struct {
 	LogoMime   string
 	// The branch's currency (migrations/061); zero = INR / ₹.
 	Currency taxes.Currency
+	// HideSKU: the branch prints only the product name on sale receipts,
+	// invoices, credit notes and quotations (branch_print_settings.show_sku,
+	// migrations/062). Zero = the SKU shows, as before.
+	HideSKU bool
 }
 
 // Column of the A4 line-item table. Width is relative: the widths are

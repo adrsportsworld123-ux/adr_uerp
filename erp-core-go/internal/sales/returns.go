@@ -47,14 +47,20 @@ type salesSettings struct {
 	RoundOffMax  string `json:"round_off_max"`
 	RoundOffAuto bool   `json:"round_off_auto"`
 	roundOffMax  float64
+	// migrations/062: whether open-price items take discounts and
+	// promotions — the merchant's default; branches may override it
+	// (branch_sales.go).
+	OpenPriceDiscounts bool `json:"open_price_discounts"`
 }
 
 func loadSalesSettings(ctx context.Context, tx pgx.Tx) (salesSettings, error) {
-	s := salesSettings{ReturnsRequireApproval: true, RoundOffMax: "0.00"} // the safe default when never configured
+	s := salesSettings{ReturnsRequireApproval: true, RoundOffMax: "0.00", OpenPriceDiscounts: true} // the safe default when never configured
 	err := tx.QueryRow(ctx, `
-		SELECT returns_require_approval, return_window_days, shifts_required, round_off_max::text, round_off_auto, round_off_max::float8
+		SELECT returns_require_approval, return_window_days, shifts_required, round_off_max::text, round_off_auto, round_off_max::float8,
+		       open_price_discounts
 		FROM sales_settings`).
-		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays, &s.ShiftsRequired, &s.RoundOffMax, &s.RoundOffAuto, &s.roundOffMax)
+		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays, &s.ShiftsRequired, &s.RoundOffMax, &s.RoundOffAuto, &s.roundOffMax,
+			&s.OpenPriceDiscounts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, nil
 	}
@@ -68,10 +74,10 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
 		return
 	}
-	var s salesSettings
+	var s salesSettingsResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
-		s, err = loadSalesSettings(ctx, tx)
+		s, err = loadSalesSettingsResponse(ctx, tx)
 		return err
 	})
 	if err != nil {
@@ -98,6 +104,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		ShiftsRequired         *bool    `json:"shifts_required"`
 		RoundOffMax            *float64 `json:"round_off_max"`
 		RoundOffAuto           *bool    `json:"round_off_auto"`
+		OpenPriceDiscounts     *bool    `json:"open_price_discounts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
@@ -111,7 +118,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("round_off_max must be between 0 and %.2f", MaxRoundOff))
 		return
 	}
-	var saved salesSettings
+	var saved salesSettingsResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO sales_settings (merchant_id, returns_require_approval, return_window_days, shifts_required,
@@ -125,8 +132,13 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			req.ReturnsRequireApproval, req.ReturnWindowDays, req.ShiftsRequired, req.RoundOffMax, req.RoundOffAuto); err != nil {
 			return err
 		}
+		if req.OpenPriceDiscounts != nil {
+			if _, err := tx.Exec(ctx, `UPDATE sales_settings SET open_price_discounts = $1`, *req.OpenPriceDiscounts); err != nil {
+				return err
+			}
+		}
 		var err error
-		saved, err = loadSalesSettings(ctx, tx)
+		saved, err = loadSalesSettingsResponse(ctx, tx)
 		return err
 	})
 	if err != nil {
@@ -158,7 +170,7 @@ type returnableLine struct {
 
 func loadReturnableLines(ctx context.Context, tx pgx.Tx, orderID string) ([]returnableLine, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT l.id, l.variant_id, p.name, v.sku, l.quantity, l.line_total, l.taxable_value, l.tax_amount,
+		SELECT l.id, l.variant_id, COALESCE(l.description, p.name), v.sku, l.quantity, l.line_total, l.taxable_value, l.tax_amount,
 		       COALESCE(sum(rl.quantity), 0), COALESCE(sum(rl.refund_amount), 0),
 		       COALESCE(sum(rl.tax_amount), 0), COALESCE(sum(rl.taxable_amount), 0)
 		FROM sales_order_lines l
@@ -166,7 +178,7 @@ func loadReturnableLines(ctx context.Context, tx pgx.Tx, orderID string) ([]retu
 		JOIN products p ON p.id = v.product_id
 		LEFT JOIN sales_return_lines rl ON rl.sales_order_line_id = l.id
 		WHERE l.sales_order_id = $1
-		GROUP BY l.id, l.variant_id, p.name, v.sku, l.quantity, l.line_total, l.taxable_value, l.tax_amount, l.created_at
+		GROUP BY l.id, l.variant_id, l.description, p.name, v.sku, l.quantity, l.line_total, l.taxable_value, l.tax_amount, l.created_at
 		ORDER BY l.created_at`, orderID)
 	if err != nil {
 		return nil, err

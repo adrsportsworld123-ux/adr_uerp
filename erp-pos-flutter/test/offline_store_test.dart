@@ -150,4 +150,27 @@ void main() {
     expect(pushedIncl['line_total'], 3000.0);
     await store.markSynced(orderId, 'server-order-incl');
   });
+
+  // erp-core-go migrations/062: an open-price line's description shows in
+  // the cart and goes to /sync/push; a normal line never carries one.
+  test('offline open-price line keeps its description for sync', () async {
+    final store = OfflineStore();
+    await store.cacheCatalog([
+      {
+        'barcode': '3333333333333', 'product_id': 'prod-3', 'product_name': 'Engraving', 'hsn_code': '9988',
+        'variant_id': 'variant-3', 'sku': 'ENGRAVE', 'selling_price': '50.00', 'mrp': '50.00',
+        'cgst_rate': 9.0, 'sgst_rate': 9.0, 'igst_rate': 0.0, 'cess_rate': 0.0,
+        'open_price': {'min': '10.00', 'max': '500.00'},
+      }
+    ]);
+    final cached = (await store.lookupBarcode('3333333333333'))!;
+    final orderId = await store.createPendingOrder('branch-1', 'terminal-1');
+    var summary = await store.addLine(orderId, cached, 1, unitPrice: 120, description: '  Name on bat — "ARJUN 10"  ');
+    expect(summary.lines.single.productName, 'Name on bat — "ARJUN 10"');
+    summary = await store.addLine(orderId, cached, 1, description: 'ignored without an open price');
+    expect(summary.lines[1].productName, 'Engraving');
+    await store.checkout(orderId, [PaymentInput(method: 'cash', amount: double.parse(summary.grandTotal))]);
+    final lines = (await store.listUnsynced()).firstWhere((o) => o.id == orderId).lines;
+    expect(lines.map((l) => l['description']), containsAll(['Name on bat — "ARJUN 10"', null]));
+  });
 }

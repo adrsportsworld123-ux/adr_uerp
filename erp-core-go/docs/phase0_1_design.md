@@ -245,6 +245,10 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `GRN_HAS_RETURN` | 409 | `DELETE /purchase/grn/{id}` | A purchase return refers to this draft GRN |
 | `ROUND_OFF_NOT_ALLOWED` | 400 | `POST /sales/orders/{id}/checkout` | A `round_off` was sent but round-off is off, or it's above the merchant's limit (≤ ₹5), positive, or the whole bill (§3.67) |
 | `TAX_SPLIT_MISMATCH` | 400 | `POST /purchase/bills` | `cgst_amount + sgst_amount + igst_amount + cess_amount` doesn't add up to `tax_total` (§3.68) |
+| `OPEN_PRICE_NOT_DISCOUNTABLE` | 409 | discounts, coupons, loyalty redemption | The cart's only lines are open-price items and the branch keeps them out of discounts (§3.70) |
+| `DESCRIPTION_NOT_ALLOWED` | 400 | `POST .../lines`, `PUT .../lines/{line_id}/description` | A description was sent for an item that isn't open-price (§3.70) |
+| `CANNOT_DEACTIVATE_SELF` / `LAST_USER_ADMIN` | 409 | `PATCH /users/{id}` | Deactivating yourself, or the last active user who can manage users (§3.70) |
+| `EMPLOYEE_CODE_REQUIRED` | 409 | `PUT /users/{id}/pin`, `PUT /me/pin` | PIN sign-in is code + PIN, and the user has no employee code (§3.70) |
 
 ### 3.1 Auth
 
@@ -2336,6 +2340,41 @@ Verified on a fresh database built from all migrations:
 - §3.68's 61-check script, then a 38-check script: currency validation, branch/merchant inheritance and the POS regime; a USD receipt; a delivery to Maharashtra billed IGST (refused after checkout); a B2B customer shipped to Kerala; credit notes (CGST + SGST, IGST, B2B) and their PDFs; GSTR-1 B2CL / CDNR / CDNUR / B2CS netting / HSN net quantity; and GSTR-1 = GSTR-3B = the ledger.
 - Go and POS unit tests.
 - `e2e/tax-split.spec.ts` (now also covers place of supply, credit notes and a branch currency), plus the round-off, phase14-admin-sales, purchase-orders and quotations specs.
+
+### 3.70 Open-price discounts per branch, open-price descriptions, SKU on receipts, User Management (2026-10-19)
+
+`migrations/062_open_price_users.sql`.
+
+- **Open-price items and discounts, configurable per branch.**
+  - `sales_settings.open_price_discounts` is the merchant default (true, which is the behaviour before this). `branch_sales_settings.open_price_discounts` holds a branch override (NULL = the default), resolved by `app_open_price_discountable(branch)`.
+  - When false, an open-price line is outside every discount path (`sales.DiscountableLineSQL`): the discount layer (manual, coupon, promotion, loyalty), the manual percent's base, a coupon's minimum spend, and the promotion engine's cart lines. A percent discount is therefore sized on the other items only.
+  - A cart of nothing but excluded open-price items answers `OPEN_PRICE_NOT_DISCOUNTABLE`. Automatic promotions skip it silently.
+  - The setting is on Sales Policy: `open_price_discounts` on `GET/PUT /sales/settings` (with a `branches` list), and `PUT /sales/settings/branches/{id}` (sales.settings, audited).
+- **Open-price description.**
+  - `sales_order_lines.description` holds up to 120 characters, with spaces collapsed. It is accepted only on an open-price line: in `POST /sales/orders/{id}/lines` (`description`), through `PUT /sales/orders/{id}/lines/{line_id}/description` (cart or held only, audited), and in `/sync/push` (ignored on a normal line).
+  - Order, receipt, detail, returnable and credit-note lines print it as `product_name`. Order lines also carry `description` and `catalog_name`.
+  - GSTR HSN summaries keep the catalog name.
+  - POS: the open-price keypad has a Description field, and local DB v6 stores it for sync. Web Admin: the New sale page has the field and a pencil to edit a line.
+- **SKU on receipts.**
+  - `branch_print_settings.show_sku` defaults to true (as before); an older print-settings form that omits it keeps the saved value.
+  - Off: sale receipts (A4, 80 mm, ESC/POS), credit notes and quotations print the product name only. The receipt JSON's `show_sku` tells the POS receipt screen.
+  - A SKU that only repeats the name is never printed.
+- **User Management** (`internal/users`, permission `users.manage`, Merchant Admin; Web Admin → Access & Audit → Users).
+  - `GET /users[?q=&status=]` and `GET /users/{id}`.
+  - `PATCH /users/{id}`:
+    - `status` active|inactive: deactivating signs the user out everywhere. You can't deactivate yourself, or the last user who can manage users.
+    - `unlock`: clears a lockout after failed sign-ins.
+    - `home_branch_id`: a branch, or null.
+  - `PUT /users/{id}/password`: 8–72 characters, recent passwords refused, other sessions revoked. This shares `authn.SetPasswordTx` with the emailed reset.
+  - `PUT /users/{id}/pin` / `DELETE /users/{id}/pin`: 4–6 digits, not all the same digit, and an employee code is required.
+  - Self-service on the My Account page: `PUT /me/password` and `PUT /me/pin`, both behind the current password.
+  - Roles and extra branches use the existing `/rbac/users/{id}/roles` and `/rbac/users/{id}/branches`.
+  - Every change is audited without the secret. Logins are still created with an employee under HR; nothing is deleted.
+
+Verified on a fresh database built from all migrations:
+- A 63-check API script, plus §3.68's 61 and §3.69's 38 re-run, all passing. Its checks: description rules, edit, print and sync; the SKU switch on the slip and the receipt JSON; open-price discount defaults, the branch override both ways, mixed carts and refusals; and passwords, PINs (with PIN sign-in), deactivate and reactivate, unlock, home and extra branches, self-service, and no secrets in the audit log.
+- Go and POS unit tests, including the offline description.
+- `e2e/users-open-price.spec.ts`, plus the tax-split, round-off, phase14-admin-sales and quotations specs.
 
 ## 4. What Phase 0 concretely delivers against this design
 

@@ -31,7 +31,9 @@ class LocalDb {
       // server flagged it for review (NEGATIVE_STOCK).
       // v5 (erp-core-go migrations/059): pending_orders.round_off, the
       // checkout waiver an offline sale took (signed, 0 = none).
-      version: 5,
+      // v6 (erp-core-go migrations/062): pending_order_lines.description,
+      // an open-price line's own description, sent with /sync/push.
+      version: 6,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
@@ -53,6 +55,9 @@ class LocalDb {
         if (oldVersion < 4) {
           await db.execute('ALTER TABLE pending_orders ADD COLUMN synced_at TEXT');
           await db.execute('ALTER TABLE pending_orders ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0');
+        }
+        if (oldVersion < 6) {
+          await db.execute('ALTER TABLE pending_order_lines ADD COLUMN description TEXT');
         }
         if (oldVersion < 5) {
           await db.execute('ALTER TABLE pending_orders ADD COLUMN round_off REAL NOT NULL DEFAULT 0');
@@ -126,6 +131,7 @@ class LocalDb {
             line_total REAL NOT NULL,
             price_includes_tax INTEGER NOT NULL DEFAULT 0,
             open_price INTEGER NOT NULL DEFAULT 0,
+            description TEXT,
             FOREIGN KEY (pending_order_id) REFERENCES pending_orders (id)
           )
         ''');

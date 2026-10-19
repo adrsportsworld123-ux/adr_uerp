@@ -66,6 +66,7 @@ class OpenPriceDialog extends StatefulWidget {
 class _OpenPriceDialogState extends State<OpenPriceDialog> {
   late final _price = TextEditingController(text: widget.initial == null ? '' : _plain(widget.initial!.price));
   late final _approver = TextEditingController(text: widget.initial?.approverCode ?? '');
+  late final _description = TextEditingController(text: widget.initial?.description ?? '');
   String _pin = '';
 
   static String _plain(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
@@ -74,6 +75,7 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
   void dispose() {
     _price.dispose();
     _approver.dispose();
+    _description.dispose();
     super.dispose();
   }
 
@@ -98,7 +100,10 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
     if (!_canAdd) return;
     Navigator.pop(
       context,
-      OpenPriceEntry(_value!, approverCode: _needsApproval ? _approver.text.trim() : null, approverPin: _needsApproval ? _pin : null),
+      OpenPriceEntry(_value!,
+          approverCode: _needsApproval ? _approver.text.trim() : null,
+          approverPin: _needsApproval ? _pin : null,
+          description: _description.text.trim().isEmpty ? null : _description.text.trim()),
     );
   }
 
@@ -147,6 +152,19 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
                     child: Text('Use suggested ${formatRupees(widget.prompt.suggestedPrice)}'),
                   ),
                 ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('open-price-description'),
+                controller: _description,
+                maxLength: 120,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'Description (optional)',
+                  helperText: 'Prints on the receipt instead of the item name',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
               if (_needsApproval && !widget.offline) ...[
                 const SizedBox(height: 8),
                 Text('Manager approval', style: theme.textTheme.titleSmall),

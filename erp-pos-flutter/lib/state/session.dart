@@ -269,6 +269,7 @@ class AppSession extends ChangeNotifier {
                           'line_total': l['line_total'],
                           'price_includes_tax': (l['price_includes_tax'] as int? ?? 0) == 1,
                           'open_price': (l['open_price'] as int? ?? 0) == 1,
+                          if (l['description'] != null) 'description': l['description'],
                         })
                     .toList(),
                 'payments': o.payments
@@ -423,6 +424,7 @@ class AppSession extends ChangeNotifier {
         unitPrice: openPrice?.price,
         approverCode: openPrice?.approverCode,
         approverPin: openPrice?.approverPin,
+        description: openPrice?.description,
       );
       currentOrder = updated;
       _currentOrderIsLocal = false;
@@ -500,7 +502,8 @@ class AppSession extends ChangeNotifier {
       );
       _currentOrderIsLocal = true;
     }
-    currentOrder = await _offline.addLine(currentOrder!.orderId, cached, quantity, unitPrice: range == null ? null : openPrice?.price);
+    currentOrder = await _offline.addLine(currentOrder!.orderId, cached, quantity,
+        unitPrice: range == null ? null : openPrice?.price, description: range == null ? null : openPrice?.description);
     notifyListeners();
     return true;
   }
@@ -1262,13 +1265,16 @@ class OpenPricePrompt {
   OpenPricePrompt({required this.product, required this.range, required this.suggestedPrice});
 }
 
-/// The price the cashier typed, and the approver when it needs one.
+/// The price the cashier typed, the approver when it needs one, and an
+/// optional description of the item (erp-core-go migrations/062), printed
+/// on the receipt and invoice instead of the catalog name.
 class OpenPriceEntry {
   final double price;
   final String? approverCode;
   final String? approverPin;
+  final String? description;
 
-  OpenPriceEntry(this.price, {this.approverCode, this.approverPin});
+  OpenPriceEntry(this.price, {this.approverCode, this.approverPin, this.description});
 }
 
 /// One tile in the POS product grid (Phase 12). [available] is the cached

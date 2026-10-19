@@ -422,9 +422,10 @@ func loadCartLines(ctx context.Context, tx pgx.Tx, orderID string) ([]cartLine, 
 	rows, err := tx.Query(ctx, `
 		SELECT sol.id, p.id, COALESCE(p.category_id::text,''), sol.quantity, sol.unit_price, sol.discount_amount
 		FROM sales_order_lines sol
+		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
 		JOIN products p ON p.id = pv.product_id
-		WHERE sol.sales_order_id = $1`, orderID)
+		WHERE sol.sales_order_id = $1 AND `+sales.DiscountableLineSQL, orderID) // open-price lines a branch excludes never count
 	if err != nil {
 		return nil, err
 	}

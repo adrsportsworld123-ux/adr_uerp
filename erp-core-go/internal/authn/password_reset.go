@@ -179,73 +179,11 @@ func (h *PasswordResetHandler) ResetPassword(w http.ResponseWriter, r *http.Requ
 	}
 
 	err = h.DB.WithTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var currentHash *string
-		if err := tx.QueryRow(ctx, `SELECT password_hash FROM users WHERE id = $1`, userID).Scan(&currentHash); err != nil {
+		if err := SetPasswordTx(ctx, tx, userID, req.NewPassword); err != nil {
 			return err
 		}
-
-		// Reuse check: the current password (not yet archived into
-		// password_history until this same transaction, below) plus the
-		// last passwordHistoryDepth-1 archived ones.
-		if currentHash != nil && bcrypt.CompareHashAndPassword([]byte(*currentHash), []byte(req.NewPassword)) == nil {
-			return errPasswordReused
-		}
-		rows, err := tx.Query(ctx, `
-			SELECT password_hash FROM password_history
-			WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`, userID, passwordHistoryDepth-1)
-		if err != nil {
-			return err
-		}
-		var pastHashes []string
-		for rows.Next() {
-			var ph string
-			if err := rows.Scan(&ph); err != nil {
-				rows.Close()
-				return err
-			}
-			pastHashes = append(pastHashes, ph)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for _, ph := range pastHashes {
-			if bcrypt.CompareHashAndPassword([]byte(ph), []byte(req.NewPassword)) == nil {
-				return errPasswordReused
-			}
-		}
-
-		newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
-		if err != nil {
-			return err
-		}
-
-		if currentHash != nil {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO password_history (id, merchant_id, user_id, password_hash)
-				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2)`,
-				userID, *currentHash); err != nil {
-				return err
-			}
-		}
-
-		if _, err := tx.Exec(ctx, `
-			UPDATE users SET password_hash = $1, password_changed_at = now(), failed_login_attempts = 0, locked_until = NULL
-			WHERE id = $2`, string(newHash), userID); err != nil {
-			return err
-		}
-
-		if _, err := tx.Exec(ctx, `UPDATE password_reset_tokens SET used_at = now() WHERE id = $1`, tokenID); err != nil {
-			return err
-		}
-
-		// A password reset is exactly the moment every other session for
-		// this account should stop being trusted — revoke every refresh
-		// token still active, forcing a real re-login everywhere.
-		if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID); err != nil {
-			return err
-		}
-		return nil
+		_, err := tx.Exec(ctx, `UPDATE password_reset_tokens SET used_at = now() WHERE id = $1`, tokenID)
+		return err
 	})
 
 	switch {
@@ -256,4 +194,80 @@ func (h *PasswordResetHandler) ResetPassword(w http.ResponseWriter, r *http.Requ
 	default:
 		httpx.JSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	}
+}
+
+// ErrPasswordReused: the new password is the current one or one of the
+// last passwordHistoryDepth-1 (exported for internal/users).
+var ErrPasswordReused = errPasswordReused
+
+// SetPasswordTx sets a user's password inside the caller's tenant
+// transaction, with the same rules every path uses: no reuse of the
+// current or recent passwords, the old hash archived to
+// password_history, the lockout cleared, and every refresh token revoked
+// so other sessions must sign in again. Shared by the emailed reset
+// (ResetPassword) and User Management (internal/users).
+func SetPasswordTx(ctx context.Context, tx pgx.Tx, userID, newPassword string) error {
+	var currentHash *string
+	if err := tx.QueryRow(ctx, `SELECT password_hash FROM users WHERE id = $1`, userID).Scan(&currentHash); err != nil {
+		return err
+	}
+
+	// Reuse check: the current password (not yet archived into
+	// password_history until this same transaction, below) plus the
+	// last passwordHistoryDepth-1 archived ones.
+	if currentHash != nil && bcrypt.CompareHashAndPassword([]byte(*currentHash), []byte(newPassword)) == nil {
+		return errPasswordReused
+	}
+	rows, err := tx.Query(ctx, `
+			SELECT password_hash FROM password_history
+			WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`, userID, passwordHistoryDepth-1)
+	if err != nil {
+		return err
+	}
+	var pastHashes []string
+	for rows.Next() {
+		var ph string
+		if err := rows.Scan(&ph); err != nil {
+			rows.Close()
+			return err
+		}
+		pastHashes = append(pastHashes, ph)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, ph := range pastHashes {
+		if bcrypt.CompareHashAndPassword([]byte(ph), []byte(newPassword)) == nil {
+			return errPasswordReused
+		}
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	if currentHash != nil {
+		if _, err := tx.Exec(ctx, `
+				INSERT INTO password_history (id, merchant_id, user_id, password_hash)
+				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2)`,
+			userID, *currentHash); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+			UPDATE users SET password_hash = $1, password_changed_at = now(), failed_login_attempts = 0, locked_until = NULL
+			WHERE id = $2`, string(newHash), userID); err != nil {
+		return err
+	}
+
+	// A password reset is exactly the moment every other session for
+	// this account should stop being trusted — revoke every refresh
+	// token still active, forcing a real re-login everywhere.
+	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID); err != nil {
+		return err
+	}
+	return nil
 }

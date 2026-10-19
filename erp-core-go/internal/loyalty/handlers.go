@@ -368,6 +368,8 @@ func (h *Handler) Redeem(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has no customer attached — loyalty points require a registered customer")
 	case errors.Is(err, errInsufficientPoints):
 		httpx.Error(w, http.StatusConflict, "INSUFFICIENT_LOYALTY_POINTS", "customer does not have this many available points")
+	case sales.IsOpenPriceNotDiscountable(err):
+		httpx.Error(w, http.StatusConflict, "OPEN_PRICE_NOT_DISCOUNTABLE", err.Error())
 	case errors.Is(err, sales.ErrDiscountExceedsAvailable):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has nothing left to discount")
 	case errors.Is(err, pgx.ErrNoRows):

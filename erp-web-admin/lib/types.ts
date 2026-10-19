@@ -145,6 +145,8 @@ export interface PrintSettings {
   purchase_footer: string;
   show_logo: boolean;
   show_gstin: boolean;
+  /** Print the SKU under each item on receipts and invoices (migrations/062). */
+  show_sku?: boolean;
   receipt_format: "a4" | "thermal";
   has_logo: boolean;
   logo_updated_at: string | null;
@@ -1673,7 +1675,8 @@ export interface CartOrder {
   /** Set at checkout: the waiver (signed) and what was payable after it. */
   round_off: string;
   payable_total: string;
-  lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean }[];
+  /** product_name is an open-price line's own description when it has one (description), else catalog_name (migrations/062). */
+  lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean; description?: string | null; catalog_name?: string }[];
   tax_breakup?: TaxBreakup;
   /** The delivery state set on the cart (migrations/061); null = the usual rule. */
   ship_to_state?: string | null;

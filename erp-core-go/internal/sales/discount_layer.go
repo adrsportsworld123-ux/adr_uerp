@@ -30,6 +30,46 @@ type DiscountLayer struct {
 
 var ErrDiscountExceedsAvailable = errors.New("discount amount exceeds the order's remaining discountable value")
 
+// DiscountableLineSQL is the SQL test (sol = the line, so = its order) for
+// a line any discount layer may touch: an open-price line only where its
+// branch lets open-price items take discounts and promotions
+// (migrations/062, app_open_price_discountable). Every discount path —
+// this layer, the manual discount's subtotal, a coupon's minimum spend,
+// a promotion's cart lines — uses it, so none can size a discount on a
+// line it then can't apply to.
+const DiscountableLineSQL = `(NOT sol.open_price OR app_open_price_discountable(so.branch_id))`
+
+// ErrOpenPriceNotDiscountable: the cart has nothing to discount because
+// its only lines are open-price items, which this branch keeps out of
+// discounts. It is also an ErrDiscountExceedsAvailable, so a caller that
+// only knows that error (a promotion pass skipping a full layer) treats it
+// the same way.
+var ErrOpenPriceNotDiscountable error = openPriceErr{}
+
+type openPriceErr struct{}
+
+func (openPriceErr) Error() string {
+	return "open-price items don't take discounts or promotions at this branch"
+}
+func (openPriceErr) Is(target error) bool { return target == ErrDiscountExceedsAvailable }
+
+// IsOpenPriceNotDiscountable reports whether err is ErrOpenPriceNotDiscountable.
+func IsOpenPriceNotDiscountable(err error) bool {
+	var e openPriceErr
+	return errors.As(err, &e)
+}
+
+// onlyOpenPriceLeft reports whether a cart's discountable lines are all
+// excluded open-price lines (and there is at least one of those).
+func onlyOpenPriceLeft(ctx context.Context, tx pgx.Tx, orderID string) (bool, error) {
+	var excluded, eligible int
+	err := tx.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE NOT `+DiscountableLineSQL+`), count(*) FILTER (WHERE `+DiscountableLineSQL+`)
+		FROM sales_order_lines sol JOIN sales_orders so ON so.id = sol.sales_order_id
+		WHERE sol.sales_order_id = $1`, orderID).Scan(&excluded, &eligible)
+	return excluded > 0 && eligible == 0, err
+}
+
 // ApplyDiscountLayer is the one place any discount hierarchy layer
 // (internal/promotions' promotional/coupon layers, internal/loyalty's
 // redemption layer, and this package's own manual layer — see
@@ -57,10 +97,11 @@ func ApplyDiscountLayer(ctx context.Context, tx pgx.Tx, layer DiscountLayer) (or
 		SELECT sol.id, sol.unit_price, sol.quantity, sol.discount_amount, sol.price_includes_tax,
 		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0)
 		FROM sales_order_lines sol
+		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
 		JOIN products p ON p.id = pv.product_id
 		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-		WHERE sol.sales_order_id = $1`
+		WHERE sol.sales_order_id = $1 AND ` + DiscountableLineSQL
 	args := []any{layer.OrderID}
 	if len(layer.LineIDs) > 0 {
 		query += ` AND sol.id = ANY($2)`
@@ -91,6 +132,13 @@ func ApplyDiscountLayer(ctx context.Context, tx pgx.Tx, layer DiscountLayer) (or
 		return resp, err
 	}
 
+	if len(lines) == 0 {
+		if only, err := onlyOpenPriceLeft(ctx, tx, layer.OrderID); err != nil {
+			return resp, err
+		} else if only {
+			return resp, ErrOpenPriceNotDiscountable
+		}
+	}
 	var remainingBase float64
 	for _, l := range lines {
 		remainingBase += l.unitPrice*l.qty - l.existingDiscount

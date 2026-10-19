@@ -19,7 +19,7 @@
 // sums here are only for the on-screen amount due.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Ban, Loader2, Minus, Plus, Trash2, UserRound, X } from "lucide-react";
+import { Ban, Loader2, Minus, Pencil, Plus, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
 import { Branch, CartOrder, Customer } from "@/lib/types";
@@ -57,6 +57,10 @@ export default function NewSalePage() {
   const [error, setError] = useState<string | null>(null);
   // Open price: the server answers OPEN_PRICE_REQUIRED with the range.
   const [openPrice, setOpenPrice] = useState<{ range: OpenPrice; suggested: string } | null>(null);
+  // An open-price item's own description (erp-core-go migrations/062),
+  // printed on the receipt and invoice instead of the catalog name.
+  const [description, setDescription] = useState("");
+  const [editing, setEditing] = useState<{ lineId: string; text: string } | null>(null);
   const [price, setPrice] = useState("");
   const [approverCode, setApproverCode] = useState("");
   const [approverPin, setApproverPin] = useState("");
@@ -167,6 +171,7 @@ export default function NewSalePage() {
       const body: Record<string, unknown> = { variant_id: picked.variantId, quantity: q };
       if (openPrice) {
         body.unit_price = Number(price);
+        if (description.trim()) body.description = description.trim();
         if (approverCode) {
           body.approver_code = approverCode;
           body.approver_pin = approverPin;
@@ -178,6 +183,7 @@ export default function NewSalePage() {
       setAddQty("1");
       setOpenPrice(null);
       setPrice("");
+      setDescription("");
       setApproverCode("");
       setApproverPin("");
     } catch (e) {
@@ -226,6 +232,13 @@ export default function NewSalePage() {
       setCustomerQuery("");
       setCustomerHits([]);
       setOrder(await api.get<CartOrder>(`/api/v1/sales/orders/${id}`));
+    });
+
+  const saveDescription = (lineId: string, text: string) =>
+    run(async () => {
+      if (!oid) return;
+      setOrder(await api.put<CartOrder>(`/api/v1/sales/orders/${oid}/lines/${lineId}/description`, { description: text.trim() || null }));
+      setEditing(null);
     });
 
   const applyDiscount = () =>
@@ -364,6 +377,16 @@ export default function NewSalePage() {
                     </div>
                   </>
                 )}
+                <div className="flex min-w-64 flex-1 flex-col gap-1.5">
+                  <Label htmlFor="sale-open-description">Description (optional)</Label>
+                  <Input
+                    id="sale-open-description"
+                    maxLength={120}
+                    placeholder="Prints on the receipt instead of the item name"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                </div>
                 <p className="text-xs text-muted-foreground">
                   Open-price item{openPrice.range.approval_above ? `; above ${rupees(openPrice.range.approval_above)} a manager approves` : ""}.
                 </p>
@@ -386,10 +409,49 @@ export default function NewSalePage() {
                 {(order?.lines ?? []).map((l) => (
                   <tr key={l.line_id} className="border-b last:border-0">
                     <td className="px-4 py-2">
-                      <div className="font-medium">{l.product_name}</div>
+                      {editing?.lineId === l.line_id ? (
+                        <form
+                          className="flex items-center gap-1"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            saveDescription(l.line_id, editing.text);
+                          }}
+                        >
+                          <Input
+                            aria-label={`Description of ${l.catalog_name ?? l.product_name}`}
+                            className="h-8"
+                            maxLength={120}
+                            autoFocus
+                            value={editing.text}
+                            onChange={(e) => setEditing({ lineId: l.line_id, text: e.target.value })}
+                          />
+                          <Button type="submit" size="sm" disabled={busy}>
+                            Save
+                          </Button>
+                          <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                            Cancel
+                          </Button>
+                        </form>
+                      ) : (
+                        <div className="flex items-center gap-1 font-medium">
+                          {l.product_name}
+                          {l.open_price && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Edit description of ${l.product_name}`}
+                              onClick={() => setEditing({ lineId: l.line_id, text: l.description ?? "" })}
+                            >
+                              <Pencil />
+                            </Button>
+                          )}
+                        </div>
+                      )}
                       <div className="text-xs text-muted-foreground">
                         {l.sku}
                         {l.open_price ? " · open price" : ""}
+                        {l.description && l.catalog_name ? ` · ${l.catalog_name}` : ""}
                       </div>
                       {Number(l.discount_amount) > 0 && (
                         <div className="text-xs font-medium text-pay" data-testid="line-discount">

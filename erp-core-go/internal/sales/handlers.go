@@ -107,12 +107,17 @@ type orderLine struct {
 	PriceApprovedBy *string `json:"price_approved_by,omitempty"`
 	// migrations/060: the line's GST rate (cess excluded) as it was
 	// written, and its tax split by the order's supply. Additive.
-	HSNCode    string `json:"hsn_code"`
-	TaxRate    string `json:"tax_rate"`
-	CGSTAmount string `json:"cgst_amount"`
-	SGSTAmount string `json:"sgst_amount"`
-	IGSTAmount string `json:"igst_amount"`
-	CessAmount string `json:"cess_amount"`
+	HSNCode string `json:"hsn_code"`
+	TaxRate string `json:"tax_rate"`
+	// migrations/062: ProductName is the line's own description when an
+	// open-price line has one (what prints), CatalogName always the
+	// product's; Description is null without one.
+	Description *string `json:"description"`
+	CatalogName string  `json:"catalog_name"`
+	CGSTAmount  string  `json:"cgst_amount"`
+	SGSTAmount  string  `json:"sgst_amount"`
+	IGSTAmount  string  `json:"igst_amount"`
+	CessAmount  string  `json:"cess_amount"`
 }
 
 // ---------------------------------------------------------------------
@@ -288,6 +293,9 @@ type addLineRequest struct {
 	UnitPrice    *float64 `json:"unit_price"`
 	ApproverCode string   `json:"approver_code"`
 	ApproverPIN  string   `json:"approver_pin"`
+	// migrations/062: an open-price item's own description, printed in
+	// place of the catalog name. Refused for any other item.
+	Description *string `json:"description"`
 }
 
 func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
@@ -312,12 +320,22 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "unit_price can't be negative")
 		return
 	}
+	description, err := cleanDescription(req.Description)
+	if writeDescriptionError(w, err) {
+		return
+	}
 
 	var resp orderResponse
-	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		override, err := resolveOpenPrice(ctx, tx, orderID, req.VariantID, req)
 		if err != nil {
 			return err
+		}
+		if description != nil {
+			if override == nil || !override.OpenPrice {
+				return errDescriptionNotAllowed
+			}
+			override.Description = *description
 		}
 		if override == nil {
 			if resp, err = AddLineToCart(ctx, tx, orderID, req.VariantID, req.Quantity); err != nil {
@@ -337,6 +355,9 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 	var ope *openPriceError
 	if errors.As(err, &ope) {
 		ope.write(w)
+		return
+	}
+	if writeDescriptionError(w, err) {
 		return
 	}
 	switch {
@@ -375,6 +396,8 @@ type LinePriceOverride struct {
 	// ApprovedBy is the approving user's id when one was needed.
 	OpenPrice  bool
 	ApprovedBy string
+	// Description: an open-price line's own description (migrations/062).
+	Description string
 }
 
 // AddLineToCartAtPrice is AddLineToCart with the price fixed by the
@@ -431,9 +454,10 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 	var sellingPrice float64
 	var priceRuleID *string
 	var openPrice bool
+	var description string
 	var approvedBy string
 	if override != nil {
-		openPrice, approvedBy = override.OpenPrice, override.ApprovedBy
+		openPrice, approvedBy, description = override.OpenPrice, override.ApprovedBy, override.Description
 		sellingPrice = override.UnitPrice
 		priceIncludesTax = override.PriceIncludesTax
 	} else {
@@ -493,10 +517,10 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 
 	var lineID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, price_rule_id, open_price, price_approved_by)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid)
+		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, price_rule_id, open_price, price_approved_by, description)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid, NULLIF($11, ''))
 		RETURNING id`,
-		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax, priceRuleID, openPrice, approvedBy).Scan(&lineID); err != nil {
+		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax, priceRuleID, openPrice, approvedBy, description).Scan(&lineID); err != nil {
 		return resp, err
 	}
 	if trackBatch {
@@ -986,13 +1010,14 @@ func recalcOrderTotals(ctx context.Context, tx pgx.Tx, orderID string, resp *ord
 // /sales/orders/{id} previously returned order-level aggregates only.
 func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT sol.id, sol.variant_id, pv.sku, p.name, sol.quantity::text,
+		SELECT sol.id, sol.variant_id, pv.sku, COALESCE(sol.description, p.name), sol.quantity::text,
 		       sol.unit_price::text, sol.discount_amount::text, sol.tax_amount::text, sol.line_total::text,
 		       sol.taxable_value::text, sol.price_includes_tax, sol.open_price, au.name,
 		       COALESCE(p.hsn_code, ''), COALESCE(sol.tax_rate, 0)::text,
 		       gst_cgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
 		       gst_sgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
-		       gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state)::text, sol.cess_amount::text
+		       gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state)::text, sol.cess_amount::text,
+		       sol.description, p.name
 		FROM sales_order_lines sol
 		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
@@ -1011,7 +1036,7 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity,
 			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal,
 			&l.TaxableValue, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy,
-			&l.HSNCode, &l.TaxRate, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount); err != nil {
+			&l.HSNCode, &l.TaxRate, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount, &l.Description, &l.CatalogName); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

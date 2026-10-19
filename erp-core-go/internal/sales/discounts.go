@@ -120,14 +120,23 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		// Sized on the lines a discount can touch (DiscountableLineSQL): a
+		// branch that keeps open-price items out of discounts leaves them
+		// out of the percent's base too.
 		var subtotal, remaining float64
 		if err := tx.QueryRow(ctx, `
-			SELECT COALESCE(SUM(unit_price*quantity),0), COALESCE(SUM(unit_price*quantity - discount_amount),0)
-			FROM sales_order_lines WHERE sales_order_id = $1`, orderID).
+			SELECT COALESCE(SUM(sol.unit_price*sol.quantity),0), COALESCE(SUM(sol.unit_price*sol.quantity - sol.discount_amount),0)
+			FROM sales_order_lines sol JOIN sales_orders so ON so.id = sol.sales_order_id
+			WHERE sol.sales_order_id = $1 AND `+DiscountableLineSQL, orderID).
 			Scan(&subtotal, &remaining); err != nil {
 			return err
 		}
 		if subtotal <= 0 {
+			if only, err := onlyOpenPriceLeft(ctx, tx, orderID); err != nil {
+				return err
+			} else if only {
+				return ErrOpenPriceNotDiscountable
+			}
 			return errDiscountOutOfRange // nothing to discount against
 		}
 
@@ -186,6 +195,8 @@ func (h *Handler) ApplyDiscount(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "DISCOUNT_ABOVE_POLICY", err.Error())
 	case errors.Is(err, errDiscountExceedsTotal):
 		httpx.Error(w, http.StatusBadRequest, "DISCOUNT_EXCEEDS_TOTAL", err.Error())
+	case IsOpenPriceNotDiscountable(err):
+		httpx.Error(w, http.StatusConflict, "OPEN_PRICE_NOT_DISCOUNTABLE", err.Error())
 	case errors.Is(err, errDiscountOutOfRange), errors.Is(err, ErrDiscountExceedsAvailable):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has nothing left to discount")
 	case errors.Is(err, pgx.ErrNoRows):

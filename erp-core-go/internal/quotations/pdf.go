@@ -65,6 +65,7 @@ func (h *Handler) DownloadQuotation(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Breakup = q.TaxBreakup
 		lh, _, err = documents.LoadLetterhead(ctx, tx, branchID, documents.KindReceipt)
+		in.HideSKU = lh.HideSKU
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

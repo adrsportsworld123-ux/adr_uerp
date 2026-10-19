@@ -181,7 +181,7 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 
 		// Lines, with what's been returned and the effective tax rate.
 		rows, err := tx.Query(ctx, `
-			SELECT l.id, pv.sku, p.name, l.quantity::text,
+			SELECT l.id, pv.sku, COALESCE(l.description, p.name), l.quantity::text,
 			       COALESCE((SELECT sum(rl.quantity) FROM sales_return_lines rl WHERE rl.sales_order_line_id = l.id), 0)::text,
 			       l.unit_price::text, l.discount_amount::text, l.taxable_value::text, l.taxable_value, l.tax_amount::text, l.tax_amount,
 			       l.line_total::text, l.price_includes_tax, l.open_price, au.name,

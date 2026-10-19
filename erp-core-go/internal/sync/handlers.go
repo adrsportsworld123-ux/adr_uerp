@@ -53,6 +53,9 @@ type pushLine struct {
 	// re-validated: the sale already happened and was paid for offline,
 	// the same rule NEGATIVE_STOCK follows.
 	OpenPrice bool `json:"open_price"`
+	// Description: an open-price line's own description (migrations/062),
+	// kept only on an open-price line; absent from older clients.
+	Description string `json:"description"`
 }
 
 type pushPayment struct {
@@ -166,10 +169,11 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 		for _, l := range o.Lines {
 			var lineID string
 			if err := tx.QueryRow(ctx, `
-				INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, open_price)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
+				INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, open_price, description)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9,
+				        CASE WHEN $9 THEN NULLIF(left(btrim(regexp_replace($10, '\s+', ' ', 'g')), 120), '') END)
 				RETURNING id`,
-				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal, l.PriceIncludesTax, l.OpenPrice).Scan(&lineID); err != nil {
+				orderID, l.VariantID, l.Quantity, l.UnitPrice, l.DiscountAmount, l.TaxAmount, l.LineTotal, l.PriceIncludesTax, l.OpenPrice, l.Description).Scan(&lineID); err != nil {
 				return err
 			}
 

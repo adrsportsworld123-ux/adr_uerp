@@ -445,7 +445,10 @@ func (h *Handler) ApplyCoupon(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var subtotal float64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(unit_price*quantity),0) FROM sales_order_lines WHERE sales_order_id = $1`, orderID).
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(SUM(sol.unit_price*sol.quantity),0)
+			FROM sales_order_lines sol JOIN sales_orders so ON so.id = sol.sales_order_id
+			WHERE sol.sales_order_id = $1 AND `+sales.DiscountableLineSQL, orderID).
 			Scan(&subtotal); err != nil {
 			return err
 		}
@@ -497,6 +500,8 @@ func (h *Handler) ApplyCoupon(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "COUPON_MIN_PURCHASE_NOT_MET", "order subtotal does not meet the coupon's minimum purchase amount")
 	case errors.Is(err, errCouponExhausted):
 		httpx.Error(w, http.StatusConflict, "COUPON_LIMIT_REACHED", "coupon has reached its usage limit")
+	case sales.IsOpenPriceNotDiscountable(err):
+		httpx.Error(w, http.StatusConflict, "OPEN_PRICE_NOT_DISCOUNTABLE", err.Error())
 	case errors.Is(err, sales.ErrDiscountExceedsAvailable):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "order has nothing left to discount")
 	case errors.Is(err, pgx.ErrNoRows):

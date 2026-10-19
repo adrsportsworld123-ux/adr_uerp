@@ -42,6 +42,7 @@ import (
 	"erp-core-go/internal/sync"
 	"erp-core-go/internal/taxes"
 	"erp-core-go/internal/terminals"
+	"erp-core-go/internal/users"
 )
 
 func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int, reportRunner *reportbuilder.Runner, activityLog *activity.Recorder) http.Handler {
@@ -76,6 +77,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	br := &branches.Handler{DB: database}
 	docs := &documents.Handler{DB: database}
 	taxH := &taxes.Handler{DB: database}
+	usersH := &users.Handler{DB: database}
 	srch := &search.Handler{DB: database, Client: searchClient}
 	cust := &customers.Handler{DB: database}
 	promo := &promotions.Handler{DB: database}
@@ -192,6 +194,17 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			// gate below still enforces on its own), and "what uses this
 			// record?" counts for master data.
 			protected.Get("/me/permissions", me.Permissions)
+			// User Management (internal/users, migrations/062): passwords,
+			// PINs, status and home branch; one's own password and PIN.
+			protected.Put("/me/password", usersH.ChangeOwnPassword)
+			protected.Put("/me/pin", usersH.ChangeOwnPIN)
+			manageUsers := authn.RequirePermission(database, "users.manage")
+			protected.With(manageUsers).Get("/users", usersH.ListUsers)
+			protected.With(manageUsers).Get("/users/{id}", usersH.GetUser)
+			protected.With(manageUsers).Patch("/users/{id}", usersH.UpdateUser)
+			protected.With(manageUsers).Put("/users/{id}/password", usersH.SetPassword)
+			protected.With(manageUsers).Put("/users/{id}/pin", usersH.SetPIN)
+			protected.With(manageUsers).Delete("/users/{id}/pin", usersH.RemovePIN)
 			protected.Get("/dependencies/{entity}/{id}", deps.Get)
 
 			// Phase 12: POS terminal management (migrations/037).
@@ -289,6 +302,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)
 			protected.Post("/sales/orders/{id}/customer", orders.AttachCustomer)
 			protected.Put("/sales/orders/{id}/place-of-supply", orders.SetPlaceOfSupply)
+			protected.Put("/sales/orders/{id}/lines/{line_id}/description", orders.SetLineDescription)
 			protected.Post("/sales/orders/{id}/prescription", orders.AttachPrescription)
 			protected.Post("/prescriptions", pharmH.CreatePrescription)
 			protected.Get("/prescriptions", pharmH.ListPrescriptions)
@@ -332,6 +346,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/sales/settings", orders.GetSettings)
 			protected.With(authn.RequirePermission(database, "sales.settings")).
 				Put("/sales/settings", orders.UpdateSettings)
+			protected.With(authn.RequirePermission(database, "sales.settings")).
+				Put("/sales/settings/branches/{id}", orders.UpdateBranchSettings)
 			// Tax split on bills and invoices (migrations/060): the
 			// merchant's regime, each branch's override and GST state.
 			protected.Get("/tax/settings", taxH.GetSettings)

@@ -2,6 +2,7 @@ package documents
 
 import (
 	"strconv"
+	"strings"
 
 	"erp-core-go/internal/taxes"
 )
@@ -75,8 +76,12 @@ func itemCells(b *taxes.Breakup, discount bool, qty, price, disc, tax, total str
 	return append(cells, Amount(total))
 }
 
-// itemName is the Item cell: name, then SKU and HSN on the next line.
+// itemName is the Item cell: name, then SKU and HSN on the next line. A
+// SKU that only repeats the name is left out.
 func itemName(name, sku, hsn string, b *taxes.Breakup) string {
+	if strings.EqualFold(strings.TrimSpace(sku), strings.TrimSpace(name)) {
+		sku = ""
+	}
 	sub := sku
 	if splitBreakup(b) && hsn != "" {
 		if sub != "" {

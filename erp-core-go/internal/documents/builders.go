@@ -63,7 +63,7 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 		if isNonZero(l.Discount) {
 			detail += "  (−" + Amount(l.Discount) + ")"
 		}
-		cells := append([]string{itoa(i + 1), itemName(l.Name, l.SKU, l.HSN, in.Breakup)},
+		cells := append([]string{itoa(i + 1), itemName(l.Name, skuFor(lh, l.SKU), l.HSN, in.Breakup)},
 			itemCells(in.Breakup, true, l.Quantity, l.UnitPrice, l.Discount, l.Tax, l.Total, l.LineTax)...)
 		d.Rows = append(d.Rows, Row{
 			Cells:  cells,
@@ -309,6 +309,14 @@ func SampleDocument(lh Letterhead, kind Kind) Document {
 	})
 }
 
+// skuFor: the SKU to print under an item, "" when the branch hides it.
+func skuFor(lh Letterhead, sku string) string {
+	if lh.HideSKU {
+		return ""
+	}
+	return sku
+}
+
 func isNonZero(s string) bool {
 	return strings.Trim(strings.TrimSpace(s), "-0.") != ""
 }
@@ -354,7 +362,7 @@ func CreditNote(lh Letterhead, in CreditNoteInput) Document {
 		d.Party = p
 	}
 	for i, l := range in.Lines {
-		cells := append([]string{itoa(i + 1), itemName(l.Name, l.SKU, l.HSN, in.Breakup)},
+		cells := append([]string{itoa(i + 1), itemName(l.Name, skuFor(lh, l.SKU), l.HSN, in.Breakup)},
 			itemCells(in.Breakup, false, l.Quantity, l.UnitPrice, "", l.Tax, l.Total, l.LineTax)...)
 		d.Rows = append(d.Rows, Row{Cells: cells, Title: l.Name, Detail: Qty(l.Quantity) + " × " + Amount(l.UnitPrice), Amount: Amount(l.Total)})
 	}

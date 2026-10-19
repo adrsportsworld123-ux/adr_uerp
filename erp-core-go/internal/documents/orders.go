@@ -114,6 +114,7 @@ type QuotationInput struct {
 	Subtotal, Tax, Grand                         string
 	Notes                                        string
 	Breakup                                      *taxes.Breakup // nil prints one "GST" column
+	HideSKU                                      bool           // the branch prints product names only (migrations/062)
 }
 
 // Quotation: a draft prints with a DRAFT stamp (it may still change), a
@@ -148,7 +149,11 @@ func Quotation(in QuotationInput) Document {
 		d.Stamp = strings.ToUpper(Label(in.Status))
 	}
 	for i, l := range in.Lines {
-		cells := []string{itoa(i + 1), itemName(l.Name, l.SKU, l.HSN, in.Breakup)}
+		sku := l.SKU
+		if in.HideSKU {
+			sku = ""
+		}
+		cells := []string{itoa(i + 1), itemName(l.Name, sku, l.HSN, in.Breakup)}
 		if in.Breakup == nil {
 			cells = append(cells, Qty(l.Quantity), Amount(l.UnitPrice), Amount(l.Tax), Amount(l.Total))
 		} else {

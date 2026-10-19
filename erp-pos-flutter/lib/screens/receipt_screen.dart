@@ -154,7 +154,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 children: [
                   Expanded(
                     child: Text([
-                      '${line.productName}\n${line.sku} · ${line.quantity} × ${formatRupees(line.unitPrice)}',
+                      '${line.productName}\n${r.showSku && line.sku.trim().toLowerCase() != line.productName.trim().toLowerCase() ? '${line.sku} · ' : ''}'
+                          '${line.quantity} × ${formatRupees(line.unitPrice)}',
                       if (line.openPrice) line.priceApprovedBy == null ? ' · open price' : ' · open price, approved by ${line.priceApprovedBy}',
                     ].join()),
                   ),

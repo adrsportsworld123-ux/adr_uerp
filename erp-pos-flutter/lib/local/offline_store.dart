@@ -217,7 +217,7 @@ class OfflineStore {
 
   /// [unitPrice] is a typed open price (Phase 13); the caller has already
   /// checked it against the item's range.
-  Future<OrderSummary> addLine(String pendingOrderId, CachedProduct product, double quantity, {double? unitPrice}) async {
+  Future<OrderSummary> addLine(String pendingOrderId, CachedProduct product, double quantity, {double? unitPrice, String? description}) async {
     final db = await LocalDb.instance.db;
     final openPrice = unitPrice != null;
     unitPrice ??= double.parse(product.lookup.sellingPrice);
@@ -243,7 +243,10 @@ class OfflineStore {
       'pending_order_id': pendingOrderId,
       'variant_id': product.lookup.variantId,
       'sku': product.lookup.sku,
-      'product_name': product.lookup.productName,
+      // An open-price line's own description (migrations/062) is what the
+      // cart and receipt show; it syncs as description.
+      'product_name': (openPrice && description != null && description.trim().isNotEmpty) ? description.trim() : product.lookup.productName,
+      'description': (openPrice && description != null && description.trim().isNotEmpty) ? description.trim() : null,
       'quantity': quantity,
       'unit_price': unitPrice,
       'discount_amount': 0,

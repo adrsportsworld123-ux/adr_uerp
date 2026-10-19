@@ -31,7 +31,7 @@ type creditNoteLine struct {
 
 func loadCreditNoteLines(ctx context.Context, tx pgx.Tx, returnID string) ([]creditNoteLine, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT p.name, pv.sku, COALESCE(p.hsn_code, ''), rl.quantity::text, sol.unit_price::text,
+		SELECT COALESCE(sol.description, p.name), pv.sku, COALESCE(p.hsn_code, ''), rl.quantity::text, sol.unit_price::text,
 		       rl.taxable_amount::text, rl.tax_amount::text, rl.refund_amount::text, COALESCE(sol.tax_rate, 0)::text,
 		       gst_cgst(rl.tax_amount, x.cess, so.inter_state)::text, gst_sgst(rl.tax_amount, x.cess, so.inter_state)::text,
 		       gst_igst(rl.tax_amount, x.cess, so.inter_state)::text, x.cess::text,
