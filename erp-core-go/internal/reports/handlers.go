@@ -47,14 +47,23 @@ func IsValidDate(s string) bool {
 // ---------------------------------------------------------------------
 
 type DailySalesResponse struct {
-	BranchID        string             `json:"branch_id"`
-	Date            string             `json:"date"`
-	OrderCount      int                `json:"order_count"`
-	Subtotal        string             `json:"subtotal"`
-	DiscountTotal   string             `json:"discount_total"`
-	TaxTotal        string             `json:"tax_total"`
-	GrandTotal      string             `json:"grand_total"`
+	BranchID      string `json:"branch_id"`
+	Date          string `json:"date"`
+	OrderCount    int    `json:"order_count"`
+	Subtotal      string `json:"subtotal"`
+	DiscountTotal string `json:"discount_total"`
+	TaxTotal      string `json:"tax_total"`
+	GrandTotal    string `json:"grand_total"`
+	// RoundOffTotal: the day's checkout waivers (signed sum); NetTotal =
+	// GrandTotal + RoundOffTotal, what was collected (= the tenders).
+	RoundOffTotal   string             `json:"round_off_total"`
+	NetTotal        string             `json:"net_total"`
 	ByPaymentMethod []PaymentBreakdown `json:"by_payment_method"`
+	// The day's tax by head, as the invoices printed it (migrations/060).
+	CGSTTotal string `json:"cgst_total"`
+	SGSTTotal string `json:"sgst_total"`
+	IGSTTotal string `json:"igst_total"`
+	CessTotal string `json:"cess_total"`
 }
 
 type PaymentBreakdown struct {
@@ -73,11 +82,24 @@ func BuildDailySales(ctx context.Context, tx pgx.Tx, branchID, date string) (Dai
 	resp := DailySalesResponse{BranchID: branchID, Date: date}
 	if err := tx.QueryRow(ctx, `
 		SELECT COUNT(*), COALESCE(SUM(subtotal),0)::text, COALESCE(SUM(discount_total),0)::text,
-		       COALESCE(SUM(tax_total),0)::text, COALESCE(SUM(grand_total),0)::text
+		       COALESCE(SUM(tax_total),0)::text, COALESCE(SUM(grand_total),0)::text,
+		       COALESCE(SUM(round_off),0)::text, COALESCE(SUM(grand_total + round_off),0)::text
 		FROM sales_orders
 		WHERE branch_id = $1 AND status = 'finalized' AND finalized_at::date = $2::date`,
 		branchID, date,
-	).Scan(&resp.OrderCount, &resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+	).Scan(&resp.OrderCount, &resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal, &resp.RoundOffTotal, &resp.NetTotal); err != nil {
+		return resp, err
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(gst_cgst(l.tax_amount, l.cess_amount, so.inter_state)),0)::text,
+		       COALESCE(SUM(gst_sgst(l.tax_amount, l.cess_amount, so.inter_state)),0)::text,
+		       COALESCE(SUM(gst_igst(l.tax_amount, l.cess_amount, so.inter_state)),0)::text,
+		       COALESCE(SUM(l.cess_amount),0)::text
+		FROM sales_order_lines l
+		JOIN sales_orders so ON so.id = l.sales_order_id
+		WHERE so.branch_id = $1 AND so.status = 'finalized' AND so.finalized_at::date = $2::date`,
+		branchID, date,
+	).Scan(&resp.CGSTTotal, &resp.SGSTTotal, &resp.IGSTTotal, &resp.CessTotal); err != nil {
 		return resp, err
 	}
 

@@ -178,6 +178,51 @@ void main() {
     expect(find.text('Nivia Football · Size 5'), findsNothing);
   });
 
+  testWidgets('round-off: the cashier waives a small balance, and the offline sale queues it for sync', (tester) async {
+    final session = await _pumpPos(tester, const Size(1280, 800));
+    session.roundOffMax = 5; // Sales Policy, as loaded with the shift rule
+
+    await tester.enterText(find.byKey(const Key('scan-field')), '8901234567890');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('pay-button')));
+    await _settle(tester);
+    expect(find.byKey(const Key('round-off')), findsOneWidget);
+    expect(tester.widget<Text>(find.byKey(const Key('amount-due'))).data, '₹2,299.00');
+
+    // ₹2,299.00 has no paise: waive another amount, within the ₹5 limit.
+    await tester.tap(find.text('Other amount'));
+    await _settle(tester);
+    await tester.enterText(find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)), '6');
+    await tester.tap(find.text('Apply'));
+    await _settle(tester);
+    expect(find.textContaining('Enter an amount up to'), findsOneWidget, reason: 'above the limit is refused');
+    expect(tester.widget<Text>(find.byKey(const Key('amount-due'))).data, '₹2,299.00');
+
+    await tester.tap(find.text('Other amount'));
+    await _settle(tester);
+    await tester.enterText(find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)), '4');
+    await tester.tap(find.text('Apply'));
+    await _settle(tester);
+    expect(tester.widget<Text>(find.byKey(const Key('amount-due'))).data, '₹2,295.00');
+    expect(find.text('Round off −₹4.00'), findsOneWidget);
+    expect(find.text('Bill ₹2,299.00'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('complete-sale')));
+    await _settle(tester, rounds: 12);
+    expect(find.text('Sale complete'), findsOneWidget);
+    expect(find.textContaining('Total ₹2,295.00'), findsOneWidget, reason: 'what the customer paid');
+
+    final queued = await tester.runAsync(() => OfflineStore().listUnsynced());
+    final sale = queued!.last;
+    expect(sale.roundOff, -4);
+    expect(sale.payments.single['amount'], 2295.0);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _settle(tester);
+    // Leave the queue as the goldens below expect it (one earlier sale pending).
+    await tester.runAsync(() => OfflineStore().markSynced(sale.id, 'synced-in-test'));
+  });
+
   // Layout goldens at the three design breakpoints. Run with
   // `flutter test --update-goldens` after an intended visual change.
   for (final (name, size) in [

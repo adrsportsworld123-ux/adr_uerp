@@ -244,7 +244,7 @@ class _PriceDialogState extends State<_PriceDialog> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: _money,
             onChanged: (_) => setState(() => _belowCost = false),
-            decoration: const InputDecoration(labelText: 'New price', prefixText: '₹ ', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: 'New price', prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           TextField(

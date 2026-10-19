@@ -17,6 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Field, Panel } from "@/components/data/panel";
 import { StatusChip } from "@/components/data/status-chip";
 
+import { currencySymbol } from "@/lib/currency";
 type Frame = ComponentType<{ title: ReactNode; children: ReactNode }>;
 
 function notFoundIsNull<T>(p: Promise<T>): Promise<T | null> {
@@ -151,7 +152,7 @@ export function EInvoiceDocuments({ orderId, frame: FrameC = Panel }: { orderId:
             E-Way Bill
             {ewayBill && <StatusChip status={ewayBill.status} tone={ewayBillActive ? "ok" : "muted"} />}
             {ewayBill?.interstate && <StatusChip status="interstate" tone="info" label="Interstate" />}
-            {ewayBill?.required_by_rule && <StatusChip status="required" tone="warn" label="Required by rule (>₹50k interstate)" />}
+            {ewayBill?.required_by_rule && <StatusChip status="required" tone="warn" label={`Required by rule (>${currencySymbol()}50k interstate)`} />}
           </>
         }
       >

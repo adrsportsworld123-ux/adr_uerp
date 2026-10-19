@@ -290,9 +290,9 @@ class _DiscountDialogState extends State<_DiscountDialog> {
             children: [
               SegmentedButton<bool>(
                 key: const Key('discount-mode'),
-                segments: const [
-                  ButtonSegment(value: false, label: Text('Percent %')),
-                  ButtonSegment(value: true, label: Text('Amount ₹')),
+                segments: [
+                  const ButtonSegment(value: false, label: Text('Percent %')),
+                  ButtonSegment(value: true, label: Text('Amount ${PosCurrency.symbol}')),
                 ],
                 selected: {_fixed},
                 onSelectionChanged: (v) => setState(() {
@@ -306,7 +306,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                 autofocus: true,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
-                  labelText: _fixed ? 'Discount amount (₹)' : 'Discount %',
+                  labelText: _fixed ? 'Discount amount (${PosCurrency.symbol})' : 'Discount %',
                   helperText: _helperText,
                   helperMaxLines: 2,
                   helperStyle: _overMax || !_validAmount ? TextStyle(color: theme.colorScheme.error) : null,

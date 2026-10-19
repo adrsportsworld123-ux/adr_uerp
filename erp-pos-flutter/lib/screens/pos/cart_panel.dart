@@ -328,7 +328,7 @@ class _Totals extends StatelessWidget {
       child: Column(children: [
         row('Subtotal', formatRupees(order.subtotal)),
         if (hasDiscount) row('Discount', '−${formatRupees(order.discountTotal)}', valueColor: theme.pos.pay),
-        row('Tax', formatRupees(order.taxTotal)),
+        for (final t in context.watch<AppSession>().taxRowsFor(order)) row(t.label, formatRupees(t.amount)),
         const SizedBox(height: 4),
         row('Total', formatRupees(order.grandTotal),
             style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),

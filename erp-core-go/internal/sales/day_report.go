@@ -19,6 +19,7 @@ import (
 	"erp-core-go/internal/documents"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/printing"
+	"erp-core-go/internal/taxes"
 )
 
 // The day-wise Z report (migrations/056, phase0_1_design.md §3.60). The X
@@ -47,6 +48,12 @@ type dayTaxRate struct {
 	Rate    string `json:"rate"`
 	Taxable string `json:"taxable_value"`
 	Tax     string `json:"tax"`
+	// The rate's tax split as the day's invoices printed it
+	// (migrations/060). Absent on a day frozen before the split existed.
+	CGST string `json:"cgst,omitempty"`
+	SGST string `json:"sgst,omitempty"`
+	IGST string `json:"igst,omitempty"`
+	Cess string `json:"cess,omitempty"`
 }
 
 type dayCashier struct {
@@ -83,21 +90,33 @@ type dayCash struct {
 }
 
 type dayReport struct {
-	Kind          string            `json:"kind"` // "Z"
-	BranchID      string            `json:"branch_id"`
-	BranchName    string            `json:"branch_name"`
-	Date          string            `json:"date"`
-	Status        string            `json:"status"` // "open" (live) | "closed" (frozen)
-	ZNumber       *int              `json:"z_number"`
-	ClosedBy      *string           `json:"closed_by"`
-	ClosedAt      *string           `json:"closed_at"`
-	GeneratedAt   string            `json:"generated_at"`
-	FirstOrder    *string           `json:"first_order_number"`
-	LastOrder     *string           `json:"last_order_number"`
-	OrderCount    int               `json:"order_count"`
-	Subtotal      string            `json:"subtotal"`
-	DiscountTotal string            `json:"discount_total"`
-	TaxTotal      string            `json:"tax_total"`
+	Kind          string  `json:"kind"` // "Z"
+	BranchID      string  `json:"branch_id"`
+	BranchName    string  `json:"branch_name"`
+	Date          string  `json:"date"`
+	Status        string  `json:"status"` // "open" (live) | "closed" (frozen)
+	ZNumber       *int    `json:"z_number"`
+	ClosedBy      *string `json:"closed_by"`
+	ClosedAt      *string `json:"closed_at"`
+	GeneratedAt   string  `json:"generated_at"`
+	FirstOrder    *string `json:"first_order_number"`
+	LastOrder     *string `json:"last_order_number"`
+	OrderCount    int     `json:"order_count"`
+	Subtotal      string  `json:"subtotal"`
+	DiscountTotal string  `json:"discount_total"`
+	TaxTotal      string  `json:"tax_total"`
+	// RoundOff: the day's checkout waivers (signed sum, "-3.25"). Net sales
+	// = subtotal - discounts + tax + round-off, so they match the tenders.
+	// Absent on a day frozen before round-off existed.
+	RoundOff string `json:"round_off_total,omitempty"`
+	// The day's tax by head and how the branch labels it (migrations/060;
+	// absent on a day frozen before the split existed).
+	TaxRegime     string            `json:"tax_regime,omitempty"`
+	TaxLabel      string            `json:"tax_label,omitempty"`
+	CGSTTotal     string            `json:"cgst_total,omitempty"`
+	SGSTTotal     string            `json:"sgst_total,omitempty"`
+	IGSTTotal     string            `json:"igst_total,omitempty"`
+	CessTotal     string            `json:"cess_total,omitempty"`
 	NetSales      string            `json:"net_sales"`
 	CreditSales   string            `json:"credit_sales"`
 	AverageBill   string            `json:"average_bill"`
@@ -150,17 +169,18 @@ func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date s
 		return rep, err
 	}
 	const sold = `so.branch_id::text = $1 AND so.status IN ('finalized', 'partially_refunded', 'refunded') AND ` + dayMoment + ` >= $2 AND ` + dayMoment + ` < $3`
-	var sub, disc, tax, net, credit float64
+	var sub, disc, tax, net, credit, roundOff float64
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*), COALESCE(sum(so.subtotal), 0), COALESCE(sum(so.discount_total), 0), COALESCE(sum(so.tax_total), 0),
-		       COALESCE(sum(so.grand_total), 0), COALESCE(sum(so.credit_amount), 0),
+		       COALESCE(sum(so.grand_total + so.round_off), 0), COALESCE(sum(so.credit_amount), 0), COALESCE(sum(so.round_off), 0),
 		       (array_agg(so.order_number ORDER BY `+dayMoment+`, so.order_number))[1],
 		       (array_agg(so.order_number ORDER BY `+dayMoment+` DESC, so.order_number DESC))[1]
 		FROM sales_orders so WHERE `+sold, branchID, from, to).
-		Scan(&rep.OrderCount, &sub, &disc, &tax, &net, &credit, &rep.FirstOrder, &rep.LastOrder); err != nil {
+		Scan(&rep.OrderCount, &sub, &disc, &tax, &net, &credit, &roundOff, &rep.FirstOrder, &rep.LastOrder); err != nil {
 		return rep, err
 	}
 	rep.Subtotal, rep.DiscountTotal, rep.TaxTotal, rep.NetSales, rep.CreditSales = money(sub), money(disc), money(tax), money(net), money(credit)
+	rep.RoundOff = money(roundOff)
 	rep.AverageBill = money(0)
 	if rep.OrderCount > 0 {
 		rep.AverageBill = money(round2(net / float64(rep.OrderCount)))
@@ -168,7 +188,7 @@ func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date s
 
 	var voided float64
 	if err := tx.QueryRow(ctx, `
-		SELECT count(*) FILTER (WHERE so.status = 'voided'), COALESCE(sum(so.grand_total) FILTER (WHERE so.status = 'voided'), 0),
+		SELECT count(*) FILTER (WHERE so.status = 'voided'), COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE so.status = 'voided'), 0),
 		       count(*) FILTER (WHERE so.status = 'held_voided')
 		FROM sales_orders so
 		WHERE so.branch_id::text = $1 AND so.status IN ('voided', 'held_voided')
@@ -202,7 +222,7 @@ func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date s
 	if credit > 0 {
 		rep.ByMethod["credit"] = money(credit)
 	}
-	if err := collect(`SELECT so.channel, sum(so.grand_total) FROM sales_orders so WHERE `+sold+` GROUP BY so.channel`, rep.ByChannel, branchID, from, to); err != nil {
+	if err := collect(`SELECT so.channel, sum(so.grand_total + so.round_off) FROM sales_orders so WHERE `+sold+` GROUP BY so.channel`, rep.ByChannel, branchID, from, to); err != nil {
 		return rep, err
 	}
 
@@ -228,22 +248,30 @@ func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date s
 	rows.Close()
 	rep.RefundTotal = money(refunds)
 
-	// GST by rate: the rate on each line's product slab.
+	// Tax by rate — the GST rate each line was written at — and by head,
+	// split by each sale's place of supply exactly as its invoice printed
+	// it (migrations/060).
+	settings, err := taxes.Load(ctx, tx, branchID)
+	if err != nil {
+		return rep, err
+	}
+	rep.TaxRegime, rep.TaxLabel = settings.Regime, settings.TaxLabel
 	rows, err = tx.Query(ctx, `
-		SELECT COALESCE(ts.cgst_rate + ts.sgst_rate + ts.igst_rate, 0)::text,
-		       sum(COALESCE(l.taxable_value, l.line_total - l.tax_amount))::text, sum(l.tax_amount)::text
+		SELECT COALESCE(l.tax_rate, 0)::text,
+		       sum(COALESCE(l.taxable_value, l.line_total - l.tax_amount))::text, sum(l.tax_amount)::text,
+		       sum(gst_cgst(l.tax_amount, l.cess_amount, so.inter_state)), sum(gst_sgst(l.tax_amount, l.cess_amount, so.inter_state)),
+		       sum(gst_igst(l.tax_amount, l.cess_amount, so.inter_state)), sum(l.cess_amount)
 		FROM sales_order_lines l
 		JOIN sales_orders so ON so.id = l.sales_order_id
-		JOIN product_variants v ON v.id = l.variant_id
-		JOIN products p ON p.id = v.product_id
-		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 		WHERE `+sold+` GROUP BY 1 ORDER BY 1::numeric`, branchID, from, to)
 	if err != nil {
 		return rep, err
 	}
+	var cgstT, sgstT, igstT, cessT float64
 	for rows.Next() {
 		var t dayTaxRate
-		if err := rows.Scan(&t.Rate, &t.Taxable, &t.Tax); err != nil {
+		var cgst, sgst, igst, cess float64
+		if err := rows.Scan(&t.Rate, &t.Taxable, &t.Tax, &cgst, &sgst, &igst, &cess); err != nil {
 			rows.Close()
 			return rep, err
 		}
@@ -251,12 +279,15 @@ func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date s
 		if t.Rate == "" {
 			t.Rate = "0"
 		}
+		t.CGST, t.SGST, t.IGST, t.Cess = money(cgst), money(sgst), money(igst), money(cess)
+		cgstT, sgstT, igstT, cessT = cgstT+cgst, sgstT+sgst, igstT+igst, cessT+cess
 		rep.TaxRates = append(rep.TaxRates, t)
 	}
 	rows.Close()
+	rep.CGSTTotal, rep.SGSTTotal, rep.IGSTTotal, rep.CessTotal = money(round2(cgstT)), money(round2(sgstT)), money(round2(igstT)), money(round2(cessT))
 
 	rows, err = tx.Query(ctx, `
-		SELECT COALESCE(u.name, '—'), count(*), sum(so.grand_total)
+		SELECT COALESCE(u.name, '—'), count(*), sum(so.grand_total + so.round_off)
 		FROM sales_orders so LEFT JOIN users u ON u.id = so.cashier_id
 		WHERE `+sold+` GROUP BY 1 ORDER BY 3 DESC`, branchID, from, to)
 	if err != nil {
@@ -595,15 +626,24 @@ func dayReportPrint(lh documents.Letterhead, d dayReport) printing.ReportPrint {
 		{Label: "Subtotal", Value: d.Subtotal},
 		{Label: "Discounts", Value: "-" + d.DiscountTotal},
 		{Label: "Tax", Value: d.TaxTotal},
-		{Label: "Net sales", Value: d.NetSales, Strong: true},
-		{Label: "Average bill", Value: d.AverageBill},
 	}
+	sales = append(sales, dayTaxHeads(d)...)
+	if d.RoundOff != "" && d.RoundOff != "0.00" {
+		sales = append(sales, printing.ReportRow{Label: "Round off", Value: d.RoundOff})
+	}
+	sales = append(sales,
+		printing.ReportRow{Label: "Net sales", Value: d.NetSales, Strong: true},
+		printing.ReportRow{Label: "Average bill", Value: d.AverageBill})
 	if d.FirstOrder != nil {
 		sales = append(sales, printing.ReportRow{Label: "First: " + *d.FirstOrder}, printing.ReportRow{Label: "Last:  " + *d.LastOrder})
 	}
 	tax := []printing.ReportRow{}
+	label := d.TaxLabel
+	if label == "" {
+		label = "GST"
+	}
 	for _, t := range d.TaxRates {
-		tax = append(tax, printing.ReportRow{Label: "GST " + t.Rate + "% on " + t.Taxable, Value: t.Tax})
+		tax = append(tax, printing.ReportRow{Label: label + " " + t.Rate + "% on " + t.Taxable, Value: t.Tax})
 	}
 	returns := []printing.ReportRow{{Label: "Returns", Value: fmt.Sprint(d.ReturnCount)}, {Label: "Refunded", Value: d.RefundTotal}}
 	returns = append(returns, sortedRows(d.RefundsMethod, methodLabel)...)
@@ -657,7 +697,11 @@ func shiftReportPrint(lh documents.Letterhead, branchName string, s shiftRespons
 		sub = append(sub, "SHIFT OPEN - figures so far")
 	}
 	sub = append(sub, printedAt())
-	sales := []printing.ReportRow{{Label: "Sales", Value: fmt.Sprint(rep.OrderCount)}, {Label: "Net sales", Value: rep.NetSales, Strong: true}}
+	sales := []printing.ReportRow{{Label: "Sales", Value: fmt.Sprint(rep.OrderCount)}}
+	if rep.RoundOff != "" && rep.RoundOff != "0.00" {
+		sales = append(sales, printing.ReportRow{Label: "Round off", Value: rep.RoundOff})
+	}
+	sales = append(sales, printing.ReportRow{Label: "Net sales", Value: rep.NetSales, Strong: true})
 	if rep.VoidedCount > 0 {
 		sales = append(sales, printing.ReportRow{Label: "Voided", Value: fmt.Sprint(rep.VoidedCount)})
 	}
@@ -754,4 +798,20 @@ func (h *Handler) PrintShiftReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.Binary(w, http.StatusOK, "application/octet-stream", out)
+}
+
+// dayTaxHeads: the day's tax by head under the Tax line ("  CGST"), for a
+// GST-split branch; nothing for a single-tax one or a day frozen before
+// the split existed.
+func dayTaxHeads(d dayReport) []printing.ReportRow {
+	if d.TaxRegime == "" || d.TaxRegime == taxes.RegimeSingle {
+		return nil
+	}
+	var rows []printing.ReportRow
+	for _, h := range [][2]string{{"  CGST", d.CGSTTotal}, {"  SGST", d.SGSTTotal}, {"  IGST", d.IGSTTotal}, {"  Cess", d.CessTotal}} {
+		if !taxes.IsZero(h[1]) {
+			rows = append(rows, printing.ReportRow{Label: h[0], Value: h[1]})
+		}
+	}
+	return rows
 }

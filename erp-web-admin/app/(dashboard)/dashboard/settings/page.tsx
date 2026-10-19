@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/data/page-header";
 
+import { currencySymbol } from "@/lib/currency";
 type Widget = { key: string; label: string; description: string };
 type RoleConfig = { role_id: string; role_name: string; can_view: boolean; widgets: string[]; customized: boolean; updated_by: string | null; updated_at: string | null };
 type TargetRow = { branch_id: string | null; monthly_target: string };
@@ -216,7 +217,7 @@ export default function DashboardSettingsPage() {
           <thead className="text-left text-xs text-muted-foreground">
             <tr>
               <th className="pb-1 font-medium">For</th>
-              <th className="pb-1 font-medium">Target per month (₹)</th>
+              <th className="pb-1 font-medium">Target per month ({currencySymbol()})</th>
               <th />
             </tr>
           </thead>

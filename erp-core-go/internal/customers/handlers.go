@@ -37,7 +37,7 @@ type Handler struct {
 const segmentedCustomersCTE = `
 	WITH stats AS (
 		SELECT customer_id,
-		       SUM(grand_total) AS total_spend,
+		       SUM(grand_total + round_off) AS total_spend, -- what they paid, after any checkout round-off
 		       COUNT(*) AS transaction_count,
 		       MAX(finalized_at) AS last_purchase_at
 		FROM sales_orders
@@ -309,7 +309,7 @@ func (h *Handler) GetCustomer(w http.ResponseWriter, r *http.Request) {
 	resp := customerDetailResponse{customerResponse: customer, RecentOrders: []orderHistoryEntry{}}
 	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT so.order_number, b.name, so.finalized_at::text, so.grand_total::text
+			SELECT so.order_number, b.name, so.finalized_at::text, (so.grand_total + so.round_off)::text
 			FROM sales_orders so
 			JOIN branches b ON b.id = so.branch_id
 			WHERE so.customer_id = $1 AND so.status = 'finalized'

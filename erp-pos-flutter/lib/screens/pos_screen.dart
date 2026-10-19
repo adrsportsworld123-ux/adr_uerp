@@ -278,8 +278,8 @@ class _PosScreenState extends State<PosScreen> {
     if (order == null || order.status != 'cart' || order.lines.isEmpty || _busy) return;
 
     final wide = MediaQuery.sizeOf(context).width >= 640;
-    final payments = wide
-        ? await showDialog<List<PaymentInput>>(
+    final result = wide
+        ? await showDialog<_PaymentResult>(
             context: context,
             builder: (_) => _scoped(Dialog(
               insetPadding: const EdgeInsets.all(24),
@@ -289,7 +289,7 @@ class _PosScreenState extends State<PosScreen> {
               ),
             )),
           )
-        : await showModalBottomSheet<List<PaymentInput>>(
+        : await showModalBottomSheet<_PaymentResult>(
             context: context,
             isScrollControlled: true,
             useSafeArea: true,
@@ -299,9 +299,9 @@ class _PosScreenState extends State<PosScreen> {
               child: const _PaymentSheet(),
             )),
           );
-    if (payments == null || payments.isEmpty) return _refocusScan();
+    if (result == null || result.payments.isEmpty) return _refocusScan();
 
-    final ok = await _withBusy(() => session.checkout(payments));
+    final ok = await _withBusy(() => session.checkout(result.payments, roundOff: result.roundOff));
     if (!mounted) return;
     if (ok != true) {
       if (session.lastError != null) _snack(session.lastError!);
@@ -317,7 +317,7 @@ class _PosScreenState extends State<PosScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Sale complete'),
-          content: Text('Receipt ${o.orderNumber}\nTotal ${formatRupees(o.grandTotal)}'
+          content: Text('Receipt ${o.orderNumber}\nTotal ${formatRupees(o.payableTotal)}'
               '${session.isCurrentOrderLocal ? '\nSaved offline — it will sync automatically.' : ''}'),
           actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
         ),

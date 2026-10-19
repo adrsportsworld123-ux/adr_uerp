@@ -19,6 +19,7 @@ import { EditDialog } from "@/components/data/edit-dialog";
 import { PageHeader } from "@/components/data/page-header";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
+import { rupees } from "@/lib/format";
 export default function PriceListsPage() {
   const [lists, setLists] = useState<PriceListSummary[]>([]);
   const [newName, setNewName] = useState("");
@@ -231,7 +232,7 @@ export default function PriceListsPage() {
                 {detail.items.map((it) => (
                   <TableRow key={it.variant_id}>
                     <TableCell>{it.product_name} <span className="text-xs text-muted-foreground">({it.sku})</span></TableCell>
-                    <TableCell>₹{it.price}</TableCell>
+                    <TableCell>{rupees(it.price)}</TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-2">
                         <Button variant="outline" onClick={() => editItem(it)}>

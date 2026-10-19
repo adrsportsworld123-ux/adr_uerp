@@ -15,6 +15,12 @@ type ReceiptPayment struct {
 	Amount string
 }
 
+// ReceiptTax is one printed tax line ("CGST @ 2.5%: 0.61").
+type ReceiptTax struct {
+	Label  string
+	Amount string
+}
+
 type ReceiptData struct {
 	MerchantName  string
 	BranchName    string
@@ -25,7 +31,18 @@ type ReceiptData struct {
 	DiscountTotal string
 	TaxTotal      string
 	GrandTotal    string
-	Payments      []ReceiptPayment
+	// RoundOff: the checkout waiver, signed ("-0.75"); "" or "0.00" prints
+	// nothing. PayableTotal is the total after it.
+	RoundOff     string
+	PayableTotal string
+	Payments     []ReceiptPayment
+	// Taxes replaces the single "Tax:" line with the split the branch
+	// prints (CGST / SGST, IGST, or its own label; migrations/060); nil
+	// keeps "Tax:". TaxSummary adds one line per rate when a bill mixes
+	// rates. PlaceOfSupply ("33 – Tamil Nadu") prints under the cashier.
+	Taxes         []ReceiptTax
+	TaxSummary    []string
+	PlaceOfSupply string
 	// The branch's letterhead (branch_print_settings, internal/documents):
 	// lines under the branch name, and the closing lines. Footer nil keeps
 	// the original "Thank you, visit again!"; an empty, non-nil Footer
@@ -51,8 +68,11 @@ func BuildReceipt(d ReceiptData) []byte {
 		b.Line(l)
 	}
 	b.Line("Order " + d.OrderNumber).
-		Line("Cashier: " + d.CashierName).
-		AlignLeft().
+		Line("Cashier: " + d.CashierName)
+	if d.PlaceOfSupply != "" {
+		b.Line("Place of supply: " + d.PlaceOfSupply)
+	}
+	b.AlignLeft().
 		Line(ruleLine)
 
 	for _, l := range d.Lines {
@@ -65,8 +85,22 @@ func BuildReceipt(d ReceiptData) []byte {
 	if d.DiscountTotal != "" && d.DiscountTotal != "0.00" {
 		b.Line("Discount: -" + d.DiscountTotal)
 	}
-	b.Line("Tax: " + d.TaxTotal)
-	b.Bold(true).DoubleSize(true).Line("Total: " + d.GrandTotal).DoubleSize(false).Bold(false)
+	if len(d.Taxes) == 0 {
+		b.Line("Tax: " + d.TaxTotal)
+	}
+	for _, t := range d.Taxes {
+		b.Line(t.Label + ": " + t.Amount)
+	}
+	for _, l := range d.TaxSummary {
+		b.Line("  " + l)
+	}
+	if d.RoundOff != "" && d.RoundOff != "0.00" {
+		b.Line("Total: " + d.GrandTotal)
+		b.Line("Round off: " + d.RoundOff)
+		b.Bold(true).DoubleSize(true).Line("Net payable: " + d.PayableTotal).DoubleSize(false).Bold(false)
+	} else {
+		b.Bold(true).DoubleSize(true).Line("Total: " + d.GrandTotal).DoubleSize(false).Bold(false)
+	}
 	b.Line(ruleLine)
 
 	for _, p := range d.Payments {

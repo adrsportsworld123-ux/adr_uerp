@@ -9,6 +9,7 @@ import '../api/api_client.dart';
 import '../local/offline_store.dart';
 import '../printing/document_saver.dart' as doc_saver;
 import '../printing/printer_service.dart';
+import '../ui/format.dart';
 import 'device_id.dart';
 
 /// Holds everything a single POS terminal session needs: the authenticated
@@ -273,6 +274,7 @@ class AppSession extends ChangeNotifier {
                 'payments': o.payments
                     .map((p) => {'method': p['method'], 'amount': p['amount']})
                     .toList(),
+                if (o.roundOff != 0) 'round_off': o.roundOff,
               })
           .toList();
 
@@ -475,12 +477,12 @@ class AppSession extends ChangeNotifier {
         return false;
       }
       if (!range.allows(openPrice.price)) {
-        _lastError = 'The price must be between ₹${range.min} and ₹${range.max}';
+        _lastError = 'The price must be between ${formatRupees(range.min)} and ${formatRupees(range.max)}';
         notifyListeners();
         return false;
       }
       if (range.needsApproval(openPrice.price)) {
-        _lastError = 'Prices above ₹${range.approvalAbove} need a manager\'s approval, which needs a connection';
+        _lastError = 'Prices above ${formatRupees(range.approvalAbove ?? '')} need a manager\'s approval, which needs a connection';
         notifyListeners();
         return false;
       }
@@ -526,18 +528,21 @@ class AppSession extends ChangeNotifier {
     }
   }
 
-  Future<bool> checkout(List<PaymentInput> payments) async {
+  /// [roundOff]: the amount waived, signed (-0.75), within
+  /// [roundOffMax]; the server checks it again (online) or records it with
+  /// the synced sale (offline).
+  Future<bool> checkout(List<PaymentInput> payments, {double roundOff = 0}) async {
     if (currentOrder == null) return false;
     _lastError = null;
     if (_currentOrderIsLocal) {
-      currentOrder = await _offline.checkout(currentOrder!.orderId, payments);
+      currentOrder = await _offline.checkout(currentOrder!.orderId, payments, roundOff: roundOff);
       await refreshPendingSyncCount();
       notifyListeners();
       unawaited(syncNow()); // opportunistic — fine if this silently fails
       return true;
     }
     try {
-      final finalized = await api.checkout(orderId: currentOrder!.orderId, payments: payments);
+      final finalized = await api.checkout(orderId: currentOrder!.orderId, payments: payments, roundOff: roundOff);
       currentOrder = finalized;
       notifyListeners();
       return true;
@@ -547,6 +552,7 @@ class AppSession extends ChangeNotifier {
         'CREDIT_HOLD' => 'This customer is on credit hold — cannot accept a credit payment',
         'CREDIT_LIMIT_EXCEEDED' => 'This sale would put the customer over their credit limit',
         'SHIFT_NOT_OPEN' => 'Open a shift on this till before taking payment (tap the shift chip at the top)',
+        'ROUND_OFF_NOT_ALLOWED' => 'That round-off isn’t allowed (it’s off, or above the limit in Sales Policy)',
         _ => e.message,
       };
       notifyListeners();
@@ -1015,14 +1021,42 @@ class AppSession extends ChangeNotifier {
   /// Whether the merchant requires an open shift to take payment.
   bool shiftsRequired = false;
 
-  /// Loads the open shift and the merchant's shift rule. Quietly does
+  /// Round-off waiver (Sales Policy): the most a sale may be settled below
+  /// its total (0 = off), and whether the payment sheet starts with the
+  /// paise waived. Last known values are kept for offline sales.
+  double roundOffMax = 0;
+  bool roundOffAuto = false;
+
+  /// The branch's tax regime (Tax Settings, erp-core-go migrations/060):
+  /// how a cart the server hasn't priced (offline) splits its tax. Last
+  /// known values are kept for offline sales.
+  TaxRegimeSettings taxRegime = const TaxRegimeSettings();
+
+  /// The tax lines to show under a cart's subtotal: the server's split, or
+  /// the same rule applied locally to an offline cart.
+  List<TaxRow> taxRowsFor(OrderSummary order) =>
+      order.taxBreakup?.rows.isNotEmpty == true
+          ? order.taxBreakup!.rows
+          : TaxBreakup.local(regime: taxRegime.regime, taxLabel: taxRegime.taxLabel, lineTaxes: order.lines.map((l) => l.taxAmount)).rows;
+
+  /// Loads the open shift and the merchant's sales policy. Quietly does
   /// nothing offline; the status bar then shows the last known state.
   Future<void> refreshShift() async {
     if (offlineMode) return;
     try {
-      final results = await Future.wait([api.currentShift(posTerminalId), api.shiftsRequired()]);
+      final results = await Future.wait([api.currentShift(posTerminalId), api.salesSettings()]);
       currentShift = results[0] as Shift?;
-      shiftsRequired = results[1] as bool;
+      final settings = results[1] as SalesSettings;
+      shiftsRequired = settings.shiftsRequired;
+      roundOffMax = settings.roundOffMax;
+      roundOffAuto = settings.roundOffAuto;
+      // An older server has no /tax/regime: keep the GST default.
+      try {
+        taxRegime = await api.taxRegime(branchId);
+        PosCurrency.set(taxRegime.currencyCode, taxRegime.currencySymbol);
+      } on ApiException {
+        // keep the last known regime
+      }
       notifyListeners();
     } catch (e) {
       if (_isNetworkError(e)) {

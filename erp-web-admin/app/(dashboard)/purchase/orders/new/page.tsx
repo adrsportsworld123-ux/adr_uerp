@@ -16,6 +16,7 @@ import { Field, Panel, selectClass } from "@/components/data/panel";
 import { BranchSelect, useMyBranches } from "@/components/data/branch-select";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
+import { currencySymbol } from "@/lib/currency";
 type DraftLine = { option: VariantOption | null; quantity: string; unitCost: string };
 const blankLine = (): DraftLine => ({ option: null, quantity: "1", unitCost: "" });
 
@@ -98,7 +99,7 @@ export default function NewPurchaseOrderPage() {
               <Field label={i === 0 ? "Quantity" : ""} className="w-28">
                 <Input aria-label={`Line ${i + 1} quantity`} type="number" min="0.001" step="0.001" value={l.quantity} onChange={(e) => update(i, { quantity: e.target.value })} />
               </Field>
-              <Field label={i === 0 ? "Unit cost (₹)" : ""} className="w-32">
+              <Field label={i === 0 ? `Unit cost (${currencySymbol()})` : ""} className="w-32">
                 <Input aria-label={`Line ${i + 1} unit cost`} type="number" min="0" step="0.01" value={l.unitCost} onChange={(e) => update(i, { unitCost: e.target.value })} />
               </Field>
               <Button variant="ghost" size="icon" aria-label={`Remove line ${i + 1}`} disabled={lines.length === 1} onClick={() => setLines(lines.filter((_, idx) => idx !== i))}>

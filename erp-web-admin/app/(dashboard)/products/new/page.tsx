@@ -22,6 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect, categoryOption } from "@/components/data/search-select";
 
+import { currencySymbol } from "@/lib/currency";
 export default function NewProductPage() {
   const router = useRouter();
 
@@ -368,15 +369,15 @@ export default function NewProductPage() {
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="costPrice">Cost price (₹)</Label>
+                <Label htmlFor="costPrice">Cost price ({currencySymbol()})</Label>
                 <Input id="costPrice" type="number" min="0" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="mrp">MRP (₹)</Label>
+                <Label htmlFor="mrp">MRP ({currencySymbol()})</Label>
                 <Input id="mrp" type="number" min="0.01" step="0.01" required value={mrp} onChange={(e) => setMrp(e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="sellingPrice">Selling price (₹, {priceIncludesTax ? "incl." : "excl."} GST)</Label>
+                <Label htmlFor="sellingPrice">Selling price ({currencySymbol()}, {priceIncludesTax ? "incl." : "excl."} GST)</Label>
                 <Input
                   id="sellingPrice"
                   type="number"

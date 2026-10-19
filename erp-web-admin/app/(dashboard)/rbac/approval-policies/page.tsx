@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/data/page-header";
 
+import { currencySymbol } from "@/lib/currency";
 type Level = "none" | "any" | "branch_manager" | "merchant_admin";
 type Tier = { up_to: number; approver: Level };
 type Policy = {
@@ -239,7 +240,7 @@ export default function ApprovalPoliciesPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="flex items-center gap-3">
                     <input type="radio" name="refund" checked={!draft.refundAll} onChange={() => set({ refundAll: false })} />
-                    Only refunds above ₹
+                    Only refunds above {currencySymbol()}
                   </label>
                   <Input
                     aria-label="Refund approval threshold in rupees"
@@ -278,7 +279,7 @@ export default function ApprovalPoliciesPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="flex items-center gap-3">
                     <input type="checkbox" checked={draft.stockOn} onChange={(e) => set({ stockOn: e.target.checked })} />
-                    Adjustments worth more than ₹
+                    Adjustments worth more than {currencySymbol()}
                   </label>
                   <Input
                     aria-label="Stock adjustment approval threshold in rupees"
@@ -316,7 +317,7 @@ export default function ApprovalPoliciesPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="flex items-center gap-3">
                     <input type="radio" name="jv" checked={!draft.jvAll} onChange={() => set({ jvAll: false })} />
-                    Only vouchers totalling more than ₹
+                    Only vouchers totalling more than {currencySymbol()}
                   </label>
                   <Input
                     aria-label="Voucher approval threshold in rupees"

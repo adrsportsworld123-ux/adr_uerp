@@ -37,6 +37,12 @@ type IRNLineItem struct {
 	CGSTRate     float64
 	SGSTRate     float64
 	IGSTRate     float64
+	// The line's tax as the invoice printed it (migrations/060): CGST +
+	// SGST for an intra-state sale, IGST for an inter-state one.
+	CGSTAmount float64
+	SGSTAmount float64
+	IGSTAmount float64
+	CessAmount float64
 }
 
 type IRNRequest struct {

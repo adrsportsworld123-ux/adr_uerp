@@ -1,3 +1,4 @@
+import '../ui/format.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -104,7 +105,7 @@ class _HeldOrdersScreenState extends State<HeldOrdersScreen> {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text('₹${o.grandTotal}'),
+                            Text(formatRupees(o.grandTotal)),
                             const SizedBox(width: 8),
                             IconButton(
                               key: Key('void-held-${o.orderId}'),
@@ -153,7 +154,7 @@ class _VoidHeldDialogState extends State<_VoidHeldDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("${widget.order.lineCount} item(s) · ₹${widget.order.grandTotal}. The items go back on sale; it can't be recalled afterwards."),
+            Text("${widget.order.lineCount} item(s) · ${formatRupees(widget.order.grandTotal)}. The items go back on sale; it can't be recalled afterwards."),
             const SizedBox(height: 12),
             TextField(
               key: const Key('void-held-reason'),

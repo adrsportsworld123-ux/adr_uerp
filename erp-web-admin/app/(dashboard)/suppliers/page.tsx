@@ -15,9 +15,9 @@ import { StatusChip } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
 
+import { rupees } from "@/lib/format";
 function money(v: string) {
-  const n = Number(v);
-  return Number.isFinite(n) ? `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : v;
+  return Number.isFinite(Number(v)) ? rupees(v) : v;
 }
 
 const columns: Column<Supplier>[] = [
@@ -56,7 +56,7 @@ const EDIT_FIELDS: EditField[] = [
   { key: "phone", label: "Phone", type: "tel", half: true },
   { key: "email", label: "Email", type: "email" },
   { key: "payment_terms", label: "Payment terms", half: true, placeholder: "Net 30" },
-  { key: "credit_limit", label: "Credit limit (₹)", type: "number", half: true },
+  { key: "credit_limit", label: "Credit limit", type: "number", half: true },
 ];
 
 function SuppliersList() {

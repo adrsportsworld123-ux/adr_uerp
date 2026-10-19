@@ -40,6 +40,7 @@ import (
 	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/subscriptions"
 	"erp-core-go/internal/sync"
+	"erp-core-go/internal/taxes"
 	"erp-core-go/internal/terminals"
 )
 
@@ -74,6 +75,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	acct := &accounting.Handler{DB: database}
 	br := &branches.Handler{DB: database}
 	docs := &documents.Handler{DB: database}
+	taxH := &taxes.Handler{DB: database}
 	srch := &search.Handler{DB: database, Client: searchClient}
 	cust := &customers.Handler{DB: database}
 	promo := &promotions.Handler{DB: database}
@@ -286,6 +288,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)
 			protected.Post("/sales/orders/{id}/customer", orders.AttachCustomer)
+			protected.Put("/sales/orders/{id}/place-of-supply", orders.SetPlaceOfSupply)
 			protected.Post("/sales/orders/{id}/prescription", orders.AttachPrescription)
 			protected.Post("/prescriptions", pharmH.CreatePrescription)
 			protected.Get("/prescriptions", pharmH.ListPrescriptions)
@@ -308,6 +311,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/sales/orders/{id}/returnable", orders.GetReturnable)
 			protected.Get("/sales/orders/{id}/returns", orders.ListReturns)
 			protected.Post("/sales/orders/{id}/returns", orders.CreateReturn)
+			protected.Get("/sales/returns/{id}/pdf", orders.DownloadCreditNote)
 			// Phase 13 shifts: any signed-in user runs their till's shift;
 			// a count that doesn't match, and a paid-out, need a manager's
 			// code + PIN inline (internal/sales/shifts.go).
@@ -328,6 +332,13 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/sales/settings", orders.GetSettings)
 			protected.With(authn.RequirePermission(database, "sales.settings")).
 				Put("/sales/settings", orders.UpdateSettings)
+			// Tax split on bills and invoices (migrations/060): the
+			// merchant's regime, each branch's override and GST state.
+			protected.Get("/tax/settings", taxH.GetSettings)
+			protected.Get("/tax/regime", taxH.GetRegime)
+			taxSettings := authn.RequirePermission(database, "tax.settings")
+			protected.With(taxSettings).Put("/tax/settings", taxH.UpdateSettings)
+			protected.With(taxSettings).Put("/tax/settings/branches/{id}", taxH.UpdateBranchSettings)
 
 			protected.Get("/inventory", inv.GetStock)
 			// Phase 13: oversold offline sales waiting for review (migrations/041).

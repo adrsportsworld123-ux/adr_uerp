@@ -51,27 +51,19 @@ func (h *Handler) DownloadQuotation(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		rows, err := tx.Query(ctx, `
-			SELECT p.name, pv.sku, ql.quantity::text, ql.unit_price::text, ql.tax_amount::text, ql.line_total::text
-			FROM quotation_lines ql
-			JOIN product_variants pv ON pv.id = ql.variant_id
-			JOIN products p ON p.id = pv.product_id
-			WHERE ql.quotation_id::text = $1
-			ORDER BY ql.created_at`, id)
+		// Lines and the tax split from the same loader as the JSON, so the
+		// screen and the PDF can't disagree.
+		q, err := loadQuotation(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var l documents.QuotationLine
-			if err := rows.Scan(&l.Name, &l.SKU, &l.Quantity, &l.UnitPrice, &l.Tax, &l.Total); err != nil {
-				return err
-			}
-			in.Lines = append(in.Lines, l)
+		for _, l := range q.Lines {
+			in.Lines = append(in.Lines, documents.QuotationLine{Name: l.ProductName, SKU: l.SKU, Quantity: l.Quantity,
+				UnitPrice: l.UnitPrice, Tax: l.TaxAmount, Total: l.LineTotal,
+				LineTax: documents.LineTax{HSN: l.HSNCode, Rate: l.TaxRate, Taxable: l.TaxableValue,
+					CGST: l.CGSTAmount, SGST: l.SGSTAmount, IGST: l.IGSTAmount}})
 		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
+		in.Breakup = q.TaxBreakup
 		lh, _, err = documents.LoadLetterhead(ctx, tx, branchID, documents.KindReceipt)
 		return err
 	})

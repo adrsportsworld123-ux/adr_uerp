@@ -31,10 +31,12 @@ import { SearchSelect, categoryOption } from "@/components/data/search-select";
 import { DaysOfWeekPicker, describeWhen, fromLocalInput, toLocalInput } from "@/components/pricing/schedule-fields";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { rupees } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 
 function priceText(r: PriceRule) {
-  return r.rule_type === "fixed_price" ? `₹${r.value}` : `${Number(r.value) > 0 ? "+" : ""}${Number(r.value)}%`;
+  return r.rule_type === "fixed_price" ? `${rupees(r.value)}` : `${Number(r.value) > 0 ? "+" : ""}${Number(r.value)}%`;
 }
 
 export default function PriceRulesPage() {
@@ -246,9 +248,9 @@ export default function PriceRulesPage() {
           </Button>
           {checkResult && (
             <p className="text-sm" data-testid="price-check-result">
-              <span className="font-semibold">₹{checkResult.unit_price}</span>{" "}
+              <span className="font-semibold">{rupees(checkResult.unit_price)}</span>{" "}
               {checkResult.source === "price_rule"
-                ? `— rule "${checkResult.price_rule_name}" (base ₹${checkResult.base_selling_price})`
+                ? `— rule "${checkResult.price_rule_name}" (base ${rupees(checkResult.base_selling_price)})`
                 : checkResult.source === "price_list"
                   ? "— customer price list"
                   : "— base price, no rule applies"}
@@ -435,7 +437,7 @@ function RuleDialog({
             </Select>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="ruleValue">{ruleType === "percent" ? "Percent (−20 = 20% off)" : "Price (₹)"}</Label>
+            <Label htmlFor="ruleValue">{ruleType === "percent" ? "Percent (−20 = 20% off)" : `Price (${currencySymbol()})`}</Label>
             <Input id="ruleValue" type="number" step="0.01" value={value} onChange={(e) => setValue(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">

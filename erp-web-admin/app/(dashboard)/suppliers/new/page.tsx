@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
+import { currencySymbol } from "@/lib/currency";
 export default function NewSupplierPage() {
   const router = useRouter();
   const [form, setForm] = useState({
@@ -86,7 +87,7 @@ export default function NewSupplierPage() {
                 <Input id="payment_terms" placeholder="Net 30" value={form.payment_terms} onChange={(e) => set("payment_terms", e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="credit_limit">Credit limit (₹)</Label>
+                <Label htmlFor="credit_limit">Credit limit ({currencySymbol()})</Label>
                 <Input id="credit_limit" type="number" min="0" step="0.01" value={form.credit_limit} onChange={(e) => set("credit_limit", e.target.value)} />
               </div>
             </div>

@@ -13,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 
+import { rupees } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 const METHODS = ["cash", "card", "upi", "bank_transfer", "cheque"];
 const METHOD_LABELS: Record<string, string> = {
   cash: "Cash",
@@ -90,24 +92,26 @@ export default function BillDetailPage() {
           <div className="flex justify-between">
             <span className="text-muted-foreground">Subtotal (landed cost)</span>
             <span>
-              ₹{bill.subtotal} + freight ₹{bill.freight_amount} + other ₹{bill.other_charges}
+              {rupees(bill.subtotal)} + freight {rupees(bill.freight_amount)} + other {rupees(bill.other_charges)}
             </span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">GST</span>
-            <span>₹{bill.tax_total}</span>
-          </div>
+          {(bill.tax_rows?.length ? bill.tax_rows : [{ label: "GST", amount: bill.tax_total }]).map((t) => (
+            <div key={t.label} className="flex justify-between" data-testid="bill-tax-row">
+              <span className="text-muted-foreground">{t.label}</span>
+              <span>{rupees(t.amount)}</span>
+            </div>
+          ))}
           <div className="flex justify-between font-semibold">
             <span>Grand total</span>
-            <span>₹{bill.grand_total}</span>
+            <span>{rupees(bill.grand_total)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Paid</span>
-            <span>₹{bill.amount_paid}</span>
+            <span>{rupees(bill.amount_paid)}</span>
           </div>
           <div className="flex justify-between font-semibold">
             <span>Balance</span>
-            <span>₹{balance.toFixed(2)}</span>
+            <span>{rupees(balance.toFixed(2))}</span>
           </div>
         </CardContent>
       </Card>
@@ -121,7 +125,7 @@ export default function BillDetailPage() {
             <form onSubmit={handlePayment} className="flex flex-col gap-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="amount">Amount (₹) *</Label>
+                  <Label htmlFor="amount">Amount ({currencySymbol()}) *</Label>
                   <Input id="amount" type="number" min="0.01" step="0.01" required value={amount} onChange={(e) => setAmount(e.target.value)} />
                 </div>
                 <div className="flex flex-col gap-2">

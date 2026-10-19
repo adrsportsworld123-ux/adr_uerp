@@ -16,6 +16,8 @@ type BranchSalesLine struct {
 	BranchName string `json:"branch_name"`
 	OrderCount int    `json:"order_count"`
 	GrandTotal string `json:"grand_total"`
+	// After checkout round-off waivers: what was collected.
+	NetTotal string `json:"net_total"`
 }
 
 type ConsolidatedSalesResponse struct {
@@ -23,6 +25,7 @@ type ConsolidatedSalesResponse struct {
 	Branches        []BranchSalesLine `json:"branches"`
 	TotalOrderCount int               `json:"total_order_count"`
 	TotalGrandTotal string            `json:"total_grand_total"`
+	TotalNetTotal   string            `json:"total_net_total"`
 }
 
 // BuildConsolidatedSales — see handlers.go's BuildDailySales doc comment
@@ -30,7 +33,7 @@ type ConsolidatedSalesResponse struct {
 func BuildConsolidatedSales(ctx context.Context, tx pgx.Tx, date string) (ConsolidatedSalesResponse, error) {
 	resp := ConsolidatedSalesResponse{Date: date, Branches: []BranchSalesLine{}}
 	rows, err := tx.Query(ctx, `
-		SELECT b.id, b.name, COUNT(so.id), COALESCE(SUM(so.grand_total),0)::text
+		SELECT b.id, b.name, COUNT(so.id), COALESCE(SUM(so.grand_total),0)::text, COALESCE(SUM(so.grand_total + so.round_off),0)::text
 		FROM branches b
 		LEFT JOIN sales_orders so ON so.branch_id = b.id AND so.status = 'finalized' AND so.finalized_at::date = $1::date
 		GROUP BY b.id, b.name
@@ -40,7 +43,7 @@ func BuildConsolidatedSales(ctx context.Context, tx pgx.Tx, date string) (Consol
 	}
 	for rows.Next() {
 		var l BranchSalesLine
-		if err := rows.Scan(&l.BranchID, &l.BranchName, &l.OrderCount, &l.GrandTotal); err != nil {
+		if err := rows.Scan(&l.BranchID, &l.BranchName, &l.OrderCount, &l.GrandTotal, &l.NetTotal); err != nil {
 			rows.Close()
 			return resp, err
 		}
@@ -51,9 +54,9 @@ func BuildConsolidatedSales(ctx context.Context, tx pgx.Tx, date string) (Consol
 		return resp, err
 	}
 	err = tx.QueryRow(ctx, `
-		SELECT COUNT(*), COALESCE(SUM(grand_total),0)::text FROM sales_orders
+		SELECT COUNT(*), COALESCE(SUM(grand_total),0)::text, COALESCE(SUM(grand_total + round_off),0)::text FROM sales_orders
 		WHERE status = 'finalized' AND finalized_at::date = $1::date`, date,
-	).Scan(&resp.TotalOrderCount, &resp.TotalGrandTotal)
+	).Scan(&resp.TotalOrderCount, &resp.TotalGrandTotal, &resp.TotalNetTotal)
 	return resp, err
 }
 

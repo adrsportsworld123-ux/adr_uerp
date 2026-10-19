@@ -20,10 +20,11 @@ import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
 import { SearchSelect } from "@/components/data/search-select";
 
+import { rupees as money } from "@/lib/format";
 type Option = { id: string; name: string };
 
 function rupees(n: number) {
-  return `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return money(n);
 }
 
 function priceRange(p: Product) {

@@ -148,7 +148,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                         autofocus: true,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
-                        decoration: const InputDecoration(labelText: 'Opening float', prefixText: '₹ ', border: OutlineInputBorder()),
+                        decoration: InputDecoration(labelText: 'Opening float', prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
                         onSubmitted: (_) => _open(),
                       ),
                       const SizedBox(height: 8),
@@ -253,6 +253,7 @@ class ShiftReportView extends StatelessWidget {
       const SizedBox(height: 8),
       section('Sales', [
         Text('${report.orderCount} sale${report.orderCount == 1 ? '' : 's'}${report.voidedCount > 0 ? ' · ${report.voidedCount} voided' : ''}'),
+        if ((double.tryParse(report.roundOffTotal) ?? 0) != 0) row('Round off', report.roundOffTotal),
         row('Net sales', report.netSales, strong: true),
         for (final e in report.byMethod.entries) row(_methodLabel(e.key), e.value),
         if (report.returnCount > 0) row('Refunded (${report.returnCount} return${report.returnCount == 1 ? '' : 's'})', report.refundTotal, sign: '−'),
@@ -407,7 +408,7 @@ class _CashMovementDialogState extends State<CashMovementDialog> {
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
               onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(labelText: 'Amount', prefixText: '₹ ', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: 'Amount', prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             TextField(

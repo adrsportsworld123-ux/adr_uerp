@@ -12,6 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
+import { rupees } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 interface DraftLine {
   variant_id: string;
   product_name: string;
@@ -142,7 +144,7 @@ export default function NewPurchaseReturnPage() {
                       {l.product_name} <span className="text-muted-foreground">({l.sku})</span>
                     </TableCell>
                     <TableCell>{l.quantity}</TableCell>
-                    <TableCell>₹{l.unit_cost}</TableCell>
+                    <TableCell>{rupees(l.unit_cost)}</TableCell>
                     <TableCell>{l.batch_no || <span className="text-muted-foreground">—</span>}</TableCell>
                   </TableRow>
                 ))}
@@ -183,7 +185,7 @@ export default function NewPurchaseReturnPage() {
                 <Input id="quantity" type="number" min="0.001" step="0.001" required value={quantity} onChange={(e) => setQuantity(e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="unitCost">Unit cost (₹) *</Label>
+                <Label htmlFor="unitCost">Unit cost ({currencySymbol()}) *</Label>
                 <Input id="unitCost" type="number" min="0" step="0.01" required value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
               </div>
             </div>

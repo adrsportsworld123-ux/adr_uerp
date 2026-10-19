@@ -20,6 +20,7 @@ import { StatusChip, Tone } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
 
+import { rupees as money } from "@/lib/format";
 const SEGMENT: Record<Customer["segment"], { label: string; tone: Tone }> = {
   vip: { label: "VIP", tone: "plum" },
   regular: { label: "Regular", tone: "info" },
@@ -37,8 +38,7 @@ const EDIT_FIELDS: EditField[] = [
 ];
 
 function rupees(v: string) {
-  const n = Number(v);
-  return Number.isFinite(n) ? `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : v;
+  return Number.isFinite(Number(v)) ? money(v) : v;
 }
 
 function shortDate(iso: string | null) {

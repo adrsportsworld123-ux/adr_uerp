@@ -24,6 +24,7 @@ import {
 import { ArrowDownRight, ArrowUpRight, Minus, Target } from "lucide-react";
 import { METHOD_LABEL, rupees } from "@/lib/format";
 
+import { currencyCode, currencyPrefix } from "@/lib/currency";
 export type Point = { period: string; label: string; sales: string; orders: number; prior?: string };
 export type Kpi = { key: string; label: string; value: string; previous: string; change_pct: number | null; orders: number; hint: string };
 export type Share = { key: string; label: string; value: string; count: number; quantity?: string };
@@ -46,14 +47,21 @@ export type Tracking = {
 
 const C = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
 
-/** ₹ in lakhs and crores for chart axes: 1250000 → "₹12.5L". */
+/** Short amounts for chart axes in the merchant's currency (lib/currency):
+ * lakhs and crores for INR (1250000 → "₹12.5L"), else thousands and
+ * millions ("$1.25M"). */
 export function compactINR(v: number): string {
   const a = Math.abs(v);
   const s = v < 0 ? "−" : "";
-  if (a >= 1e7) return `${s}₹${+(a / 1e7).toFixed(2)}Cr`;
-  if (a >= 1e5) return `${s}₹${+(a / 1e5).toFixed(1)}L`;
-  if (a >= 1e3) return `${s}₹${+(a / 1e3).toFixed(1)}k`;
-  return `${s}₹${Math.round(a)}`;
+  const sym = currencyPrefix();
+  if (currencyCode() === "INR") {
+    if (a >= 1e7) return `${s}${sym}${+(a / 1e7).toFixed(2)}Cr`;
+    if (a >= 1e5) return `${s}${sym}${+(a / 1e5).toFixed(1)}L`;
+  } else if (a >= 1e6) {
+    return `${s}${sym}${+(a / 1e6).toFixed(2)}M`;
+  }
+  if (a >= 1e3) return `${s}${sym}${+(a / 1e3).toFixed(1)}k`;
+  return `${s}${sym}${Math.round(a)}`;
 }
 
 const num = (s: string | null | undefined) => (s == null ? null : Number(s));

@@ -243,6 +243,8 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `PO_NOT_DELETABLE` | 409 | `DELETE /purchase/orders/{id}` | Only a draft or open PO can be deleted; a received, completed, closed or cancelled one stays on record (§3.66) |
 | `GRN_NOT_DELETABLE` | 409 | `DELETE /purchase/grn/{id}` | Only a draft GRN can be deleted; a completed one is corrected with a purchase return |
 | `GRN_HAS_RETURN` | 409 | `DELETE /purchase/grn/{id}` | A purchase return refers to this draft GRN |
+| `ROUND_OFF_NOT_ALLOWED` | 400 | `POST /sales/orders/{id}/checkout` | A `round_off` was sent but round-off is off, or it's above the merchant's limit (≤ ₹5), positive, or the whole bill (§3.67) |
+| `TAX_SPLIT_MISMATCH` | 400 | `POST /purchase/bills` | `cgst_amount + sgst_amount + igst_amount + cess_amount` doesn't add up to `tax_total` (§3.68) |
 
 ### 3.1 Auth
 
@@ -2244,6 +2246,96 @@ Verified on a fresh database built from all 57 migrations: an API script coverin
 - Restoring a GRN whose PO is deleted is refused (`RESTORE_CONFLICT`); restore the PO first. A restored draft GRN is checked against pending again when it completes.
 
 Web: a Delete button with a reason on the PO page (draft/open, no GRN) and the GRN page (draft), via `components/purchase/delete-document-dialog.tsx`. An open PO keeps its Cancel button for orders the supplier already has. Verified on a fresh database: 27 API checks, and the web flow in `e2e/purchase-orders.spec.ts`.
+
+### 3.67 Sale round-off waiver (2026-10-19)
+
+A bill of ₹105.75 settled for ₹105.00: the ₹0.75 is waived. `migrations/059_sale_round_off.sql`; the rules live in `internal/sales/round_off.go`.
+
+- **Setting** (Sales Policy, `sales.settings`): `sales_settings.round_off_max` (₹0–5; 0 = off, the default) and `round_off_auto` (the till starts with the paise waived). `GET/PUT /sales/settings` carry both; a PUT that omits them keeps them, so the older return-policy form doesn't switch them off.
+- **The invoice is not changed.** subtotal, discount, tax and `grand_total` stay as billed (GST untouched). `sales_orders.round_off` is the signed adjustment (−0.75; never positive, at least −5); payable = `grand_total + round_off`.
+- **Checkout** takes an optional `round_off` (signed). It is checked against the setting, the ₹5 ceiling and the bill; the tenders must cover the payable amount. Omitted = 0, so the request and its result are exactly as before. Order, receipt, detail and history responses add `round_off` and `payable_total`.
+- **Ledger:** the sale entry debits the waiver to Round Off (5005, the account supplier round-off already uses): Dr tenders + Dr Round Off = Cr Sales Revenue + Cr GST Payable.
+- **Void** credits the waiver back to Round Off. **Returns** give it back so the refunds never add up to more than was paid. After each return, the waiver given back so far is max(0, waiver − value still unreturned), stored in `sales_returns.round_off`. The refund is the goods' value less that, and Round Off is credited with it. In practice the last items returned absorb it: on a ₹5,425.64 sale paid ₹5,425.00, refunds are ₹2,712.82 then ₹2,712.18.
+- **Offline sync** (`POST /sync/push`) takes `round_off` per order and checks only the ₹5 ceiling (the sale already happened). The POS stores it in its local queue (SQLite v5).
+- **Receipts:** JSON, ESC/POS and PDF print Total, Round off and Net payable when there is a waiver, and are unchanged otherwise.
+- **Reports** count sales at what was paid (`grand_total + round_off`), so sales totals equal the tenders:
+  - X and Z reports: `net_sales` plus `round_off_total` (Z: subtotal − discounts + tax + round-off = net sales). The printed reports have a Round off line.
+  - Daily sales: `round_off_total`, `net_total`. Consolidated sales: `net_total`, `total_net_total`.
+  - Sales summary: `net_sales` plus `round_off_total`. Dashboard figures and customer spend use the net amount.
+  - Report builder: `round_off` and `net_total` columns, used by the sales library reports.
+  - GST: GSTR-1 invoice value and the e-invoice/e-way-bill document value use the rounded invoice value; taxable value and tax are unchanged.
+  - Every existing sale has `round_off = 0`, so all historical figures are identical. A day frozen before this has no `round_off_total` and doesn't show a false "changed since close".
+
+Verified on a fresh database built from all migrations: an API script of 47 checks (settings, refusals, ledger balance, receipt, split tender, returns, void, sync, every report reconciling to the tenders), Go unit tests, the POS widget test (offline sale with a waiver queued for sync), and `e2e/round-off.spec.ts` (Sales Policy → back-office sale → return).
+
+### 3.68 GST split on bills and invoices — CGST + SGST / IGST, merchant and branch level (2026-10-19)
+
+Every sale invoice, receipt, quotation and purchase bill shows CGST and SGST separately for an intra-state supply and IGST for an inter-state one, and every report and GST return carries the same split. A merchant outside India uses a single tax under its own label. `migrations/060_tax_split.sql`; Go rules in `internal/taxes`.
+
+- **Settings** (`tax.settings`, Merchant Admin; Web Admin → Finance → Tax Settings): `tax_settings` holds the merchant default (`branch_id` NULL) and per-branch overrides. A branch's NULL regime or label inherits the merchant's.
+  - `regime`: `gst_split` (the default; also used when there is no row) or `single`.
+  - `tax_label`: e.g. VAT, Sales Tax, or GST.
+  - `state_code`: the GST state the branch supplies from. When unset it comes from the branch GSTIN, then the merchant's setting, then the merchant GSTIN (`app_branch_state()`).
+  - Endpoints: `GET /tax/settings` (with the state list), `PUT /tax/settings`, `PUT /tax/settings/branches/{id}` (all null = inherit, row removed) and `GET /tax/regime?branch_id=` (the POS). Every change is audited.
+- **Place of supply is fixed on the sale.** A trigger sets `sales_orders.place_of_supply` and `inter_state` while the order is a cart or held, and freezes them at checkout and sync, so a later GSTIN change never rewrites an invoice. The rule is the customer's GSTIN state, else the branch's state; it is inter-state when both are known and differ. A walk-in or B2C sale is always intra-state.
+- **Line snapshots:** `sales_order_lines` and `quotation_lines` gain `tax_rate` (the GST rate, cess excluded) and `cess_amount`. A trigger sets them from the product's slab whenever a line's tax is written (cart, quantity edit, discount layers, sync push). Existing lines get the rate their own figures imply.
+- **The split is derived, never stored per line.** Intra-state: CGST = round((tax − cess)/2), SGST = the rest. Inter-state: IGST = tax − cess. The SQL functions `gst_cgst` / `gst_sgst` / `gst_igst` and the Go `taxes.SplitLine` apply the same rule, so the invoice, the receipt, the Z report and GSTR-1 agree to the paisa. Tax amounts, totals, the journal (one GST Payable / GST Input posting) and stock are unchanged.
+- **Responses** (additive):
+  - Cart, order, receipt and detail carry `tax_breakup`: regime, label, `inter_state`, `place_of_supply`, the CGST/SGST/IGST/cess totals, the printed `rows` (e.g. "CGST @ 9%") and a rate-wise `summary`.
+  - Order and detail lines also carry `tax_rate`, `hsn_code` and their `cgst_amount` / `sgst_amount` / `igst_amount` / `cess_amount`. The receipt adds `customer_gstin`.
+  - Quotations carry the same breakup, with the place of supply computed live from the customer.
+- **Documents** (`internal/documents/tax.go`):
+  - A GST invoice prints a Taxable column, a GST % column and either CGST + SGST or IGST columns, with HSN under the item. The totals list each tax, followed by a rate-wise tax summary table. The place of supply and the buyer's GSTIN appear in the header.
+  - Single tax: one column and one total under the label.
+  - The thermal slip (ESC/POS and 80 mm PDF) prints the tax lines, adds per-rate lines when a bill mixes rates, and shows the place of supply.
+- **Purchase bills:**
+  - New columns: `purchase_bills.cgst_amount`, `sgst_amount`, `igst_amount`, `cess_amount` and `inter_state`. A CHECK constraint makes them add up to `tax_total`.
+  - `POST /purchase/bills` takes the amounts (they must add up, `TAX_SPLIT_MISMATCH`, or they set `tax_total` when it's 0), or `inter_state`, or neither. With neither, the supplier's GSTIN state is compared with the branch's.
+  - Responses add the amounts and `tax_rows`; the bill PDF prints them.
+  - Existing bills were split the same way: intra-state 50/50, which is what GSTR-3B already assumed.
+- **Reports:**
+  - GSTR-1 uses each line's stored split and the sale's own place of supply (B2B POS = the invoice's; B2CS gets INTRA/INTER).
+  - GSTR-3B: outward tax by head from the same split; ITC by head from the period's bills, scaled to the GST Input ledger total.
+  - E-invoice items carry the split, and the e-way bill uses the sale's own `inter_state`.
+  - Z report: `cgst_total` / `sgst_total` / `igst_total` / `cess_total`, the split per rate and the printed heads (all omitted on a day frozen before this).
+  - Daily sales and the sales summary: `cgst_total` etc.
+  - Report builder: `cgst` / `sgst` / `igst` / `cess` / `place_of_supply` / `inter_state` on sales, items sold and purchases, used by the daily and monthly sales, GST-by-rate and purchase register library reports.
+- **Clients:** the Web Admin shows the split on New sale, the sale page (CGST/SGST or IGST columns, place of supply, summary), quotations, purchase bills (the form chooses auto / CGST + SGST / IGST), Daily sales, X/Z and the sales list summary. The POS cart, receipt screen and Z screen show the rows. An offline cart splits locally under the cached regime (`TaxBreakup.local`, the same odd-paisa rule).
+
+Verified on a fresh database built from all migrations:
+- An API script of 61 checks: settings and refusals, walk-in CGST + SGST, a Tamil Nadu B2B customer billed IGST, the frozen place of supply, a cart switched between customers, a VAT branch override, a branch state override, three purchase-bill paths and the mismatch refusal, offline sync, GSTR-1 B2B/B2CS/HSN, GSTR-3B outward and ITC, Z/daily/summary heads adding up to the tax, library reports, quotations, and every line's split adding up to its tax.
+- Go and POS unit tests (updated billing goldens: CGST/SGST replace the single Tax line).
+- `e2e/tax-split.spec.ts`, with `round-off`, `phase14-admin-sales`, `purchase-orders` and `quotations` re-run.
+
+### 3.69 Currency, credit notes, ship-to state and B2CL (2026-10-19)
+
+Follow-ups to §3.68. `migrations/061_currency_ship_to.sql`.
+
+- **Currency per merchant, with a branch override.**
+  - `tax_settings.currency_code` (ISO 4217) and `currency_symbol` are set as a pair at one level; no row means INR / ₹. `GET/PUT /tax/settings` and the branch PUT carry them (code without symbol: 400), and `GET /tax/regime` returns the branch's.
+  - Amounts are never converted; this only names them.
+  - Documents: builders still format INR. `documents.Render` renames and regroups every amount for a non-INR branch (`currency.go`: "₹1,23,456.50" becomes "$123,456.50" or "AED 123,456.50"). An INR document is untouched.
+  - The POS formats in its branch's currency (`PosCurrency`). The Web Admin uses the merchant's (`lib/currency.tsx`; `rupees()` reads it), because the back office adds branches together.
+  - Indian-statute payroll screens (PF/ESI/LWF) and the SaaS console's own price list stay in ₹.
+- **Credit notes.**
+  - A sales return is a credit note against its invoice. Its tax is split as the invoice charged it (the invoice's `inter_state`), and each line's cess is its share of the invoice line's.
+  - Every return response (`loadReturn`: create, list, sale detail) carries `tax_breakup`.
+  - `GET /sales/returns/{id}/pdf[?format=thermal]` renders a CREDIT NOTE: the invoice it reverses, place of supply, lines with taxable value and CGST/SGST or IGST, any round-off returned, and the refund.
+  - The web sale page lists each credit note's tax with a PDF button, and the POS return confirmation shows the tax given back.
+- **GSTR-1 / GSTR-3B with returns.**
+  - Invoices are every sale issued in the period: finalized, partially refunded or refunded. Before this, a sale with any return dropped out entirely and the returns reconciled against nothing.
+  - Returns are credit notes dated when made: CDNR (by customer GSTIN) for a B2B invoice, CDNUR (`typ` B2CL) for a B2CL invoice. B2CS is net of returns against other B2C invoices, and the HSN summary is net of returns.
+  - GSTR-3B outward tax is invoices less credit notes, so both returns reconcile with the GST Payable ledger once returns exist.
+- **B2CL:** an inter-state B2C invoice above ₹1,00,000 (CGST Notification 12/2024, from 1 August 2024; `b2clThreshold`) is reported invoice-wise by place of supply and left out of B2CS.
+- **Ship-to state.**
+  - `sales_orders.ship_to_state` is set with `PUT /sales/orders/{id}/place-of-supply {"state_code": "27" | null}`, on a cart or held order only (`ORDER_NOT_EDITABLE` after checkout). The change is audited.
+  - When set, it is the place of supply, ahead of the customer's GSTIN state: a walk-in delivery to another state is IGST, and a B2B customer's goods follow the delivery.
+  - The supply trigger also fires on it and freezes it at checkout. Order responses carry `ship_to_state`, and the back-office New sale page has a Place of supply choice.
+
+Verified on a fresh database built from all migrations:
+- §3.68's 61-check script, then a 38-check script: currency validation, branch/merchant inheritance and the POS regime; a USD receipt; a delivery to Maharashtra billed IGST (refused after checkout); a B2B customer shipped to Kerala; credit notes (CGST + SGST, IGST, B2B) and their PDFs; GSTR-1 B2CL / CDNR / CDNUR / B2CS netting / HSN net quantity; and GSTR-1 = GSTR-3B = the ledger.
+- Go and POS unit tests.
+- `e2e/tax-split.spec.ts` (now also covers place of supply, credit notes and a branch currency), plus the round-off, phase14-admin-sales, purchase-orders and quotations specs.
 
 ## 4. What Phase 0 concretely delivers against this design
 

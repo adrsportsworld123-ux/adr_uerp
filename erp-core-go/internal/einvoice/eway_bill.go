@@ -78,13 +78,14 @@ func (h *Handler) GenerateEWayBill(w http.ResponseWriter, r *http.Request) {
 
 		var status, grandTotal, branchGSTIN, merchantGSTIN string
 		var customerID *string
+		var saleInterState bool
 		if err := tx.QueryRow(ctx, `
-			SELECT so.status, so.grand_total::text, so.customer_id, COALESCE(b.gstin,''), COALESCE(m.gstin,'')
+			SELECT so.status, (so.grand_total + so.round_off)::text, so.customer_id, COALESCE(b.gstin,''), COALESCE(m.gstin,''), so.inter_state
 			FROM sales_orders so
 			JOIN branches b ON b.id = so.branch_id
 			JOIN merchants m ON m.id = so.merchant_id
 			WHERE so.id = $1`, orderID,
-		).Scan(&status, &grandTotal, &customerID, &branchGSTIN, &merchantGSTIN); err != nil {
+		).Scan(&status, &grandTotal, &customerID, &branchGSTIN, &merchantGSTIN, &saleInterState); err != nil {
 			return err
 		}
 		if status != "finalized" {
@@ -116,7 +117,10 @@ func (h *Handler) GenerateEWayBill(w http.ResponseWriter, r *http.Request) {
 		if buyerGSTIN != "" {
 			toState = stateCode(buyerGSTIN)
 		}
-		interstate := fromState != "" && toState != "" && fromState != toState
+		// The sale's own place of supply (migrations/060) also knows a
+		// branch state set in Tax Settings, so it decides when it says
+		// inter-state — the invoice charged IGST.
+		interstate := saleInterState || (fromState != "" && toState != "" && fromState != toState)
 
 		grandTotalFloat, err := parseMoney(grandTotal)
 		if err != nil {

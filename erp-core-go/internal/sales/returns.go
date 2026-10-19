@@ -18,6 +18,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/taxes"
 )
 
 // Phase 13: sales returns and refunds (migrations/038_sales_returns.sql;
@@ -40,12 +41,20 @@ type salesSettings struct {
 	ReturnWindowDays       *int `json:"return_window_days"`
 	// Phase 13 shifts: refuse POS checkout on a till with no open shift.
 	ShiftsRequired bool `json:"shifts_required"`
+	// Round-off waiver (migrations/059): the most a sale may be settled
+	// below its total ("0.00" = off), and whether the till offers rounding
+	// down to the rupee by default.
+	RoundOffMax  string `json:"round_off_max"`
+	RoundOffAuto bool   `json:"round_off_auto"`
+	roundOffMax  float64
 }
 
 func loadSalesSettings(ctx context.Context, tx pgx.Tx) (salesSettings, error) {
-	s := salesSettings{ReturnsRequireApproval: true} // the safe default when never configured
-	err := tx.QueryRow(ctx, `SELECT returns_require_approval, return_window_days, shifts_required FROM sales_settings`).
-		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays, &s.ShiftsRequired)
+	s := salesSettings{ReturnsRequireApproval: true, RoundOffMax: "0.00"} // the safe default when never configured
+	err := tx.QueryRow(ctx, `
+		SELECT returns_require_approval, return_window_days, shifts_required, round_off_max::text, round_off_auto, round_off_max::float8
+		FROM sales_settings`).
+		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays, &s.ShiftsRequired, &s.RoundOffMax, &s.RoundOffAuto, &s.roundOffMax)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, nil
 	}
@@ -80,12 +89,15 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
 		return
 	}
-	// shifts_required is optional so a client that predates it (the
-	// return-policy form) doesn't switch it off by omission.
+	// shifts_required and the round-off fields are optional so a client
+	// that predates them (the return-policy form) doesn't switch them off
+	// by omission.
 	var req struct {
-		ReturnsRequireApproval bool  `json:"returns_require_approval"`
-		ReturnWindowDays       *int  `json:"return_window_days"`
-		ShiftsRequired         *bool `json:"shifts_required"`
+		ReturnsRequireApproval bool     `json:"returns_require_approval"`
+		ReturnWindowDays       *int     `json:"return_window_days"`
+		ShiftsRequired         *bool    `json:"shifts_required"`
+		RoundOffMax            *float64 `json:"round_off_max"`
+		RoundOffAuto           *bool    `json:"round_off_auto"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
@@ -95,14 +107,22 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "return_window_days must be positive, or null for no limit")
 		return
 	}
+	if req.RoundOffMax != nil && (*req.RoundOffMax < 0 || *req.RoundOffMax > MaxRoundOff+0.0001) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("round_off_max must be between 0 and %.2f", MaxRoundOff))
+		return
+	}
 	var saved salesSettings
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO sales_settings (merchant_id, returns_require_approval, return_window_days, shifts_required, updated_at)
-			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, COALESCE($3, false), now())
+			INSERT INTO sales_settings (merchant_id, returns_require_approval, return_window_days, shifts_required,
+			    round_off_max, round_off_auto, updated_at)
+			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, COALESCE($3, false),
+			    round(COALESCE($4::numeric, 0), 2), COALESCE($5, false), now())
 			ON CONFLICT (merchant_id) DO UPDATE SET returns_require_approval = $1, return_window_days = $2,
-			    shifts_required = COALESCE($3, sales_settings.shifts_required), updated_at = now()`,
-			req.ReturnsRequireApproval, req.ReturnWindowDays, req.ShiftsRequired); err != nil {
+			    shifts_required = COALESCE($3, sales_settings.shifts_required),
+			    round_off_max = COALESCE(round($4::numeric, 2), sales_settings.round_off_max),
+			    round_off_auto = COALESCE($5, sales_settings.round_off_auto), updated_at = now()`,
+			req.ReturnsRequireApproval, req.ReturnWindowDays, req.ShiftsRequired, req.RoundOffMax, req.RoundOffAuto); err != nil {
 			return err
 		}
 		var err error
@@ -187,8 +207,12 @@ func (h *Handler) GetReturnable(w http.ResponseWriter, r *http.Request) {
 		var status, number string
 		var finalizedAt *time.Time
 		var creditOutstanding float64
-		if err := tx.QueryRow(ctx, `SELECT status, order_number, finalized_at, credit_amount - credit_paid FROM sales_orders WHERE id::text = $1`, orderID).
-			Scan(&status, &number, &finalizedAt, &creditOutstanding); err != nil {
+		var roundOff, roundOffBack string
+		if err := tx.QueryRow(ctx, `
+			SELECT status, order_number, finalized_at, credit_amount - credit_paid, round_off::text,
+			       COALESCE((SELECT sum(r.round_off) FROM sales_returns r WHERE r.sales_order_id = so.id), 0)::numeric(14,2)::text
+			FROM sales_orders so WHERE id::text = $1`, orderID).
+			Scan(&status, &number, &finalizedAt, &creditOutstanding, &roundOff, &roundOffBack); err != nil {
 			return err
 		}
 		settings, err := loadSalesSettings(ctx, tx)
@@ -215,6 +239,10 @@ func (h *Handler) GetReturnable(w http.ResponseWriter, r *http.Request) {
 		resp["approval_above"] = policy.RefundApprovalAbove
 		resp["return_window_days"] = settings.ReturnWindowDays
 		resp["credit_outstanding"] = fmt.Sprintf("%.2f", math.Max(0, creditOutstanding))
+		// The sale's checkout waiver (signed) and how much of it returns
+		// have already given back: the last returns refund up to that much
+		// less than the goods' value (round_off.go).
+		resp["round_off"], resp["round_off_returned"] = roundOff, roundOffBack
 		if lines == nil {
 			lines = []returnableLine{}
 		}
@@ -249,17 +277,23 @@ type createReturnRequest struct {
 }
 
 type returnResponse struct {
-	ReturnID     string  `json:"return_id"`
-	ReturnNumber string  `json:"return_number"`
-	OrderID      string  `json:"order_id"`
-	OrderStatus  string  `json:"order_status"`
-	RefundMethod string  `json:"refund_method"`
-	RefundAmount string  `json:"refund_amount"`
-	TaxAmount    string  `json:"tax_amount"`
-	Restocked    bool    `json:"restocked"`
-	ApprovedBy   *string `json:"approved_by"`
-	CreatedAt    string  `json:"created_at"`
-	Replayed     bool    `json:"replayed"`
+	ReturnID     string `json:"return_id"`
+	ReturnNumber string `json:"return_number"`
+	OrderID      string `json:"order_id"`
+	OrderStatus  string `json:"order_status"`
+	RefundMethod string `json:"refund_method"`
+	RefundAmount string `json:"refund_amount"`
+	TaxAmount    string `json:"tax_amount"`
+	// RoundOff: the part of the sale's checkout waiver this return gave
+	// back; RefundAmount is the goods' value less it.
+	RoundOff   string  `json:"round_off"`
+	Restocked  bool    `json:"restocked"`
+	ApprovedBy *string `json:"approved_by"`
+	CreatedAt  string  `json:"created_at"`
+	Replayed   bool    `json:"replayed"`
+	// The credit note's tax, split as the invoice charged it
+	// (credit_note.go, migrations/060). Additive.
+	TaxBreakup *taxes.Breakup `json:"tax_breakup"`
 }
 
 // approverFor resolves an employee code + PIN to a Branch Manager or
@@ -274,10 +308,14 @@ func loadReturn(ctx context.Context, tx pgx.Tx, returnID string) (returnResponse
 	var resp returnResponse
 	err := tx.QueryRow(ctx, `
 		SELECT r.id, r.return_number, r.sales_order_id, so.status, r.refund_method, r.refund_amount::text, r.tax_amount::text,
-		       r.restocked, r.approved_by::text, r.created_at::text
+		       r.round_off::text, r.restocked, r.approved_by::text, r.created_at::text
 		FROM sales_returns r JOIN sales_orders so ON so.id = r.sales_order_id
 		WHERE r.id = $1`, returnID).Scan(&resp.ReturnID, &resp.ReturnNumber, &resp.OrderID, &resp.OrderStatus, &resp.RefundMethod,
-		&resp.RefundAmount, &resp.TaxAmount, &resp.Restocked, &resp.ApprovedBy, &resp.CreatedAt)
+		&resp.RefundAmount, &resp.TaxAmount, &resp.RoundOff, &resp.Restocked, &resp.ApprovedBy, &resp.CreatedAt)
+	if err != nil {
+		return resp, err
+	}
+	resp.TaxBreakup, _, err = returnTaxBreakup(ctx, tx, returnID)
 	return resp, err
 }
 
@@ -399,7 +437,14 @@ func (h *Handler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 			plans = append(plans, p)
 		}
 		subtotal, taxTotal = round2(subtotal), round2(taxTotal)
-		refund := round2(subtotal + taxTotal)
+		// The goods' value, less the part of a checkout round-off waiver
+		// this return gives back (round_off.go): together the refunds never
+		// come to more than the customer paid.
+		returnRoundOffAmt, err := returnRoundOff(ctx, tx, orderID, round2(subtotal+taxTotal))
+		if err != nil {
+			return err
+		}
+		refund := round2(subtotal + taxTotal - returnRoundOffAmt)
 
 		if req.RefundMethod == "credit" {
 			if customerID == nil || refund > round2(creditAmount-creditPaid)+0.004 {
@@ -435,11 +480,11 @@ func (h *Handler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 		var returnID string
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO sales_returns (merchant_id, sales_order_id, branch_id, pos_terminal_id, return_number, reason,
-			    refund_method, refund_reference, subtotal, tax_amount, refund_amount, restocked, processed_by, approved_by, idempotency_key)
-			VALUES (current_setting('app.tenant_id')::uuid, $1::uuid, $2, NULLIF($3,'')::uuid, $4, $5, $6, NULLIF($7,''), $8, $9, $10, $11, $12, $13, $14)
+			    refund_method, refund_reference, subtotal, tax_amount, refund_amount, restocked, processed_by, approved_by, idempotency_key, round_off)
+			VALUES (current_setting('app.tenant_id')::uuid, $1::uuid, $2, NULLIF($3,'')::uuid, $4, $5, $6, NULLIF($7,''), $8, $9, $10, $11, $12, $13, $14, $15)
 			RETURNING id`,
 			orderID, branchID, deref(terminalID), number, req.Reason, req.RefundMethod, strings.TrimSpace(req.RefundReference),
-			subtotal, taxTotal, refund, restock, claims.UserID, approvedBy, req.IdempotencyKey).Scan(&returnID); err != nil {
+			subtotal, taxTotal, refund, restock, claims.UserID, approvedBy, req.IdempotencyKey, returnRoundOffAmt).Scan(&returnID); err != nil {
 			return err
 		}
 
@@ -498,6 +543,9 @@ func (h *Handler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 			refundLine = accounting.JournalLine{AccountCode: accounting.AccountReceivable, Credit: refund, PartyType: "customer", PartyID: *customerID}
 		}
 		journal := []accounting.JournalLine{refundLine}
+		if returnRoundOffAmt > 0 {
+			journal = append(journal, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Credit: returnRoundOffAmt})
+		}
 		if subtotal > 0 {
 			journal = append(journal, accounting.JournalLine{AccountCode: accounting.AccountSalesRevenue, Debit: subtotal})
 		}

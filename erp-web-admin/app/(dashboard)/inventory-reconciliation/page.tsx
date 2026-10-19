@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProductPicker, VariantOption as PickerOption } from "@/components/data/product-picker";
 
+import { rupees } from "@/lib/format";
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -332,7 +333,7 @@ function NewCountSection() {
           {result && (
             <div className="text-sm border-t pt-3">
               <Badge variant={Number(result.variance_value) === 0 ? "default" : "secondary"}>
-                {result.recon_date}: variance value ₹{result.variance_value}
+                {result.recon_date}: variance value {rupees(result.variance_value)}
               </Badge>
             </div>
           )}
@@ -399,7 +400,7 @@ function HistorySection() {
                 <TableCell>
                   <Badge variant="outline">{h.recon_type}</Badge>
                 </TableCell>
-                <TableCell className={Number(h.variance_value) !== 0 ? "text-destructive" : ""}>₹{h.variance_value}</TableCell>
+                <TableCell className={Number(h.variance_value) !== 0 ? "text-destructive" : ""}>{rupees(h.variance_value)}</TableCell>
                 <TableCell>{h.authorized ? <Badge variant="default">Yes</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
               </TableRow>
             ))}

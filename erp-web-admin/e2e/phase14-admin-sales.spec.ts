@@ -6,7 +6,7 @@ import { test, expect, Page, APIRequestContext } from "@playwright/test";
 // after-sale actions on the detail page: payment-method correction with a
 // manager's PIN, and a partial return. A POS user can't sell here.
 
-const API = "http://localhost:8080/api/v1";
+const API = process.env.E2E_API_URL ?? "http://localhost:8080/api/v1";
 const MERCHANT = process.env.E2E_MERCHANT_CODE ?? "acme-sports";
 const BRANCH = "22222222-2222-2222-2222-222222222222";
 const TILL = "33333333-3333-3333-3333-333333333333";

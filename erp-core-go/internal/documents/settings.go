@@ -21,6 +21,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/taxes"
 )
 
 // Kind picks which of the branch's footers a document carries.
@@ -82,6 +83,11 @@ func LoadLetterhead(ctx context.Context, tx pgx.Tx, branchID string, kind Kind) 
 		}
 	case KindPurchase:
 		lh.Footer = Lines(deref(purchaseFooter))
+	}
+	if ts, err := taxes.Load(ctx, tx, branchID); err == nil {
+		lh.Currency = ts.Currency()
+	} else {
+		return lh, FormatA4, err
 	}
 	return lh, ParseFormat(format, FormatA4), nil
 }

@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	"github.com/go-pdf/fpdf"
+
+	"erp-core-go/internal/taxes"
 )
 
 // Geist (SIL OFL 1.1, fonts/Geist-OFL.txt) — the design system's face,
@@ -64,6 +66,8 @@ type Letterhead struct {
 	Footer     []string // the footer for this kind of document (receipt or purchase)
 	Logo       []byte   // nil when there is none or the branch hides it
 	LogoMime   string
+	// The branch's currency (migrations/061); zero = INR / ₹.
+	Currency taxes.Currency
 }
 
 // Column of the A4 line-item table. Width is relative: the widths are
@@ -111,12 +115,16 @@ type Document struct {
 	Columns  []Column
 	Rows     []Row
 	Totals   []Total
+	TaxTable *Table      // the rate-wise tax summary under the totals; nil = none
 	Payments [][2]string // method, amount
 	Notes    []string
 }
 
 // Render returns the document as a PDF.
 func Render(lh Letterhead, d Document, f Format) ([]byte, error) {
+	if !lh.Currency.Indian() || (lh.Currency.Symbol != "" && lh.Currency.Symbol != "₹") {
+		d = localize(d, lh.Currency)
+	}
 	if f == FormatThermal {
 		return renderThermal(lh, d)
 	}
@@ -363,6 +371,41 @@ func renderA4(lh Letterhead, d Document) ([]byte, error) {
 		pdf.CellFormat(totW*0.45, h, t.Value, "", 1, "R", false, 0, "")
 	}
 
+	if t := d.TaxTable; t != nil && len(t.Rows) > 0 {
+		if pdf.GetY()+float64(len(t.Rows)+2)*5.5 > bottomLimit {
+			pdf.AddPage()
+		}
+		pdf.Ln(3)
+		pdf.SetFont("geist", "B", 9)
+		pdf.CellFormat(contentW, 5, t.Title, "", 1, "L", false, 0, "")
+		tw := scaleWidths(t.Columns, contentW*0.75)
+		pdf.SetFont("geist", "B", 8)
+		pdf.SetFillColor(238, 238, 238)
+		for i, c := range t.Columns {
+			align := "L"
+			if c.Right {
+				align = "R"
+			}
+			pdf.CellFormat(tw[i], 6, c.Title, "", 0, align, true, 0, "")
+		}
+		pdf.Ln(6)
+		pdf.SetFont("geist", "", 8)
+		for _, r := range t.Rows {
+			for i, c := range t.Columns {
+				align := "L"
+				if c.Right {
+					align = "R"
+				}
+				cell := ""
+				if i < len(r) {
+					cell = r[i]
+				}
+				pdf.CellFormat(tw[i], 5, cell, "B", 0, align, false, 0, "")
+			}
+			pdf.Ln(5)
+		}
+	}
+
 	if len(d.Payments) > 0 {
 		pdf.Ln(3)
 		pdf.SetFont("geist", "B", 9)
@@ -536,6 +579,24 @@ func drawThermal(pdf *fpdf.Fpdf, lh Letterhead, d Document) float64 {
 		pdf.SetFont("geist", style, size)
 		pdf.CellFormat(w*0.5, h, t.Label, "", 0, "L", false, 0, "")
 		pdf.CellFormat(w*0.5, h, t.Value, "", 1, "R", false, 0, "")
+	}
+	// On the roll the summary is only worth its paper when the bill mixes
+	// rates; a single rate is already on the tax lines ("CGST @ 2.5%").
+	if t := d.TaxTable; t != nil && len(t.Rows) > 1 {
+		rule()
+		pdf.SetFont("geist", "B", 7.5)
+		pdf.MultiCell(w, 3.8, t.Title, "", "L", false)
+		pdf.SetFont("geist", "", 7.5)
+		for _, r := range t.Rows {
+			line := ""
+			for i := 1; i < len(r) && i < len(t.Columns); i++ {
+				if line != "" {
+					line += "  "
+				}
+				line += t.Columns[i].Title + " " + r[i]
+			}
+			pdf.MultiCell(w, 3.6, r[0]+": "+line, "", "L", false)
+		}
 	}
 	if len(d.Payments) > 0 {
 		rule()

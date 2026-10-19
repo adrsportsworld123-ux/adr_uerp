@@ -15,6 +15,7 @@ import (
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/taxes"
 )
 
 var errGRNNotCompleted = errors.New("grn must be completed before billing")
@@ -34,6 +35,14 @@ type billResponse struct {
 	GrandTotal            string `json:"grand_total"`
 	AmountPaid            string `json:"amount_paid"`
 	Status                string `json:"status"`
+	// migrations/060: the supplier's tax by head, and how the branch
+	// prints it. Additive.
+	CGSTAmount string      `json:"cgst_amount"`
+	SGSTAmount string      `json:"sgst_amount"`
+	IGSTAmount string      `json:"igst_amount"`
+	CessAmount string      `json:"cess_amount"`
+	InterState bool        `json:"inter_state"`
+	TaxRows    []taxes.Row `json:"tax_rows"`
 }
 
 // ---------------------------------------------------------------------
@@ -56,6 +65,17 @@ type createBillRequest struct {
 	// either way), so the bill equals the printed total to the paisa
 	// without misstating GST. Posted to Round Off (5005).
 	RoundOff float64 `json:"round_off"`
+	// The supplier invoice's tax by head (migrations/060), all optional:
+	// when given they must add up to tax_total (or set it, when tax_total
+	// is 0); when not, tax_total is split by the supplier's GSTIN state
+	// against the branch's — CGST + SGST, or IGST.
+	CGSTAmount *float64 `json:"cgst_amount"`
+	SGSTAmount *float64 `json:"sgst_amount"`
+	IGSTAmount *float64 `json:"igst_amount"`
+	CessAmount *float64 `json:"cess_amount"`
+	// InterState, with no amounts given, says how tax_total splits
+	// instead of the GSTIN states: true = IGST, false = CGST + SGST.
+	InterState *bool `json:"inter_state"`
 }
 
 func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +97,12 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "tax_total can't be negative and round_off must be under ₹1 either way")
 		return
 	}
+	for _, v := range []*float64{req.CGSTAmount, req.SGSTAmount, req.IGSTAmount, req.CessAmount} {
+		if v != nil && *v < 0 {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "cgst_amount, sgst_amount, igst_amount and cess_amount can't be negative")
+			return
+		}
+	}
 	billDate, err := pastDate(req.BillDate)
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "bill_date: "+err.Error())
@@ -91,6 +117,8 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 	})
 
 	switch {
+	case errors.Is(err, errTaxSplitMismatch):
+		httpx.Error(w, http.StatusBadRequest, "TAX_SPLIT_MISMATCH", "CGST + SGST + IGST + cess must add up to the bill's tax total")
 	case errors.Is(err, accounting.ErrPeriodLocked):
 		httpx.Error(w, http.StatusConflict, "PERIOD_LOCKED", "that date is in a locked accounting period")
 	case errors.Is(err, errGRNNotCompleted):
@@ -133,6 +161,11 @@ func createBillTx(ctx context.Context, tx pgx.Tx, req createBillRequest, userID 
 		return billResponse{}, errGRNAlreadyBilled
 	}
 
+	split, inter, err := resolveBillTax(ctx, tx, &req, branchID, supplierID)
+	if err != nil {
+		return billResponse{}, err
+	}
+
 	billNumber := fmt.Sprintf("BILL-%d", time.Now().UnixNano())
 	grandTotal := math.Round((subtotal+freight+otherCharges+req.TaxTotal+req.RoundOff)*100) / 100
 
@@ -143,13 +176,15 @@ func createBillTx(ctx context.Context, tx pgx.Tx, req createBillRequest, userID 
 
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO purchase_bills (id, merchant_id, branch_id, supplier_id, grn_id, bill_number, supplier_invoice_number,
-		                             due_date, subtotal, tax_total, freight_amount, other_charges, grand_total, bill_date)
+		                             due_date, subtotal, tax_total, freight_amount, other_charges, grand_total, bill_date,
+		                             cgst_amount, sgst_amount, igst_amount, cess_amount, inter_state)
 		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-		        COALESCE($12::date, CURRENT_DATE))
+		        COALESCE($12::date, CURRENT_DATE), $13, $14, $15, $16, $17)
 		RETURNING id, bill_number, COALESCE(supplier_invoice_number,''), supplier_id, grn_id,
 		          subtotal::text, tax_total::text, freight_amount::text, other_charges::text, grand_total::text, amount_paid::text, status`,
 		branchID, supplierID, req.GRNID, billNumber, req.SupplierInvoiceNumber, dueDate,
 		subtotal, req.TaxTotal, freight, otherCharges, grandTotal, billDate,
+		split.CGST, split.SGST, split.IGST, split.Cess, inter,
 	).Scan(&resp.BillID, &resp.BillNumber, &resp.SupplierInvoiceNumber, &resp.SupplierID, &resp.GRNID,
 		&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status); err != nil {
 		return billResponse{}, err
@@ -182,8 +217,10 @@ func createBillTx(ctx context.Context, tx pgx.Tx, req createBillRequest, userID 
 	if req.SupplierInvoiceNumber != "" {
 		desc += " (supplier invoice " + req.SupplierInvoiceNumber + ")"
 	}
-	_, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "purchase_bill", resp.BillID, desc, userID, dateOrToday(billDate), lines)
-	return resp, err
+	if _, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "purchase_bill", resp.BillID, desc, userID, dateOrToday(billDate), lines); err != nil {
+		return resp, err
+	}
+	return resp, fillBillTax(ctx, tx, &resp)
 }
 
 // ---------------------------------------------------------------------
@@ -260,13 +297,16 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 			status = "paid"
 		}
 
-		return tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			UPDATE purchase_bills SET amount_paid = $1, status = $2 WHERE id = $3
 			RETURNING id, bill_number, COALESCE(supplier_invoice_number,''), supplier_id, grn_id,
 			          subtotal::text, tax_total::text, freight_amount::text, other_charges::text, grand_total::text, amount_paid::text, status`,
 			newPaid, status, billID,
 		).Scan(&resp.BillID, &resp.BillNumber, &resp.SupplierInvoiceNumber, &resp.SupplierID, &resp.GRNID,
-			&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status)
+			&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status); err != nil {
+			return err
+		}
+		return fillBillTax(ctx, tx, &resp)
 	})
 
 	switch {
@@ -343,12 +383,15 @@ func (h *Handler) GetBill(w http.ResponseWriter, r *http.Request) {
 
 	var resp billResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			SELECT id, bill_number, COALESCE(supplier_invoice_number,''), supplier_id, grn_id,
 			       subtotal::text, tax_total::text, freight_amount::text, other_charges::text, grand_total::text, amount_paid::text, status
 			FROM purchase_bills WHERE id = $1`, billID,
 		).Scan(&resp.BillID, &resp.BillNumber, &resp.SupplierInvoiceNumber, &resp.SupplierID, &resp.GRNID,
-			&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status)
+			&resp.Subtotal, &resp.TaxTotal, &resp.FreightAmount, &resp.OtherCharges, &resp.GrandTotal, &resp.AmountPaid, &resp.Status); err != nil {
+			return err
+		}
+		return fillBillTax(ctx, tx, &resp)
 	})
 	if err == pgx.ErrNoRows {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "bill not found")

@@ -94,7 +94,7 @@ func (h *Handler) GenerateEInvoice(w http.ResponseWriter, r *http.Request) {
 		var customerID *string
 		var finalizedAt time.Time
 		if err := tx.QueryRow(ctx, `
-			SELECT so.status, so.order_number, so.grand_total::text, so.customer_id, so.finalized_at,
+			SELECT so.status, so.order_number, (so.grand_total + so.round_off)::text, so.customer_id, so.finalized_at, -- TotInvVal includes round-off
 			       COALESCE(b.gstin, ''), COALESCE(m.gstin, '')
 			FROM sales_orders so
 			JOIN branches b ON b.id = so.branch_id
@@ -270,11 +270,15 @@ func loadEInvoice(ctx context.Context, tx pgx.Tx, orderID string) (eInvoiceRespo
 func loadIRNLineItems(ctx context.Context, tx pgx.Tx, orderID string) ([]IRNLineItem, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT COALESCE(p.hsn_code,''), p.name, sol.quantity, sol.taxable_value,
-		       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0), COALESCE(ts.igst_rate,0)
+		       CASE WHEN so.inter_state THEN 0 ELSE COALESCE(sol.tax_rate, 0) / 2 END,
+		       CASE WHEN so.inter_state THEN 0 ELSE COALESCE(sol.tax_rate, 0) / 2 END,
+		       CASE WHEN so.inter_state THEN COALESCE(sol.tax_rate, 0) ELSE 0 END,
+		       gst_cgst(sol.tax_amount, sol.cess_amount, so.inter_state), gst_sgst(sol.tax_amount, sol.cess_amount, so.inter_state),
+		       gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state), sol.cess_amount
 		FROM sales_order_lines sol
+		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
 		JOIN products p ON p.id = pv.product_id
-		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 		WHERE sol.sales_order_id = $1`, orderID)
 	if err != nil {
 		return nil, err
@@ -284,7 +288,8 @@ func loadIRNLineItems(ctx context.Context, tx pgx.Tx, orderID string) ([]IRNLine
 	var items []IRNLineItem
 	for rows.Next() {
 		var it IRNLineItem
-		if err := rows.Scan(&it.HSNCode, &it.Description, &it.Quantity, &it.TaxableValue, &it.CGSTRate, &it.SGSTRate, &it.IGSTRate); err != nil {
+		if err := rows.Scan(&it.HSNCode, &it.Description, &it.Quantity, &it.TaxableValue, &it.CGSTRate, &it.SGSTRate, &it.IGSTRate,
+			&it.CGSTAmount, &it.SGSTAmount, &it.IGSTAmount, &it.CessAmount); err != nil {
 			return nil, err
 		}
 		items = append(items, it)

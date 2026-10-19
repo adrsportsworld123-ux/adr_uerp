@@ -6,6 +6,7 @@ import { Check, ChevronDown, Loader2, Search } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { Product } from "@/lib/types";
 
+import { rupees } from "@/lib/format";
 export type VariantOption = { variantId: string; productId: string; productName: string; sku: string; sellingPrice: string; label: string; trackBatch: boolean };
 
 function toOptions(products: Product[], mode: "variant" | "product"): VariantOption[] {
@@ -150,7 +151,7 @@ export function ProductPicker({
                     {mode === "product" && <span className="block truncate text-xs text-muted-foreground">{o.sku}</span>}
                   </span>
                   <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                    <span className="tabular">₹{o.sellingPrice}</span>
+                    <span className="tabular">{rupees(o.sellingPrice)}</span>
                     {value?.variantId === o.variantId && <Check className="size-3.5 text-primary" aria-hidden />}
                   </span>
                 </li>

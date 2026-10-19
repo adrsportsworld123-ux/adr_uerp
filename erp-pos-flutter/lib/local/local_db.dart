@@ -29,7 +29,9 @@ class LocalDb {
       // catalog, and pending_order_lines.open_price for a typed price.
       // v4 (Phase 13 sync queue): when each sale synced, and whether the
       // server flagged it for review (NEGATIVE_STOCK).
-      version: 4,
+      // v5 (erp-core-go migrations/059): pending_orders.round_off, the
+      // checkout waiver an offline sale took (signed, 0 = none).
+      version: 5,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
@@ -51,6 +53,9 @@ class LocalDb {
         if (oldVersion < 4) {
           await db.execute('ALTER TABLE pending_orders ADD COLUMN synced_at TEXT');
           await db.execute('ALTER TABLE pending_orders ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0');
+        }
+        if (oldVersion < 5) {
+          await db.execute('ALTER TABLE pending_orders ADD COLUMN round_off REAL NOT NULL DEFAULT 0');
         }
       },
       onCreate: (db, version) async {
@@ -103,7 +108,8 @@ class LocalDb {
             synced_order_id TEXT,
             sync_error TEXT,
             synced_at TEXT,
-            needs_review INTEGER NOT NULL DEFAULT 0
+            needs_review INTEGER NOT NULL DEFAULT 0,
+            round_off REAL NOT NULL DEFAULT 0
           )
         ''');
         await db.execute('''

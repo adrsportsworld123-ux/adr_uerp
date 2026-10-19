@@ -112,7 +112,19 @@ var Datasets = []Dataset{
 			{"subtotal", "Subtotal", TMoney, "so.subtotal"},
 			{"discount_total", "Discounts", TMoney, "so.discount_total"},
 			{"tax_total", "Tax", TMoney, "so.tax_total"},
+			// The tax by head, as the sale's invoice printed it: CGST +
+			// SGST intra-state, IGST inter-state (migrations/060).
+			{"cgst", "CGST", TMoney, saleHead("gst_cgst")},
+			{"sgst", "SGST", TMoney, saleHead("gst_sgst")},
+			{"igst", "IGST", TMoney, saleHead("gst_igst")},
+			{"cess", "Cess", TMoney, "(SELECT COALESCE(sum(l.cess_amount), 0) FROM sales_order_lines l WHERE l.sales_order_id = so.id)"},
+			{"place_of_supply", "Place of supply", TText, "so.place_of_supply"},
+			{"inter_state", "Inter-state", TBool, "so.inter_state"},
 			{"grand_total", "Total", TMoney, "so.grand_total"},
+			// Checkout round-off waiver (signed) and the total after it,
+			// what the customer paid (migrations/059).
+			{"round_off", "Round off", TMoney, "so.round_off"},
+			{"net_total", "Net total", TMoney, "(so.grand_total + so.round_off)"},
 			{"credit_amount", "On credit", TMoney, "so.credit_amount"},
 		},
 	},
@@ -131,12 +143,16 @@ var Datasets = []Dataset{
 			{"order_number", "Sale number", TText, "so.order_number"},
 			fChannel, fBranch, fTerminal, fProduct, fSKU, fCategory, fBrand,
 			{"hsn", "HSN", TText, "p.hsn_code"},
-			{"tax_rate", "GST rate %", TNumber, "COALESCE(ts.cgst_rate + ts.sgst_rate + ts.igst_rate, 0)"},
+			{"tax_rate", "GST rate %", TNumber, "COALESCE(l.tax_rate, ts.cgst_rate + ts.sgst_rate + ts.igst_rate, 0)"}, // as written (migrations/060)
 			{"quantity", "Quantity", TNumber, "l.quantity"},
 			{"unit_price", "Unit price", TMoney, "l.unit_price"},
 			{"discount", "Discount", TMoney, "l.discount_amount"},
 			{"taxable_value", "Taxable value", TMoney, "COALESCE(l.taxable_value, l.line_total - l.tax_amount)"},
 			{"tax_amount", "Tax", TMoney, "l.tax_amount"},
+			{"cgst", "CGST", TMoney, "gst_cgst(l.tax_amount, l.cess_amount, so.inter_state)"},
+			{"sgst", "SGST", TMoney, "gst_sgst(l.tax_amount, l.cess_amount, so.inter_state)"},
+			{"igst", "IGST", TMoney, "gst_igst(l.tax_amount, l.cess_amount, so.inter_state)"},
+			{"cess", "Cess", TMoney, "l.cess_amount"},
 			{"line_total", "Line total", TMoney, "l.line_total"},
 			{"cost", "Cost (current)", TMoney, "round(l.quantity * v.cost_price, 2)"},
 			{"margin", "Margin (current cost)", TMoney, "round(COALESCE(l.taxable_value, l.line_total - l.tax_amount) - l.quantity * v.cost_price, 2)"},
@@ -254,6 +270,12 @@ var Datasets = []Dataset{
 			{"overdue", "Overdue", TBool, "pb.status <> 'paid' AND pb.due_date < CURRENT_DATE"},
 			{"subtotal", "Subtotal", TMoney, "pb.subtotal"},
 			{"tax_total", "Tax", TMoney, "pb.tax_total"},
+			// The supplier invoice's tax by head (migrations/060).
+			{"cgst", "CGST", TMoney, "pb.cgst_amount"},
+			{"sgst", "SGST", TMoney, "pb.sgst_amount"},
+			{"igst", "IGST", TMoney, "pb.igst_amount"},
+			{"cess", "Cess", TMoney, "pb.cess_amount"},
+			{"inter_state", "Inter-state", TBool, "pb.inter_state"},
 			{"freight", "Freight", TMoney, "pb.freight_amount"},
 			{"other_charges", "Other charges", TMoney, "pb.other_charges"},
 			{"grand_total", "Total", TMoney, "pb.grand_total"},
@@ -387,4 +409,10 @@ func FindDataset(key string) (Dataset, bool) {
 		}
 	}
 	return Dataset{}, false
+}
+
+// saleHead is one tax head of a sale, summed over its lines with the
+// split its invoice printed (gst_cgst / gst_sgst / gst_igst, migrations/060).
+func saleHead(fn string) string {
+	return "(SELECT COALESCE(sum(" + fn + "(l.tax_amount, l.cess_amount, so.inter_state)), 0) FROM sales_order_lines l WHERE l.sales_order_id = so.id)"
 }

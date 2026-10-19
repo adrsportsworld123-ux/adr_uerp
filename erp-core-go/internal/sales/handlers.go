@@ -27,6 +27,7 @@ import (
 	"erp-core-go/internal/pricing"
 	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/taxcalc"
+	"erp-core-go/internal/taxes"
 )
 
 // LoyaltyEarner lets Checkout award loyalty points on a finalized sale
@@ -59,15 +60,25 @@ type Handler struct {
 }
 
 type orderResponse struct {
-	OrderID       string      `json:"order_id"`
-	OrderNumber   string      `json:"order_number"`
-	Status        string      `json:"status"`
-	Channel       string      `json:"channel"` // "pos" | "online" — see migrations/026_wholesale_b2b.sql
-	Subtotal      string      `json:"subtotal"`
-	DiscountTotal string      `json:"discount_total"`
-	TaxTotal      string      `json:"tax_total"`
-	GrandTotal    string      `json:"grand_total"`
-	Lines         []orderLine `json:"lines"`
+	OrderID       string `json:"order_id"`
+	OrderNumber   string `json:"order_number"`
+	Status        string `json:"status"`
+	Channel       string `json:"channel"` // "pos" | "online" — see migrations/026_wholesale_b2b.sql
+	Subtotal      string `json:"subtotal"`
+	DiscountTotal string `json:"discount_total"`
+	TaxTotal      string `json:"tax_total"`
+	GrandTotal    string `json:"grand_total"`
+	// RoundOff: the waiver taken at checkout, signed ("-0.75"; "0.00" when
+	// none). PayableTotal = GrandTotal + RoundOff, what was paid.
+	RoundOff     string      `json:"round_off"`
+	PayableTotal string      `json:"payable_total"`
+	Lines        []orderLine `json:"lines"`
+	// TaxBreakup: tax_total split as the branch's regime prints it —
+	// CGST + SGST, IGST, or one labelled tax (migrations/060). Additive.
+	TaxBreakup *taxes.Breakup `json:"tax_breakup"`
+	// ShipToState: the delivery state set with PUT .../place-of-supply
+	// (migrations/061); null = the customer's GSTIN state, else the branch's.
+	ShipToState *string `json:"ship_to_state"`
 	// DiscountsCleared is true on a line edit or removal that undid the
 	// cart's discounts (clearDiscountLayers); the till asks the cashier
 	// to apply them again.
@@ -94,6 +105,14 @@ type orderLine struct {
 	OpenPrice bool `json:"open_price"`
 	// PriceApprovedBy: the approver's name when the open price needed one.
 	PriceApprovedBy *string `json:"price_approved_by,omitempty"`
+	// migrations/060: the line's GST rate (cess excluded) as it was
+	// written, and its tax split by the order's supply. Additive.
+	HSNCode    string `json:"hsn_code"`
+	TaxRate    string `json:"tax_rate"`
+	CGSTAmount string `json:"cgst_amount"`
+	SGSTAmount string `json:"sgst_amount"`
+	IGSTAmount string `json:"igst_amount"`
+	CessAmount string `json:"cess_amount"`
 }
 
 // ---------------------------------------------------------------------
@@ -236,10 +255,11 @@ func CreateCart(ctx context.Context, tx pgx.Tx, branchID, posTerminalID, cashier
 		INSERT INTO sales_orders (id, merchant_id, branch_id, pos_terminal_id, cashier_id, order_number, status, idempotency_key, channel, customer_id)
 		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, 'cart', $5, $6, NULLIF($7,'')::uuid)
 		ON CONFLICT (merchant_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
-		RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text`,
+		RETURNING id, order_number, status, subtotal::text, discount_total::text, tax_total::text, grand_total::text,
+		          round_off::text, (grand_total + round_off)::text`,
 		branchID, posTerminalID, cashierID, orderNumber, idempotencyKey, channel, customerID)
 	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status,
-		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal, &resp.RoundOff, &resp.PayableTotal); err != nil {
 		return resp, err
 	}
 	// A replayed idempotency_key returns the pre-existing cart, which may
@@ -251,12 +271,7 @@ func CreateCart(ctx context.Context, tx pgx.Tx, branchID, posTerminalID, cashier
 	if err := tx.QueryRow(ctx, `SELECT channel FROM sales_orders WHERE id = $1`, resp.OrderID).Scan(&resp.Channel); err != nil {
 		return resp, err
 	}
-	lines, err := loadOrderLines(ctx, tx, resp.OrderID)
-	if err != nil {
-		return resp, err
-	}
-	resp.Lines = lines
-	return resp, nil
+	return resp, loadLinesAndTax(ctx, tx, &resp)
 }
 
 // ---------------------------------------------------------------------
@@ -607,6 +622,10 @@ type checkoutRequest struct {
 		Amount    float64 `json:"amount"`
 		Reference string  `json:"reference"` // card/UPI gateway transaction id (UTR), if the terminal/gateway integration provides one — matched later by accounting.MatchPaymentGatewaySettlementLine
 	} `json:"payments"`
+	// RoundOff: the amount waived, signed (-0.75 settles ₹105.75 for ₹105).
+	// Optional; 0 = none, exactly as before. Within the merchant's
+	// round_off_max (round_off.go).
+	RoundOff float64 `json:"round_off"`
 }
 
 func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
@@ -718,7 +737,19 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if paidTotal < grandTotalFloat {
+		roundOff := 0.0
+		if req.RoundOff != 0 {
+			settings, err := loadSalesSettings(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if roundOff, err = checkRoundOff(settings, grandTotalFloat, req.RoundOff); err != nil {
+				return err
+			}
+		}
+		// What the customer owes: the bill less any waiver.
+		payable := round2(grandTotalFloat + roundOff)
+		if paidTotal < payable-0.004 {
 			return errPaymentMismatch
 		}
 
@@ -783,7 +814,7 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if _, err := tx.Exec(ctx, `UPDATE sales_orders SET status = 'finalized', finalized_at = now() WHERE id = $1`, orderID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE sales_orders SET status = 'finalized', finalized_at = now(), round_off = $2 WHERE id = $1`, orderID, roundOff); err != nil {
 			return err
 		}
 
@@ -796,8 +827,8 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		// always sends payments summing to exactly grand_total), scale is 1
 		// and this is a no-op.
 		scale := 1.0
-		if paidTotal > grandTotalFloat && paidTotal > 0 {
-			scale = grandTotalFloat / paidTotal
+		if paidTotal > payable && paidTotal > 0 {
+			scale = payable / paidTotal
 		}
 		debitLines := make([]accounting.JournalLine, 0, len(req.Payments))
 		for _, p := range req.Payments {
@@ -812,6 +843,7 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 			}
 			debitLines = append(debitLines, line)
 		}
+		debitLines = append(debitLines, roundOffJournalLine(roundOff)...)
 		if err := postSaleJournal(ctx, tx, branchID, orderID, claims.UserID, debitLines, subtotal, discountTotal, taxTotal); err != nil {
 			return err
 		}
@@ -829,7 +861,7 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		// around). Only walk-in orders with no customer attached skip
 		// this; h.Loyalty is nil only in tests/tools that never wire one.
 		if h.Loyalty != nil && customerID != nil {
-			if _, err := h.Loyalty.EarnForOrder(ctx, tx, *customerID, orderID, grandTotalFloat); err != nil {
+			if _, err := h.Loyalty.EarnForOrder(ctx, tx, *customerID, orderID, payable); err != nil {
 				return err
 			}
 		}
@@ -853,6 +885,10 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "cannot check out an order with no lines")
 	case errors.Is(err, errPaymentMismatch):
 		httpx.Error(w, http.StatusBadRequest, "PAYMENT_MISMATCH", "payment total does not cover the order's grand total")
+	case errors.Is(err, errRoundOffDisabled):
+		httpx.Error(w, http.StatusBadRequest, "ROUND_OFF_NOT_ALLOWED", "round-off isn't enabled — set a maximum waiver in Sales Policy")
+	case errors.Is(err, errRoundOffTooLarge):
+		httpx.Error(w, http.StatusBadRequest, "ROUND_OFF_NOT_ALLOWED", "that round-off is more than the allowed waiver for a sale")
 	case errors.Is(err, errNoCustomerForCredit):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "a credit payment requires a customer already attached to the order")
 	case errors.Is(err, errCreditHold):
@@ -902,18 +938,14 @@ func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
 
 func loadOrder(ctx context.Context, tx pgx.Tx, orderID string, resp *orderResponse) error {
 	row := tx.QueryRow(ctx, `
-		SELECT id, order_number, status, channel, subtotal::text, discount_total::text, tax_total::text, grand_total::text
+		SELECT id, order_number, status, channel, subtotal::text, discount_total::text, tax_total::text, grand_total::text,
+		       round_off::text, (grand_total + round_off)::text
 		FROM sales_orders WHERE id = $1`, orderID)
 	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status, &resp.Channel,
-		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal, &resp.RoundOff, &resp.PayableTotal); err != nil {
 		return err
 	}
-	lines, err := loadOrderLines(ctx, tx, orderID)
-	if err != nil {
-		return err
-	}
-	resp.Lines = lines
-	return nil
+	return loadLinesAndTax(ctx, tx, resp)
 }
 
 // recalcOrderTotals re-derives sales_orders' cached aggregate columns from
@@ -940,17 +972,13 @@ func recalcOrderTotals(ctx context.Context, tx pgx.Tx, orderID string, resp *ord
 		  discount_total = (SELECT COALESCE(SUM(discount_amount),0) FROM sales_order_lines WHERE sales_order_id = $1),
 		  grand_total = (SELECT COALESCE(SUM(taxable_value + tax_amount),0) FROM sales_order_lines WHERE sales_order_id = $1)
 		WHERE id = $1
-		RETURNING id, order_number, status, channel, subtotal::text, discount_total::text, tax_total::text, grand_total::text`, orderID)
+		RETURNING id, order_number, status, channel, subtotal::text, discount_total::text, tax_total::text, grand_total::text,
+		          round_off::text, (grand_total + round_off)::text`, orderID)
 	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status, &resp.Channel,
-		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal); err != nil {
+		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal, &resp.RoundOff, &resp.PayableTotal); err != nil {
 		return err
 	}
-	lines, err := loadOrderLines(ctx, tx, orderID)
-	if err != nil {
-		return err
-	}
-	resp.Lines = lines
-	return nil
+	return loadLinesAndTax(ctx, tx, resp)
 }
 
 // loadOrderLines joins sales_order_lines with product_variants for
@@ -960,8 +988,13 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 	rows, err := tx.Query(ctx, `
 		SELECT sol.id, sol.variant_id, pv.sku, p.name, sol.quantity::text,
 		       sol.unit_price::text, sol.discount_amount::text, sol.tax_amount::text, sol.line_total::text,
-		       sol.taxable_value::text, sol.price_includes_tax, sol.open_price, au.name
+		       sol.taxable_value::text, sol.price_includes_tax, sol.open_price, au.name,
+		       COALESCE(p.hsn_code, ''), COALESCE(sol.tax_rate, 0)::text,
+		       gst_cgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
+		       gst_sgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
+		       gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state)::text, sol.cess_amount::text
 		FROM sales_order_lines sol
+		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
 		JOIN products p ON p.id = pv.product_id
 		LEFT JOIN users au ON au.id = sol.price_approved_by
@@ -977,7 +1010,8 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 		var l orderLine
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity,
 			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal,
-			&l.TaxableValue, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy); err != nil {
+			&l.TaxableValue, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy,
+			&l.HSNCode, &l.TaxRate, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

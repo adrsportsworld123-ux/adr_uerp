@@ -1,7 +1,9 @@
 "use client";
 
 // One sale (Phase 14, GET /sales/orders/{id}/detail): items with each
-// line's tax rate, the GST summary, payments (with any correction),
+// line's tax rate and its CGST + SGST (or IGST, for an inter-state sale;
+// or the merchant's single tax) — erp-core-go migrations/060 — the tax
+// summary, payments (with any correction),
 // discounts, returns, the ledger entries it caused and its audit trail.
 // The back office's after-sale actions run on the same rules as the till:
 // - Void: sales.void, a reason, only a completed sale with no returns.
@@ -35,6 +37,7 @@ import { PageHeader } from "@/components/data/page-header";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 import { StatusChip } from "@/components/data/status-chip";
 import { EInvoiceDocuments } from "@/components/sales/einvoice-documents";
+import { PlaceOfSupply, TaxRowsDl, TaxSummaryTable, splitColumns } from "@/components/tax/tax-breakup";
 
 const DISCOUNT_LABEL: Record<string, string> = { manual: "Manual", coupon: "Coupon", promotion: "Promotion", loyalty: "Loyalty points" };
 
@@ -98,6 +101,7 @@ export default function SaleDetailPage() {
   const unsold = held || sale.status === "cart";
   const canVoid = (sale.status === "finalized" && sale.returns.length === 0) || unsold;
   const canReturn = sale.status === "finalized" || sale.status === "partially_refunded";
+  const split = splitColumns(sale.tax_breakup);
 
   return (
     <div className="flex flex-col gap-5">
@@ -110,6 +114,12 @@ export default function SaleDetailPage() {
           <span className="flex flex-wrap items-center gap-2">
             <StatusChip status={sale.status} label={STATUS_LABEL[sale.status] ?? sale.status} />
             {sale.branch_name} · {CHANNEL_LABEL[sale.channel] ?? sale.channel} · {sale.terminal_name} · {sale.cashier_name} · {dateTime(sale.finalized_at ?? sale.created_at)}
+            {sale.customer_gstin && <span>· Customer GSTIN {sale.customer_gstin}</span>}
+            {sale.tax_breakup?.place_of_supply && (
+              <span>
+                · <PlaceOfSupply breakup={sale.tax_breakup} />
+              </span>
+            )}
           </span>
         }
         actions={
@@ -154,7 +164,14 @@ export default function SaleDetailPage() {
                     <th className="pb-2 text-right font-medium">Price</th>
                     <th className="pb-2 text-right font-medium">Discount</th>
                     <th className="pb-2 text-right font-medium">Taxable</th>
-                    <th className="pb-2 text-right font-medium">GST</th>
+                    {split === "intra" ? (
+                      <>
+                        <th className="pb-2 text-right font-medium">CGST</th>
+                        <th className="pb-2 text-right font-medium">SGST</th>
+                      </>
+                    ) : (
+                      <th className="pb-2 text-right font-medium">{split === "inter" ? "IGST" : (sale.tax_breakup?.tax_label ?? "GST")}</th>
+                    )}
                     <th className="pb-2 text-right font-medium">Total</th>
                   </tr>
                 </thead>
@@ -165,6 +182,7 @@ export default function SaleDetailPage() {
                         <div className="font-medium">{l.product_name}</div>
                         <div className="text-xs text-muted-foreground">
                           {l.sku}
+                          {l.hsn_code && split && ` · HSN ${l.hsn_code}`}
                           {Number(l.returned_quantity) > 0 && ` · ${qty(l.returned_quantity)} returned`}
                           {l.open_price && ` · open price${l.price_approved_by ? `, approved by ${l.price_approved_by}` : ""}`}
                         </div>
@@ -173,10 +191,23 @@ export default function SaleDetailPage() {
                       <td className="tabular py-2 text-right">{rupees(l.unit_price)}</td>
                       <td className="tabular py-2 text-right">{Number(l.discount_amount) ? rupees(l.discount_amount) : "—"}</td>
                       <td className="tabular py-2 text-right">{rupees(l.taxable_value)}</td>
-                      <td className="tabular py-2 text-right">
-                        {rupees(l.tax_amount)}
-                        <div className="text-xs text-muted-foreground">{Number(l.tax_rate)}%</div>
-                      </td>
+                      {split === "intra" ? (
+                        <>
+                          <td className="tabular py-2 text-right">
+                            {rupees(l.cgst_amount ?? "0")}
+                            <div className="text-xs text-muted-foreground">{Number(l.tax_rate) / 2}%</div>
+                          </td>
+                          <td className="tabular py-2 text-right">
+                            {rupees(l.sgst_amount ?? "0")}
+                            <div className="text-xs text-muted-foreground">{Number(l.tax_rate) / 2}%</div>
+                          </td>
+                        </>
+                      ) : (
+                        <td className="tabular py-2 text-right">
+                          {rupees(split === "inter" ? (l.igst_amount ?? l.tax_amount) : l.tax_amount)}
+                          <div className="text-xs text-muted-foreground">{Number(l.tax_rate)}%</div>
+                        </td>
+                      )}
                       <td className="tabular py-2 text-right font-medium">{rupees(l.line_total)}</td>
                     </tr>
                   ))}
@@ -185,42 +216,32 @@ export default function SaleDetailPage() {
             </div>
           </Section>
 
-          <Section title="GST summary">
-            <table className="w-full text-sm" aria-label="GST by rate">
-              <thead className="text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="pb-2 font-medium">Rate</th>
-                  <th className="pb-2 text-right font-medium">Taxable value</th>
-                  <th className="pb-2 text-right font-medium">CGST</th>
-                  <th className="pb-2 text-right font-medium">SGST</th>
-                  <th className="pb-2 text-right font-medium">Total tax</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sale.tax_summary.map((t) => (
-                  <tr key={t.rate} className="border-t">
-                    <td className="py-1.5">{Number(t.rate)}%</td>
-                    <td className="tabular py-1.5 text-right">{rupees(t.taxable_value)}</td>
-                    <td className="tabular py-1.5 text-right">{rupees(t.cgst)}</td>
-                    <td className="tabular py-1.5 text-right">{rupees(t.sgst)}</td>
-                    <td className="tabular py-1.5 text-right">{rupees(t.tax_amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <Section title={`${sale.tax_breakup?.tax_label ?? "GST"} summary`}>
+            <TaxSummaryTable
+              breakup={sale.tax_breakup}
+              summary={sale.tax_summary.map((t) => ({ ...t, igst: t.igst ?? "0", cess: t.cess ?? "0" }))}
+            />
           </Section>
 
           {sale.returns.length > 0 && (
             <Section title="Returns">
               <ul className="flex flex-col gap-2 text-sm">
                 {sale.returns.map((r) => (
-                  <li key={r.return_id} className="flex flex-wrap items-center justify-between gap-2">
+                  <li key={r.return_id} className="flex flex-wrap items-center justify-between gap-2" data-testid="credit-note">
                     <span>
                       {r.return_number} · {dateTime(r.created_at)} · {METHOD_LABEL[r.refund_method] ?? r.refund_method}
                       {r.restocked ? " · restocked" : " · not restocked"}
                       {r.approved_by ? " · approved" : ""}
+                      {r.tax_breakup?.rows?.length ? (
+                        <span className="block text-xs text-muted-foreground" data-testid="credit-note-tax">
+                          Tax given back: {r.tax_breakup.rows.map((t) => `${t.label} ${rupees(t.amount)}`).join(" · ")}
+                        </span>
+                      ) : null}
                     </span>
-                    <span className="tabular font-medium">−{rupees(r.refund_amount)}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="tabular font-medium">−{rupees(r.refund_amount)}</span>
+                      <DownloadPdfButton path={`/api/v1/sales/returns/${r.return_id}/pdf`} label={`Credit note ${r.return_number}`} size="icon-sm" />
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -263,10 +284,26 @@ export default function SaleDetailPage() {
               <dd className="tabular text-right">{rupees(sale.subtotal)}</dd>
               <dt className="text-muted-foreground">Discount</dt>
               <dd className="tabular text-right">{Number(sale.discount_total) ? `−${rupees(sale.discount_total)}` : "—"}</dd>
-              <dt className="text-muted-foreground">Tax</dt>
-              <dd className="tabular text-right">{rupees(sale.tax_total)}</dd>
-              <dt className="font-semibold">Total</dt>
-              <dd className="tabular text-right text-lg font-semibold">{rupees(sale.grand_total)}</dd>
+              <TaxRowsDl breakup={sale.tax_breakup} taxTotal={sale.tax_total} />
+              {Number(sale.round_off) < 0 ? (
+                <>
+                  <dt className="text-muted-foreground">Total</dt>
+                  <dd className="tabular text-right">{rupees(sale.grand_total)}</dd>
+                  <dt className="text-muted-foreground">Round off</dt>
+                  <dd className="tabular text-right" data-testid="sale-round-off">
+                    {rupees(sale.round_off)}
+                  </dd>
+                  <dt className="font-semibold">Net paid</dt>
+                  <dd className="tabular text-right text-lg font-semibold" data-testid="sale-payable">
+                    {rupees(sale.payable_total)}
+                  </dd>
+                </>
+              ) : (
+                <>
+                  <dt className="font-semibold">Total</dt>
+                  <dd className="tabular text-right text-lg font-semibold">{rupees(sale.grand_total)}</dd>
+                </>
+              )}
               {Number(sale.credit_amount) > 0 && (
                 <>
                   <dt className="text-muted-foreground">On credit · paid</dt>
@@ -473,6 +510,12 @@ function ReturnDialog({ sale, onClose, onDone }: { sale: SaleDetail; onClose: ()
       }
     >
       <div className="flex flex-col gap-4">
+        {info && Number(info.round_off) < 0 && Number(info.round_off_returned) < -Number(info.round_off) && (
+          <p className="rounded-lg bg-muted/50 p-2 text-xs text-muted-foreground" data-testid="return-round-off-note">
+            This sale was settled with a {rupees(-Number(info.round_off))} round-off. The last items returned refund up to that much
+            less, so the refunds never add up to more than was paid.
+          </p>
+        )}
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-muted-foreground">
             <tr>

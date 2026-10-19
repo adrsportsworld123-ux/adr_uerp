@@ -46,6 +46,8 @@ type ShiftReport = {
   order_count: number;
   voided_count: number;
   net_sales: string;
+  /** Checkout round-off waivers in the shift (signed sum); absent before migrations/059. */
+  round_off_total?: string;
   by_payment_method: Record<string, string>;
   return_count: number;
   refund_total: string;
@@ -84,6 +86,15 @@ type DayReport = {
   subtotal: string;
   discount_total: string;
   tax_total: string;
+  /** The day's checkout round-off waivers (signed sum); absent on a day frozen before migrations/059. */
+  round_off_total?: string;
+  /** Tax by head and the branch's regime (migrations/060); absent on a day frozen before it. */
+  tax_regime?: "gst_split" | "single";
+  tax_label?: string;
+  cgst_total?: string;
+  sgst_total?: string;
+  igst_total?: string;
+  cess_total?: string;
   net_sales: string;
   credit_sales: string;
   average_bill: string;
@@ -342,6 +353,7 @@ function ShiftView({ shift, onBack, onRefresh }: { shift: Shift; onBack: () => v
             <Section title="Sales">
               <Row label="Bills" value={String(r.order_count)} />
               {r.voided_count > 0 && <Row label="Voided" value={String(r.voided_count)} />}
+              {Number(r.round_off_total ?? 0) !== 0 && <Row label="Round off" value={rupees(r.round_off_total!)} />}
               <Row label="Net sales" value={rupees(r.net_sales)} strong />
             </Section>
             <Section title="Tenders">
@@ -609,6 +621,18 @@ function DayView({ r }: { r: DayReport }) {
           <Row label="Subtotal" value={rupees(r.subtotal)} />
           <Row label="Discounts" value={`−${rupees(r.discount_total)}`} />
           <Row label="Tax" value={rupees(r.tax_total)} />
+          {r.tax_regime === "gst_split" &&
+            (
+              [
+                ["CGST", r.cgst_total],
+                ["SGST", r.sgst_total],
+                ["IGST", r.igst_total],
+                ["Cess", r.cess_total],
+              ] as const
+            )
+              .filter(([, v]) => Number(v ?? 0) !== 0)
+              .map(([k, v]) => <Row key={k} label={`· ${k}`} value={rupees(v!)} />)}
+          {Number(r.round_off_total ?? 0) !== 0 && <Row label="Round off" value={rupees(r.round_off_total!)} />}
           <Row label="Net sales" value={rupees(r.net_sales)} strong />
           <Row label="Average bill" value={rupees(r.average_bill)} />
           {Number(r.credit_sales) > 0 && <Row label="On credit" value={rupees(r.credit_sales)} />}
@@ -625,7 +649,7 @@ function DayView({ r }: { r: DayReport }) {
         </Section>
         <Section title="Tax by rate">
           {r.tax_rates.map((t) => (
-            <Row key={t.rate} label={`GST ${t.rate}% on ${rupees(t.taxable_value)}`} value={rupees(t.tax)} />
+            <Row key={t.rate} label={`${r.tax_label ?? "GST"} ${t.rate}% on ${rupees(t.taxable_value)}`} value={rupees(t.tax)} />
           ))}
           {r.tax_rates.length === 0 && <Row label="No taxable sales" value="" />}
         </Section>

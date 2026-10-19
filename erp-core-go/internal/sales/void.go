@@ -53,10 +53,10 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 	var resp orderResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var branchID, status string
-		var subtotal, discountTotal, taxTotal float64
+		var subtotal, discountTotal, taxTotal, roundOff float64
 		if err := tx.QueryRow(ctx, `
-			SELECT branch_id, status, subtotal, discount_total, tax_total FROM sales_orders WHERE id = $1`, orderID,
-		).Scan(&branchID, &status, &subtotal, &discountTotal, &taxTotal); err != nil {
+			SELECT branch_id, status, subtotal, discount_total, tax_total, round_off FROM sales_orders WHERE id = $1`, orderID,
+		).Scan(&branchID, &status, &subtotal, &discountTotal, &taxTotal, &roundOff); err != nil {
 			return err
 		}
 		if status != "finalized" {
@@ -126,6 +126,10 @@ func (h *Handler) Void(w http.ResponseWriter, r *http.Request) {
 		payRows.Close()
 		if err := payRows.Err(); err != nil {
 			return err
+		}
+		// A waiver taken at checkout (round_off.go) comes back out of Round Off.
+		if roundOff < 0 {
+			creditLines = append(creditLines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Credit: round2(-roundOff)})
 		}
 		if err := postSaleVoidJournal(ctx, tx, branchID, orderID, claims.UserID, creditLines, subtotal, discountTotal, taxTotal); err != nil {
 			return err

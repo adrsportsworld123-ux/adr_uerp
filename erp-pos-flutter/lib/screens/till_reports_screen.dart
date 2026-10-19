@@ -361,6 +361,10 @@ class _DayTabState extends State<_DayTab> {
             row('Subtotal', formatRupees(r.subtotal)),
             row('Discounts', '−${formatRupees(r.discountTotal)}'),
             row('Tax', formatRupees(r.taxTotal)),
+            if (r.taxRegime == 'gst_split')
+              for (final h in [('CGST', r.cgstTotal), ('SGST', r.sgstTotal), ('IGST', r.igstTotal)])
+                if ((double.tryParse(h.$2) ?? 0) != 0) row('· ${h.$1}', formatRupees(h.$2)),
+            if ((double.tryParse(r.roundOffTotal) ?? 0) != 0) row('Round off', formatRupees(r.roundOffTotal), key: const Key('z-round-off')),
             row('Net sales', formatRupees(r.netSales), strong: true, key: const Key('z-net-sales')),
             row('Average bill', formatRupees(r.averageBill)),
             if (r.firstOrder != null) Text('Bills ${r.firstOrder} to ${r.lastOrder}', style: theme.textTheme.bodySmall),

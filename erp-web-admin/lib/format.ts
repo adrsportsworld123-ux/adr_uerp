@@ -1,13 +1,13 @@
 // Display-only formatting. Money arrives from the API as NUMERIC strings and
 // goes back as given; nothing here feeds a value back into a request.
 
-const inr = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+import { currencyPrefix, groupMoney } from "@/lib/currency";
 
-/** "123456.5" -> "₹1,23,456.50" (Indian grouping). */
+/** "123456.5" -> "₹1,23,456.50" for INR, "$123,456.50" for a merchant in USD (lib/currency). */
 export function rupees(amount: string | number | null | undefined): string {
   const n = typeof amount === "number" ? amount : Number(amount ?? 0);
-  if (Number.isNaN(n)) return `₹${amount}`;
-  return `${n < 0 ? "−" : ""}₹${inr.format(Math.abs(n))}`;
+  if (Number.isNaN(n)) return `${currencyPrefix()}${amount}`;
+  return `${n < 0 ? "−" : ""}${currencyPrefix()}${groupMoney(Math.abs(n))}`;
 }
 
 /** "2.000" -> "2", "0.500" -> "0.5". */

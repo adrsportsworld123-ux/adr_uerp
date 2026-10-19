@@ -20,7 +20,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
+import { PlaceOfSupply, TaxRowsDl } from "@/components/tax/tax-breakup";
+import { rupees } from "@/lib/format";
 
+import { currencySymbol } from "@/lib/currency";
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   draft: "outline",
   sent: "secondary",
@@ -253,7 +256,7 @@ export default function QuotationsPage() {
                   <TableCell>{q.quote_number}</TableCell>
                   <TableCell><Badge variant={STATUS_VARIANT[q.status] ?? "outline"}>{q.status}</Badge></TableCell>
                   <TableCell>{q.valid_until}</TableCell>
-                  <TableCell>₹{q.grand_total}</TableCell>
+                  <TableCell>{rupees(q.grand_total)}</TableCell>
                   <TableCell className="flex items-center gap-1">
                     <Button size="sm" variant="outline" onClick={() => openQuotation(q.quotation_id)}>View</Button>
                     <DownloadPdfButton path={`/api/v1/quotations/${q.quotation_id}/pdf`} label={`Download ${q.quote_number}`} size="icon-sm" />
@@ -309,13 +312,13 @@ export default function QuotationsPage() {
                   <TableRow key={l.line_id}>
                     <TableCell>{l.product_name} <span className="text-xs text-muted-foreground">({l.sku})</span></TableCell>
                     <TableCell>{l.quantity}</TableCell>
-                    <TableCell>₹{l.unit_price}</TableCell>
-                    <TableCell>₹{l.line_total}</TableCell>
+                    <TableCell>{rupees(l.unit_price)}</TableCell>
+                    <TableCell>{rupees(l.line_total)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
                 </Table>
-                <div className="text-sm text-right font-medium">Grand total: ₹{selected.grand_total}</div>
+                <QuoteTotals q={selected} />
               </>
             )}
 
@@ -419,7 +422,7 @@ function DraftEditor({
           <TableRow>
             <TableHead>Product</TableHead>
             <TableHead>Qty</TableHead>
-            <TableHead>Unit price (₹)</TableHead>
+            <TableHead>Unit price ({currencySymbol()})</TableHead>
             <TableHead>Line total</TableHead>
             <TableHead></TableHead>
           </TableRow>
@@ -454,7 +457,7 @@ function DraftEditor({
                     onChange={(ev) => edit(l.line_id, { unitPrice: ev.target.value })}
                   />
                 </TableCell>
-                <TableCell>₹{l.line_total}</TableCell>
+                <TableCell>{rupees(l.line_total)}</TableCell>
                 <TableCell className="flex gap-1">
                   <Button size="sm" variant="outline" disabled={busy || !e} onClick={() => saveLine(l.line_id)}>
                     Save
@@ -481,7 +484,7 @@ function DraftEditor({
           })}
         </TableBody>
       </Table>
-      <div className="text-sm text-right font-medium">Grand total: ₹{quotation.grand_total}</div>
+      <QuoteTotals q={quotation} />
 
       <div className="flex items-end gap-2 flex-wrap border rounded-md p-3 bg-muted/50">
         <div className="flex-1 min-w-56">
@@ -514,6 +517,28 @@ function DraftEditor({
           Save details
         </Button>
       </div>
+    </div>
+  );
+}
+
+// The quote's totals with its tax split the way its invoice would print it
+// (erp-core-go migrations/060): CGST + SGST for a customer in the branch's
+// state, IGST for one in another, or the merchant's single tax.
+function QuoteTotals({ q }: { q: Quotation }) {
+  return (
+    <div className="ml-auto w-full max-w-xs space-y-1 text-sm">
+      <dl className="grid grid-cols-2 gap-y-1">
+        <dt className="text-muted-foreground">Subtotal</dt>
+        <dd className="tabular text-right">{rupees(q.subtotal)}</dd>
+        <TaxRowsDl breakup={q.tax_breakup} taxTotal={q.tax_total} label="GST" />
+        <dt className="font-medium">Grand total</dt>
+        <dd className="tabular text-right font-medium">{rupees(q.grand_total)}</dd>
+      </dl>
+      {q.tax_breakup?.place_of_supply && (
+        <p className="text-right text-xs text-muted-foreground">
+          <PlaceOfSupply breakup={q.tax_breakup} />
+        </p>
+      )}
     </div>
   );
 }

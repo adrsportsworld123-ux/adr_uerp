@@ -40,6 +40,8 @@ type historyOrder struct {
 	DiscountTotal  string   `json:"discount_total"`
 	TaxTotal       string   `json:"tax_total"`
 	GrandTotal     string   `json:"grand_total"`
+	RoundOff       string   `json:"round_off"`     // checkout waiver, signed
+	PayableTotal   string   `json:"payable_total"` // grand_total + round_off
 	PaymentMethods []string `json:"payment_methods"`
 	Channel        string   `json:"channel"`
 }
@@ -73,6 +75,13 @@ func readHistoryFilter(r *http.Request) historyFilter {
 }
 
 // where returns the shared WHERE clause; args start at $1.
+// headSum: one tax head over the completed sales the filter selects,
+// each line split the way its invoice printed it (migrations/060).
+func headSum(fn string) string {
+	return "COALESCE(sum((SELECT sum(" + fn + "(l.tax_amount, l.cess_amount, so.inter_state)) FROM sales_order_lines l WHERE l.sales_order_id = so.id)) " +
+		"FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text"
+}
+
 const historyWhere = `
 	FROM sales_orders so
 	JOIN branches b ON b.id = so.branch_id
@@ -147,6 +156,7 @@ func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 			       so.customer_id::text, c.name,
 			       COALESCE((SELECT sum(l.quantity) FROM sales_order_lines l WHERE l.sales_order_id = so.id), 0)::text,
 			       so.subtotal::text, so.discount_total::text, so.tax_total::text, so.grand_total::text,
+			       so.round_off::text, (so.grand_total + so.round_off)::text,
 			       COALESCE((SELECT array_agg(DISTINCT p.method) FROM payments p WHERE p.sales_order_id = so.id), '{}'),
 			       so.channel`+historyWhere+`
 			ORDER BY `+p.OrderBy+`, so.id
@@ -160,7 +170,7 @@ func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&o.OrderID, &o.OrderNumber, &o.Status, &o.FinalizedAt,
 				&o.BranchID, &o.BranchName, &o.TerminalID, &o.TerminalName, &o.CashierID, &o.CashierName,
 				&o.CustomerID, &o.CustomerName, &o.ItemCount,
-				&o.Subtotal, &o.DiscountTotal, &o.TaxTotal, &o.GrandTotal, &o.PaymentMethods, &o.Channel); err != nil {
+				&o.Subtotal, &o.DiscountTotal, &o.TaxTotal, &o.GrandTotal, &o.RoundOff, &o.PayableTotal, &o.PaymentMethods, &o.Channel); err != nil {
 				return err
 			}
 			orders = append(orders, o)
@@ -205,7 +215,7 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		args := f.args()
 		var orders, voided, refunded int
-		var gross, disc, tax, net string
+		var gross, disc, tax, net, roundOff string
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FILTER (WHERE so.status IN ('finalized','partially_refunded')),
 			       count(*) FILTER (WHERE so.status = 'voided'),
@@ -213,12 +223,23 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(sum(so.subtotal) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
 			       COALESCE(sum(so.discount_total) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
 			       COALESCE(sum(so.tax_total) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
-			       COALESCE(sum(so.grand_total) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text`+historyWhere,
-			args...).Scan(&orders, &voided, &refunded, &gross, &disc, &tax, &net); err != nil {
+			       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
+			       COALESCE(sum(so.round_off) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text`+historyWhere,
+			args...).Scan(&orders, &voided, &refunded, &gross, &disc, &tax, &net, &roundOff); err != nil {
 			return err
 		}
 		resp["order_count"], resp["voided_count"], resp["refunded_count"] = orders, voided, refunded
 		resp["gross_sales"], resp["discount_total"], resp["tax_total"], resp["net_sales"] = gross, disc, tax, net
+		// Checkout waivers (signed); net sales are after them, = the tenders.
+		resp["round_off_total"] = roundOff
+
+		// The tax by head, as the invoices printed it (migrations/060).
+		var cgst, sgst, igst string
+		if err := tx.QueryRow(ctx, `
+			SELECT `+headSum("gst_cgst")+`, `+headSum("gst_sgst")+`, `+headSum("gst_igst")+historyWhere, args...).Scan(&cgst, &sgst, &igst); err != nil {
+			return err
+		}
+		resp["cgst_total"], resp["sgst_total"], resp["igst_total"] = cgst, sgst, igst
 
 		methods := []summaryMethod{}
 		rows, err := tx.Query(ctx, `
@@ -246,9 +267,9 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 
 		cashiers := []summaryCashier{}
 		rows, err = tx.Query(ctx, `
-			SELECT so.cashier_id, u.name, count(*), COALESCE(sum(so.grand_total),0)::text`+historyWhere+`
+			SELECT so.cashier_id, u.name, count(*), COALESCE(sum(so.grand_total + so.round_off),0)::text`+historyWhere+`
 			  AND so.status IN ('finalized','partially_refunded')
-			GROUP BY so.cashier_id, u.name ORDER BY sum(so.grand_total) DESC`, args...)
+			GROUP BY so.cashier_id, u.name ORDER BY sum(so.grand_total + so.round_off) DESC`, args...)
 		if err != nil {
 			return err
 		}

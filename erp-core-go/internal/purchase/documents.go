@@ -11,6 +11,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/documents"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/taxes"
 )
 
 // Downloadable purchase documents — purchase order, GRN, purchase bill,
@@ -151,6 +152,19 @@ func (h *Handler) DownloadBill(w http.ResponseWriter, r *http.Request) {
 			return "", "", documents.Document{}, err
 		}
 		in.Lines = lines
+
+		var cgst, sgst, igst, cess string
+		if err := tx.QueryRow(ctx, `SELECT cgst_amount::text, sgst_amount::text, igst_amount::text, cess_amount::text FROM purchase_bills WHERE id::text = $1`, id).
+			Scan(&cgst, &sgst, &igst, &cess); err != nil {
+			return "", "", documents.Document{}, err
+		}
+		settings, err := taxes.Load(ctx, tx, branchID)
+		if err != nil {
+			return "", "", documents.Document{}, err
+		}
+		for _, t := range billTaxRows(settings, cgst, sgst, igst, cess, in.Tax) {
+			in.TaxRows = append(in.TaxRows, [2]string{t.Label, t.Amount})
+		}
 
 		rows, err := tx.Query(ctx, `
 			SELECT p.method, to_char(p.paid_at AT TIME ZONE b.timezone, 'DD Mon YYYY'), COALESCE(p.reference_no, ''), p.amount::text

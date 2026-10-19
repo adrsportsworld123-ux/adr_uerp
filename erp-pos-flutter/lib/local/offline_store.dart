@@ -36,8 +36,11 @@ class PendingOrderForSync {
   final String deviceCreatedAt;
   final List<Map<String, dynamic>> lines;
   final List<Map<String, dynamic>> payments;
+
+  /// The checkout round-off waiver, signed (0 = none).
+  final double roundOff;
   PendingOrderForSync(this.id, this.idempotencyKey, this.branchId, this.posTerminalId,
-      this.deviceCreatedAt, this.lines, this.payments);
+      this.deviceCreatedAt, this.lines, this.payments, [this.roundOff = 0]);
 }
 
 /// One row of the POS sync queue screen.
@@ -264,7 +267,8 @@ class OfflineStore {
   /// which only ever checks `order.status == 'cart'` to decide whether
   /// Checkout is still available — treats a completed offline sale exactly
   /// like a completed online one, pending sync in the background.
-  Future<OrderSummary> checkout(String pendingOrderId, List<PaymentInput> payments) async {
+  /// [roundOff]: the waiver taken (signed, 0 = none), synced with the sale.
+  Future<OrderSummary> checkout(String pendingOrderId, List<PaymentInput> payments, {double roundOff = 0}) async {
     final db = await LocalDb.instance.db;
     final batch = db.batch();
     for (final p in payments) {
@@ -275,7 +279,7 @@ class OfflineStore {
         'amount': p.amount,
       });
     }
-    batch.update('pending_orders', {'status': 'pending_sync'},
+    batch.update('pending_orders', {'status': 'pending_sync', 'round_off': roundOff},
         where: 'id = ?', whereArgs: [pendingOrderId]);
     await batch.commit(noResult: true);
     return _recalcAndLoad(pendingOrderId, statusOverride: 'finalized');
@@ -297,6 +301,7 @@ class OfflineStore {
         o['device_created_at'] as String,
         lines,
         payments,
+        (o['round_off'] as num?)?.toDouble() ?? 0,
       ));
     }
     return result;
@@ -424,6 +429,7 @@ class OfflineStore {
 
     final orderRow = (await db.query('pending_orders', where: 'id = ?', whereArgs: [pendingOrderId])).first;
 
+    final roundOff = (orderRow['round_off'] as num?)?.toDouble() ?? 0;
     return OrderSummary(
       orderId: pendingOrderId,
       orderNumber: 'OFFLINE-${pendingOrderId.substring(0, 8)}',
@@ -432,6 +438,8 @@ class OfflineStore {
       discountTotal: discountTotal.toStringAsFixed(2),
       taxTotal: taxTotal.toStringAsFixed(2),
       grandTotal: grandTotal.toStringAsFixed(2),
+      roundOff: roundOff.toStringAsFixed(2),
+      payableTotal: _round2(grandTotal + roundOff).toStringAsFixed(2),
       lines: lines,
     );
   }

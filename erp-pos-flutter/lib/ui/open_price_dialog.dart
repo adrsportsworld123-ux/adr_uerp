@@ -133,7 +133,7 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
                 onSubmitted: (_) => _submit(),
                 decoration: InputDecoration(
                   labelText: 'Price',
-                  prefixText: '₹ ',
+                  prefixText: '${PosCurrency.symbol} ',
                   border: const OutlineInputBorder(),
                   errorText: _problem,
                   errorMaxLines: 2,

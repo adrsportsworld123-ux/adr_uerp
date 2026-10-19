@@ -3,7 +3,6 @@ package gst
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -41,7 +40,7 @@ type gstr1B2BParty struct {
 }
 
 type gstr1B2CSEntry struct {
-	SupplyType    string  `json:"sply_ty"` // always "INTRA" — see this file's doc comment on why interstate B2C isn't distinguished
+	SupplyType    string  `json:"sply_ty"` // INTRA / INTER, from the sale's own place of supply (migrations/060)
 	PlaceOfSupply string  `json:"pos"`
 	Type          string  `json:"typ"` // "OE" = Other than E-commerce; this codebase has no e-commerce channel yet
 	TaxableValue  string  `json:"txval"`
@@ -70,7 +69,10 @@ type gstr1JSON struct {
 	GSTIN  string           `json:"gstin"`
 	Period string           `json:"fp"` // MMYYYY
 	B2B    []gstr1B2BParty  `json:"b2b"`
+	B2CL   []gstr1B2CLEntry `json:"b2cl"`
 	B2CS   []gstr1B2CSEntry `json:"b2cs"`
+	CDNR   []gstr1CDNRParty `json:"cdnr"`
+	CDNUR  []gstr1Note      `json:"cdnur"`
 	HSN    struct {
 		Data []gstr1HSNEntry `json:"data"`
 	} `json:"hsn"`
@@ -84,6 +86,14 @@ type gstr1Summary struct {
 	B2CTaxableValue   string `json:"b2c_taxable_value"`
 	TotalTaxableValue string `json:"total_taxable_value"`
 	TotalTax          string `json:"total_tax"`
+	// Inter-state B2C invoices above the B2CL limit, and the period's
+	// credit notes against B2B / B2CL invoices (B2CS is already net of
+	// its own). Totals above are net of credit notes.
+	B2CLInvoiceCount  int    `json:"b2cl_invoice_count"`
+	B2CLTaxableValue  string `json:"b2cl_taxable_value"`
+	CreditNoteCount   int    `json:"credit_note_count"`
+	CreditNoteTaxable string `json:"credit_note_taxable_value"`
+	CreditNoteTax     string `json:"credit_note_tax"`
 }
 
 type gstr1Response struct {
@@ -100,13 +110,19 @@ type gstr1Response struct {
 // return: B2B (invoice-wise, one entry per customer GSTIN), B2CS (B2C
 // small, consolidated by rate), and an HSN-wise summary.
 //
+// Every amount is the invoice's own: each line's taxable value, its GST
+// rate as written (sales_order_lines.tax_rate) and its tax split by the
+// sale's place of supply — CGST + SGST intra-state, IGST inter-state
+// (migrations/060, gst_cgst / gst_sgst / gst_igst) — so the return adds
+// up to exactly what the invoices printed.
+//
+// Inter-state B2C invoices above the limit are B2CL, and returns are
+// credit notes (CDNR / CDNUR, B2CS net): gstr1_notes.go. A B2C sale's
+// place of supply is the selling branch's state unless the sale named a
+// delivery state (migrations/061).
+//
 // Named, deliberate gaps (see Notes in the response, not silently
-// dropped): B2CL ("B2C Large" — interstate B2C invoices over ₹2.5 lakh)
-// isn't split out from B2CS, and B2CS itself always reports
-// sply_ty="INTRA" — both need a customer's own ship-to state, which this
-// codebase has no field for on a B2C (no-GSTIN) customer; only B2B
-// customers carry a GSTIN, and a GSTIN's own first two digits are what
-// place-of-supply actually is for that side. doc_issue (document-series
+// dropped): doc_issue (document-series
 // summary) isn't built — this codebase's order_number isn't a GST-
 // compliant sequential invoice series, there's no series concept to
 // summarize. UQC (unit of measure) is always "NOS" (pieces) — products
@@ -141,6 +157,14 @@ func (h *Handler) GSTR1(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		b2cl, b2clTaxable, b2clTax, err := loadB2CL(ctx, tx, start, end)
+		if err != nil {
+			return err
+		}
+		cdnr, cdnur, cnTaxable, cnTax, err := loadCreditNotes(ctx, tx, start, end)
+		if err != nil {
+			return err
+		}
 		hsn, err := loadHSN(ctx, tx, start, end)
 		if err != nil {
 			return err
@@ -154,15 +178,33 @@ func (h *Handler) GSTR1(w http.ResponseWriter, r *http.Request) {
 		for _, party := range b2b {
 			invoiceCount += len(party.Invoices)
 		}
-		totalTaxable := b2bTaxable + b2cTaxable
-		totalTax := b2bTax + b2cTax
+		b2clCount, noteCount := 0, len(cdnur)
+		for _, e := range b2cl {
+			b2clCount += len(e.Invoices)
+		}
+		for _, p := range cdnr {
+			noteCount += len(p.Notes)
+		}
+		totalTaxable := b2bTaxable + b2cTaxable + b2clTaxable - cnTaxable
+		totalTax := b2bTax + b2cTax + b2clTax - cnTax
+		if b2cl == nil {
+			b2cl = []gstr1B2CLEntry{}
+		}
+		if cdnr == nil {
+			cdnr = []gstr1CDNRParty{}
+		}
+		if cdnur == nil {
+			cdnur = []gstr1Note{}
+		}
 
-		resp.GSTR1JSON = gstr1JSON{GSTIN: gstin, Period: mmyyyy, B2B: b2b, B2CS: b2cs}
+		resp.GSTR1JSON = gstr1JSON{GSTIN: gstin, Period: mmyyyy, B2B: b2b, B2CL: b2cl, B2CS: b2cs, CDNR: cdnr, CDNUR: cdnur}
 		resp.GSTR1JSON.HSN.Data = hsn
 		resp.Summary = gstr1Summary{
 			Period: resp.Period, B2BPartyCount: len(b2b), B2BInvoiceCount: invoiceCount,
 			B2BTaxableValue: formatMoney(b2bTaxable), B2CTaxableValue: formatMoney(b2cTaxable),
 			TotalTaxableValue: formatMoney(totalTaxable), TotalTax: formatMoney(totalTax),
+			B2CLInvoiceCount: b2clCount, B2CLTaxableValue: formatMoney(b2clTaxable),
+			CreditNoteCount: noteCount, CreditNoteTaxable: formatMoney(cnTaxable), CreditNoteTax: formatMoney(cnTax),
 		}
 		resp.Reconciliation = reconciliationInfo{
 			ComputedGSTOutput: formatMoney(totalTax), LedgerGSTPayable: formatMoney(ledgerGSTPayable),
@@ -170,7 +212,8 @@ func (h *Handler) GSTR1(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Disclaimer = schemaDisclaimer
 		resp.Notes = []string{
-			"B2CL (interstate B2C > Rs.2.5 lakh) is not split out — every B2C sale is reported under B2CS as intrastate; see this endpoint's doc comment.",
+			"A B2C sale's place of supply is the selling branch's state unless the sale named a delivery state (Place of supply on the sale).",
+			"Returns are reported as credit notes dated when they were made: CDNR for B2B invoices, CDNUR for B2CL invoices; B2CS is net of returns against B2C invoices.",
 			"doc_issue (document series summary) is not included — this system's order numbers aren't a GST-compliant sequential invoice series.",
 			"UQC is always NOS (pieces) — products don't carry a unit-of-measure field yet.",
 		}
@@ -190,22 +233,20 @@ func (h *Handler) GSTR1(w http.ResponseWriter, r *http.Request) {
 // totals so the caller doesn't have to walk it again for the summary.
 func loadB2B(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1B2BParty, float64, float64, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT so.id, so.order_number, so.finalized_at::date::text, so.grand_total::text, c.gstin,
-		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) AS rate,
+		SELECT so.id, so.order_number, so.finalized_at::date::text, (so.grand_total + so.round_off)::text, c.gstin, -- invoice value incl. round-off
+		       COALESCE(so.place_of_supply, ''),
+		       COALESCE(sol.tax_rate, 0) AS rate,
 		       SUM(sol.taxable_value) AS txval,
-		       SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
-		       SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
-		       SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100) AS igst,
-		       SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100) AS cess
+		       SUM(gst_cgst(sol.tax_amount, sol.cess_amount, so.inter_state)) AS cgst,
+		       SUM(gst_sgst(sol.tax_amount, sol.cess_amount, so.inter_state)) AS sgst,
+		       SUM(gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state)) AS igst,
+		       SUM(sol.cess_amount) AS cess
 		FROM sales_orders so
 		JOIN customers c ON c.id = so.customer_id
 		JOIN sales_order_lines sol ON sol.sales_order_id = so.id
-		JOIN product_variants pv ON pv.id = sol.variant_id
-		JOIN products p ON p.id = pv.product_id
-		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-		WHERE so.status = 'finalized' AND so.finalized_at >= $1 AND so.finalized_at < $2
+		WHERE so.status IN `+soldStatuses+` AND so.finalized_at >= $1 AND so.finalized_at < $2
 		  AND c.gstin IS NOT NULL AND c.gstin != ''
-		GROUP BY so.id, so.order_number, so.finalized_at, so.grand_total, c.gstin, ts.cgst_rate, ts.sgst_rate, ts.igst_rate
+		GROUP BY so.id, so.order_number, so.finalized_at, so.grand_total, so.round_off, c.gstin, so.place_of_supply, sol.tax_rate
 		ORDER BY c.gstin, so.finalized_at, rate`, start, end)
 	if err != nil {
 		return nil, 0, 0, err
@@ -219,9 +260,9 @@ func loadB2B(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1B2BPa
 	var totalTaxable, totalTax float64
 
 	for rows.Next() {
-		var orderID, orderNumber, finalizedAt, grandTotal, custGSTIN string
+		var orderID, orderNumber, finalizedAt, grandTotal, custGSTIN, pos string
 		var rate, txval, cgst, sgst, igst, cess float64
-		if err := rows.Scan(&orderID, &orderNumber, &finalizedAt, &grandTotal, &custGSTIN, &rate, &txval, &cgst, &sgst, &igst, &cess); err != nil {
+		if err := rows.Scan(&orderID, &orderNumber, &finalizedAt, &grandTotal, &custGSTIN, &pos, &rate, &txval, &cgst, &sgst, &igst, &cess); err != nil {
 			return nil, 0, 0, err
 		}
 		totalTaxable += txval
@@ -240,7 +281,7 @@ func loadB2B(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1B2BPa
 			invDate, _ := time.Parse("2006-01-02", finalizedAt)
 			parties[pIdx].Invoices = append(parties[pIdx].Invoices, gstr1Invoice{
 				InvoiceNumber: orderNumber, InvoiceDate: invDate.Format("02-01-2006"), Value: grandTotal,
-				PlaceOfSupply: stateCode(custGSTIN), ReverseCharge: "N", InvoiceType: "R",
+				PlaceOfSupply: firstNonEmpty(pos, stateCode(custGSTIN)), ReverseCharge: "N", InvoiceType: "R",
 			})
 			iIdx = len(parties[pIdx].Invoices) - 1
 			invoiceIndex[key] = iIdx
@@ -255,95 +296,4 @@ func loadB2B(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1B2BPa
 		})
 	}
 	return parties, totalTaxable, totalTax, rows.Err()
-}
-
-// loadB2CS consolidates every finalized, in-period order with no
-// customer, or a customer with no GSTIN on file, by (branch, rate) —
-// place of supply is the selling branch's own state (see this file's
-// GSTR1 doc comment for why a B2C customer's own state can't be used).
-func loadB2CS(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1B2CSEntry, float64, float64, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT COALESCE(b.gstin,''),
-		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) AS rate,
-		       SUM(sol.taxable_value) AS txval,
-		       SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
-		       SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
-		       SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100) AS igst,
-		       SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100) AS cess
-		FROM sales_order_lines sol
-		JOIN sales_orders so ON so.id = sol.sales_order_id
-		JOIN branches b ON b.id = so.branch_id
-		JOIN product_variants pv ON pv.id = sol.variant_id
-		JOIN products p ON p.id = pv.product_id
-		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-		LEFT JOIN customers c ON c.id = so.customer_id
-		WHERE so.status = 'finalized' AND so.finalized_at >= $1 AND so.finalized_at < $2
-		  AND (c.gstin IS NULL OR c.gstin = '')
-		GROUP BY b.gstin, ts.cgst_rate, ts.sgst_rate, ts.igst_rate, ts.cess_rate
-		ORDER BY b.gstin, rate`, start, end)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	defer rows.Close()
-
-	var entries []gstr1B2CSEntry
-	var totalTaxable, totalTax float64
-	for rows.Next() {
-		var branchGSTIN string
-		var rate, txval, cgst, sgst, igst, cess float64
-		if err := rows.Scan(&branchGSTIN, &rate, &txval, &cgst, &sgst, &igst, &cess); err != nil {
-			return nil, 0, 0, err
-		}
-		totalTaxable += txval
-		totalTax += cgst + sgst + igst + cess
-		entries = append(entries, gstr1B2CSEntry{
-			SupplyType: "INTRA", PlaceOfSupply: stateCode(branchGSTIN), Type: "OE",
-			TaxableValue: formatMoney(txval), Rate: rate,
-			IGST: formatMoney(igst), CGST: formatMoney(cgst), SGST: formatMoney(sgst), Cess: formatMoney(cess),
-		})
-	}
-	return entries, totalTaxable, totalTax, rows.Err()
-}
-
-// loadHSN summarizes every finalized, in-period order line (both B2B and
-// B2C) by (HSN code, rate) — the return's HSN-wise summary section.
-func loadHSN(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]gstr1HSNEntry, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT COALESCE(p.hsn_code,''), p.name,
-		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) AS rate,
-		       SUM(sol.quantity) AS qty,
-		       SUM(sol.taxable_value) AS txval,
-		       SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100) AS cgst,
-		       SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100) AS sgst,
-		       SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100) AS igst,
-		       SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100) AS cess
-		FROM sales_order_lines sol
-		JOIN sales_orders so ON so.id = sol.sales_order_id
-		JOIN product_variants pv ON pv.id = sol.variant_id
-		JOIN products p ON p.id = pv.product_id
-		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-		WHERE so.status = 'finalized' AND so.finalized_at >= $1 AND so.finalized_at < $2
-		GROUP BY p.hsn_code, p.name, ts.cgst_rate, ts.sgst_rate, ts.igst_rate, ts.cess_rate
-		ORDER BY p.hsn_code`, start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var entries []gstr1HSNEntry
-	num := 1
-	for rows.Next() {
-		var hsnCode, name string
-		var rate, qty, txval, cgst, sgst, igst, cess float64
-		if err := rows.Scan(&hsnCode, &name, &rate, &qty, &txval, &cgst, &sgst, &igst, &cess); err != nil {
-			return nil, err
-		}
-		entries = append(entries, gstr1HSNEntry{
-			Num: num, HSN: hsnCode, Description: name, UQC: "NOS", Quantity: strconv.FormatFloat(qty, 'f', 3, 64),
-			TaxableValue: formatMoney(txval), Rate: rate,
-			IGST: formatMoney(igst), CGST: formatMoney(cgst), SGST: formatMoney(sgst), Cess: formatMoney(cess),
-		})
-		num++
-	}
-	return entries, rows.Err()
 }

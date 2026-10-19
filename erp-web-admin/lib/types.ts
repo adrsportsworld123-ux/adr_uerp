@@ -313,6 +313,79 @@ export interface Bill {
   grand_total: string;
   amount_paid: string;
   status: string;
+  /** The supplier invoice's tax by head (migrations/060), and how the branch prints it. */
+  cgst_amount?: string;
+  sgst_amount?: string;
+  igst_amount?: string;
+  cess_amount?: string;
+  inter_state?: boolean;
+  tax_rows?: TaxRow[];
+}
+
+// ---------------------------------------------------------------------
+// Tax split on bills and invoices (erp-core-go migrations/060,
+// internal/taxes): CGST + SGST intra-state, IGST inter-state, or one
+// labelled tax (VAT, Sales Tax) for a merchant outside India.
+// ---------------------------------------------------------------------
+
+export type TaxRegime = "gst_split" | "single";
+
+export interface TaxRow {
+  label: string;
+  amount: string;
+}
+
+export interface TaxBucket {
+  rate: string;
+  taxable_value: string;
+  cgst: string;
+  sgst: string;
+  igst: string;
+  cess: string;
+  tax_amount: string;
+}
+
+export interface TaxBreakup {
+  regime: TaxRegime;
+  tax_label: string;
+  inter_state: boolean;
+  /** 2-digit GST state code; "" when not known. */
+  place_of_supply: string;
+  place_of_supply_name: string;
+  cgst: string;
+  sgst: string;
+  igst: string;
+  cess: string;
+  total: string;
+  /** The tax lines to print under the subtotal ("CGST @ 2.5%"). */
+  rows: TaxRow[];
+  summary: TaxBucket[];
+}
+
+export interface TaxEffective {
+  regime: TaxRegime;
+  tax_label: string;
+  state_code: string;
+  currency_code: string;
+  currency_symbol: string;
+}
+
+export interface TaxSettings {
+  merchant: { regime: TaxRegime; tax_label: string; state_code: string | null; currency_code: string; currency_symbol: string };
+  branches: {
+    branch_id: string;
+    branch_name: string;
+    branch_gstin: string;
+    regime: TaxRegime | null;
+    tax_label: string | null;
+    state_code: string | null;
+    /** migrations/061: null = the merchant's currency. */
+    currency_code: string | null;
+    currency_symbol: string | null;
+    effective: TaxEffective;
+  }[];
+  states: { code: string; name: string }[];
+  currencies: { code: string; symbol: string }[];
 }
 
 export interface BillSummary {
@@ -739,7 +812,15 @@ export interface DailySalesReport {
   discount_total: string;
   tax_total: string;
   grand_total: string;
+  /** Checkout round-off waivers (signed sum) and the total after them (= the tenders). */
+  round_off_total: string;
+  net_total: string;
   by_payment_method: PaymentBreakdown[];
+  /** The day's tax by head, as the invoices printed it (migrations/060). */
+  cgst_total?: string;
+  sgst_total?: string;
+  igst_total?: string;
+  cess_total?: string;
 }
 
 export interface StockSummaryLine {
@@ -763,6 +844,8 @@ export interface BranchSalesLine {
   branch_name: string;
   order_count: number;
   grand_total: string;
+  /** After checkout round-off waivers. */
+  net_total: string;
 }
 
 export interface ConsolidatedSalesReport {
@@ -770,6 +853,8 @@ export interface ConsolidatedSalesReport {
   branches: BranchSalesLine[];
   total_order_count: number;
   total_grand_total: string;
+  /** After checkout round-off waivers. */
+  total_net_total: string;
 }
 
 export interface BranchStockLine {
@@ -1322,6 +1407,7 @@ export interface Quotation {
   converted_sales_order_id: string | null;
   created_at: string;
   lines: QuotationLine[];
+  tax_breakup?: TaxBreakup;
 }
 
 export interface QuotationSummary {
@@ -1454,6 +1540,9 @@ export interface SaleSummaryRow {
   customer_name: string | null;
   item_count: string;
   grand_total: string;
+  /** Checkout round-off waiver, signed ("-0.75"), and what was paid. */
+  round_off: string;
+  payable_total: string;
   payment_methods: string[];
   channel: SaleChannel;
 }
@@ -1462,9 +1551,14 @@ export interface SalesSummary {
   order_count: number;
   voided_count: number;
   refunded_count: number;
+  /** After checkout round-off waivers, so it matches the tenders. */
   net_sales: string;
+  round_off_total: string;
   discount_total: string;
   tax_total: string;
+  cgst_total?: string;
+  sgst_total?: string;
+  igst_total?: string;
   by_payment_method: { method: string; amount: string; count: number }[];
 }
 
@@ -1479,6 +1573,11 @@ export interface SaleDetailLine {
   taxable_value: string;
   tax_rate: string;
   tax_amount: string;
+  cgst_amount?: string;
+  sgst_amount?: string;
+  igst_amount?: string;
+  cess_amount?: string;
+  hsn_code?: string;
   line_total: string;
   open_price: boolean;
   price_approved_by: string | null;
@@ -1499,6 +1598,11 @@ export interface SaleReturn {
   return_number: string;
   refund_method: string;
   refund_amount: string;
+  /** The part of the sale's round-off waiver this return gave back (refund = goods' value less it). */
+  round_off: string;
+  tax_amount?: string;
+  /** The credit note's tax, split as the invoice charged it (migrations/060). */
+  tax_breakup?: TaxBreakup;
   restocked: boolean;
   approved_by: string | null;
   created_at: string;
@@ -1516,6 +1620,7 @@ export interface SaleDetail {
   customer_id: string | null;
   customer_name: string | null;
   customer_phone: string | null;
+  customer_gstin?: string | null;
   created_at: string;
   finalized_at: string | null;
   device_created_at: string | null;
@@ -1523,10 +1628,14 @@ export interface SaleDetail {
   discount_total: string;
   tax_total: string;
   grand_total: string;
+  /** Checkout round-off waiver, signed, and grand_total + round_off (what was paid). */
+  round_off: string;
+  payable_total: string;
   credit_amount: string;
   credit_paid: string;
   lines: SaleDetailLine[];
-  tax_summary: { rate: string; taxable_value: string; tax_amount: string; cgst: string; sgst: string }[];
+  tax_summary: { rate: string; taxable_value: string; tax_amount: string; cgst: string; sgst: string; igst?: string; cess?: string }[];
+  tax_breakup?: TaxBreakup;
   payments: SaleDetailPayment[];
   /** value_percent is null for a rupee-amount discount (fixed manual, promotion, loyalty). */
   discounts: { type: string; value_percent: string | null; discount_amount: string; applied_by: string; authorized_by: string | null; reason: string }[];
@@ -1545,6 +1654,9 @@ export interface ReturnableOrder {
   // Phase 15: refunds at or below this need no approver; null = every refund.
   approval_above: number | null;
   credit_outstanding: string;
+  /** The sale's checkout waiver (signed) and how much of it returns already gave back. */
+  round_off: string;
+  round_off_returned: string;
   lines: { line_id: string; product_name: string; sku: string; sold_quantity: string; returned_quantity: string; returnable_quantity: string; unit_refund: string }[];
 }
 
@@ -1558,7 +1670,13 @@ export interface CartOrder {
   discount_total: string;
   tax_total: string;
   grand_total: string;
+  /** Set at checkout: the waiver (signed) and what was payable after it. */
+  round_off: string;
+  payable_total: string;
   lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean }[];
+  tax_breakup?: TaxBreakup;
+  /** The delivery state set on the cart (migrations/061); null = the usual rule. */
+  ship_to_state?: string | null;
 }
 
 // ---------------------------------------------------------------------

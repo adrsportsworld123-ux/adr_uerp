@@ -251,6 +251,87 @@ class OrderLine {
 /// `lines` used to be absent from this response (see the FLAGGED GAP note
 /// that was in state/session.dart) — the backend now joins them in, so the
 /// app no longer needs to track cart lines locally per-device.
+/// One printed tax line under the subtotal ("CGST @ 2.5%").
+class TaxRow {
+  final String label;
+  final String amount;
+  const TaxRow(this.label, this.amount);
+}
+
+/// A document's tax as its branch prints it (erp-core-go migrations/060,
+/// internal/taxes): CGST + SGST for an intra-state sale, IGST for an
+/// inter-state one, or one labelled tax (VAT) for a merchant outside India.
+class TaxBreakup {
+  final String regime; // gst_split | single
+  final String taxLabel;
+  final bool interState;
+  final String placeOfSupply; // 2-digit GST state code, '' when not known
+  final String placeOfSupplyName;
+  final List<TaxRow> rows;
+
+  const TaxBreakup({
+    this.regime = 'gst_split',
+    this.taxLabel = 'GST',
+    this.interState = false,
+    this.placeOfSupply = '',
+    this.placeOfSupplyName = '',
+    this.rows = const [],
+  });
+
+  bool get split => regime != 'single';
+
+  static TaxBreakup? fromJson(Map<String, dynamic>? j) {
+    if (j == null) return null;
+    return TaxBreakup(
+      regime: j['regime'] as String? ?? 'gst_split',
+      taxLabel: j['tax_label'] as String? ?? 'GST',
+      interState: j['inter_state'] as bool? ?? false,
+      placeOfSupply: j['place_of_supply'] as String? ?? '',
+      placeOfSupplyName: j['place_of_supply_name'] as String? ?? '',
+      rows: [
+        for (final r in (j['rows'] as List<dynamic>? ?? const []))
+          TaxRow((r as Map<String, dynamic>)['label'] as String, r['amount'] as String),
+      ],
+    );
+  }
+
+  /// The split of a cart the server hasn't priced (an offline sale): each
+  /// line's tax halved into CGST + SGST — the odd paisa to CGST, as the
+  /// server does — or one line under the merchant's own label. An offline
+  /// sale has no customer GSTIN to make it inter-state.
+  static TaxBreakup local({required String regime, required String taxLabel, required Iterable<String> lineTaxes}) {
+    var total = 0, cgst = 0;
+    for (final t in lineTaxes) {
+      final p = ((double.tryParse(t) ?? 0) * 100).round();
+      total += p;
+      cgst += p >= 0 ? (p + 1) ~/ 2 : -((-p + 1) ~/ 2);
+    }
+    String money(int p) => (p / 100).toStringAsFixed(2);
+    if (regime == 'single') {
+      return TaxBreakup(regime: regime, taxLabel: taxLabel, rows: [TaxRow(taxLabel, money(total))]);
+    }
+    return TaxBreakup(regime: regime, taxLabel: taxLabel, rows: [TaxRow('CGST', money(cgst)), TaxRow('SGST', money(total - cgst))]);
+  }
+}
+
+/// A branch's tax regime (GET /tax/regime), cached for offline sales.
+class TaxRegimeSettings {
+  final String regime;
+  final String taxLabel;
+
+  /// The branch's currency (migrations/061); INR / ₹ from an older server.
+  final String currencyCode;
+  final String currencySymbol;
+  const TaxRegimeSettings({this.regime = 'gst_split', this.taxLabel = 'GST', this.currencyCode = 'INR', this.currencySymbol = '₹'});
+
+  factory TaxRegimeSettings.fromJson(Map<String, dynamic> j) => TaxRegimeSettings(
+        regime: j['regime'] as String? ?? 'gst_split',
+        taxLabel: j['tax_label'] as String? ?? 'GST',
+        currencyCode: j['currency_code'] as String? ?? 'INR',
+        currencySymbol: j['currency_symbol'] as String? ?? '₹',
+      );
+}
+
 class OrderSummary {
   final String orderId;
   final String orderNumber;
@@ -259,11 +340,21 @@ class OrderSummary {
   final String discountTotal;
   final String taxTotal;
   final String grandTotal;
+
+  /// Checkout round-off waiver, signed ("-0.75"; "0.00" when none), and
+  /// what was payable after it (erp-core-go migrations/059). Older servers
+  /// don't send them, so they default to no waiver.
+  final String roundOff;
+  final String payableTotal;
   final List<OrderLine> lines;
 
   /// True when a quantity change or line removal undid the cart's
   /// discounts (the server re-sizes nothing; the cashier re-applies them).
   final bool discountsCleared;
+
+  /// The tax split (migrations/060); null from an older server or a cart
+  /// built offline.
+  final TaxBreakup? taxBreakup;
 
   OrderSummary({
     required this.orderId,
@@ -273,9 +364,12 @@ class OrderSummary {
     required this.discountTotal,
     required this.taxTotal,
     required this.grandTotal,
+    this.roundOff = '0.00',
+    String? payableTotal,
     this.lines = const [],
     this.discountsCleared = false,
-  });
+    this.taxBreakup,
+  }) : payableTotal = payableTotal ?? grandTotal;
 
   factory OrderSummary.fromJson(Map<String, dynamic> json) => OrderSummary(
         orderId: json['order_id'] as String,
@@ -285,10 +379,13 @@ class OrderSummary {
         discountTotal: json['discount_total'] as String,
         taxTotal: json['tax_total'] as String,
         grandTotal: json['grand_total'] as String,
+        roundOff: json['round_off'] as String? ?? '0.00',
+        payableTotal: json['payable_total'] as String?,
         lines: (json['lines'] as List<dynamic>? ?? const [])
             .map((e) => OrderLine.fromJson(e as Map<String, dynamic>))
             .toList(),
         discountsCleared: json['discounts_cleared'] as bool? ?? false,
+        taxBreakup: TaxBreakup.fromJson(json['tax_breakup'] as Map<String, dynamic>?),
       );
 }
 
@@ -493,7 +590,14 @@ class ReceiptData {
   final String discountTotal;
   final String taxTotal;
   final String grandTotal;
+
+  /// Checkout round-off (signed) and the net payable after it.
+  final String roundOff;
+  final String payableTotal;
   final List<ReceiptPaymentData> payments;
+
+  /// The tax split as the invoice prints it (migrations/060).
+  final TaxBreakup? taxBreakup;
 
   ReceiptData({
     required this.orderNumber,
@@ -508,8 +612,13 @@ class ReceiptData {
     required this.discountTotal,
     required this.taxTotal,
     required this.grandTotal,
+    this.roundOff = '0.00',
+    String? payableTotal,
     required this.payments,
-  });
+    this.taxBreakup,
+  }) : payableTotal = payableTotal ?? grandTotal;
+
+  bool get hasRoundOff => (double.tryParse(roundOff) ?? 0) < 0;
 
   factory ReceiptData.fromJson(Map<String, dynamic> json) => ReceiptData(
         orderNumber: json['order_number'] as String,
@@ -526,9 +635,12 @@ class ReceiptData {
         discountTotal: json['discount_total'] as String,
         taxTotal: json['tax_total'] as String,
         grandTotal: json['grand_total'] as String,
+        roundOff: json['round_off'] as String? ?? '0.00',
+        payableTotal: json['payable_total'] as String?,
         payments: (json['payments'] as List<dynamic>? ?? const [])
             .map((e) => ReceiptPaymentData.fromJson(e as Map<String, dynamic>))
             .toList(),
+        taxBreakup: TaxBreakup.fromJson(json['tax_breakup'] as Map<String, dynamic>?),
       );
 }
 
@@ -742,12 +854,16 @@ class ReturnResult {
   final String refundMethod;
   final bool restocked;
 
+  /// The credit note's tax, split as the invoice charged it (migrations/060).
+  final TaxBreakup? taxBreakup;
+
   ReturnResult({
     required this.returnNumber,
     required this.orderStatus,
     required this.refundAmount,
     required this.refundMethod,
     required this.restocked,
+    this.taxBreakup,
   });
 
   factory ReturnResult.fromJson(Map<String, dynamic> json) => ReturnResult(
@@ -756,6 +872,7 @@ class ReturnResult {
         refundAmount: json['refund_amount'] as String,
         refundMethod: json['refund_method'] as String,
         restocked: json['restocked'] as bool? ?? true,
+        taxBreakup: TaxBreakup.fromJson(json['tax_breakup'] as Map<String, dynamic>?),
       );
 }
 
@@ -928,6 +1045,9 @@ class ShiftReport {
   final int orderCount;
   final int voidedCount;
   final String netSales;
+
+  /// Checkout round-off waivers in the shift (signed sum); net sales are after them.
+  final String roundOffTotal;
   final Map<String, String> byMethod;
   final int returnCount;
   final String refundTotal;
@@ -941,6 +1061,7 @@ class ShiftReport {
     required this.orderCount,
     required this.voidedCount,
     required this.netSales,
+    this.roundOffTotal = '0.00',
     required this.byMethod,
     required this.returnCount,
     required this.refundTotal,
@@ -957,6 +1078,7 @@ class ShiftReport {
         orderCount: j['order_count'] as int? ?? 0,
         voidedCount: j['voided_count'] as int? ?? 0,
         netSales: j['net_sales'] as String? ?? '0.00',
+        roundOffTotal: j['round_off_total'] as String? ?? '0.00',
         byMethod: (j['by_payment_method'] as Map<String, dynamic>? ?? const {}).cast<String, String>(),
         returnCount: j['return_count'] as int? ?? 0,
         refundTotal: j['refund_total'] as String? ?? '0.00',
@@ -1065,6 +1187,15 @@ class DayReport {
   final String subtotal;
   final String discountTotal;
   final String taxTotal;
+
+  /// The day's checkout round-off waivers (signed sum); net sales are after them.
+  final String roundOffTotal;
+
+  /// The day's tax by head (migrations/060); '' on a day frozen before it.
+  final String taxRegime;
+  final String cgstTotal;
+  final String sgstTotal;
+  final String igstTotal;
   final String netSales;
   final String averageBill;
   final int voidedCount;
@@ -1095,6 +1226,11 @@ class DayReport {
     required this.subtotal,
     required this.discountTotal,
     required this.taxTotal,
+    this.roundOffTotal = '0.00',
+    this.taxRegime = '',
+    this.cgstTotal = '0.00',
+    this.sgstTotal = '0.00',
+    this.igstTotal = '0.00',
     required this.netSales,
     required this.averageBill,
     required this.voidedCount,
@@ -1130,6 +1266,11 @@ class DayReport {
         subtotal: j['subtotal'] as String? ?? '0.00',
         discountTotal: j['discount_total'] as String? ?? '0.00',
         taxTotal: j['tax_total'] as String? ?? '0.00',
+        roundOffTotal: j['round_off_total'] as String? ?? '0.00',
+        taxRegime: j['tax_regime'] as String? ?? '',
+        cgstTotal: j['cgst_total'] as String? ?? '0.00',
+        sgstTotal: j['sgst_total'] as String? ?? '0.00',
+        igstTotal: j['igst_total'] as String? ?? '0.00',
         netSales: j['net_sales'] as String? ?? '0.00',
         averageBill: j['average_bill'] as String? ?? '0.00',
         voidedCount: j['voided_count'] as int? ?? 0,
@@ -1520,14 +1661,20 @@ class ApiClient {
     return OrderSummary.fromJson(_decode(resp));
   }
 
+  /// [roundOff]: the amount waived, signed (-0.75 settles ₹105.75 for
+  /// ₹105); 0 sends nothing, exactly the request older servers expect.
   Future<OrderSummary> checkout({
     required String orderId,
     required List<PaymentInput> payments,
+    double roundOff = 0,
   }) async {
     final resp = await _http.post(
       Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/checkout'),
       headers: _authHeaders,
-      body: jsonEncode({'payments': payments.map((p) => p.toJson()).toList()}),
+      body: jsonEncode({
+        'payments': payments.map((p) => p.toJson()).toList(),
+        if (roundOff != 0) 'round_off': roundOff,
+      }),
     );
     return OrderSummary.fromJson(_decode(resp));
   }
@@ -2111,9 +2258,18 @@ class ApiClient {
   }
 
   /// GET /sales/settings — the POS reads `shifts_required`.
-  Future<bool> shiftsRequired() async {
+  Future<bool> shiftsRequired() async => (await salesSettings()).shiftsRequired;
+
+  /// GET /sales/settings — the shift rule and the round-off waiver limit.
+  Future<SalesSettings> salesSettings() async {
     final body = _decode(await _http.get(Uri.parse('$baseUrl/api/v1/sales/settings'), headers: _authHeaders));
-    return body['shifts_required'] as bool? ?? false;
+    return SalesSettings.fromJson(body);
+  }
+
+  /// GET /tax/regime — the branch's tax split (migrations/060).
+  Future<TaxRegimeSettings> taxRegime(String branchId) async {
+    final body = _decode(await _http.get(Uri.parse('$baseUrl/api/v1/tax/regime?branch_id=$branchId'), headers: _authHeaders));
+    return TaxRegimeSettings.fromJson(body);
   }
 
   Map<String, dynamic> _decode(http.Response resp) {
@@ -2197,4 +2353,24 @@ class _AuthRetryingClient extends http.BaseClient {
 
   @override
   void close() => _inner.close();
+}
+
+/// The merchant's sales policy, as the till uses it (GET /sales/settings).
+class SalesSettings {
+  /// Refuse payment on a till with no open shift.
+  final bool shiftsRequired;
+
+  /// The most a cashier may waive on one sale (0 = round-off is off).
+  final double roundOffMax;
+
+  /// Start the payment screen with the paise waived.
+  final bool roundOffAuto;
+
+  const SalesSettings({this.shiftsRequired = false, this.roundOffMax = 0, this.roundOffAuto = false});
+
+  factory SalesSettings.fromJson(Map<String, dynamic> j) => SalesSettings(
+        shiftsRequired: j['shifts_required'] as bool? ?? false,
+        roundOffMax: double.tryParse(j['round_off_max']?.toString() ?? '') ?? 0,
+        roundOffAuto: j['round_off_auto'] as bool? ?? false,
+      );
 }

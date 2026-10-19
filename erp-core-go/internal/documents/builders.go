@@ -1,6 +1,10 @@
 package documents
 
-import "strings"
+import (
+	"strings"
+
+	"erp-core-go/internal/taxes"
+)
 
 // The builders below turn each document type's plain data into a
 // Document, so the sales and purchase packages only map their own loader
@@ -10,13 +14,17 @@ import "strings"
 // API's NUMERIC strings.
 type SaleLine struct {
 	Name, SKU, Quantity, UnitPrice, Discount, Tax, Total string
+	LineTax                                              // GST split columns (used when Breakup splits)
 }
 
 type SaleInput struct {
 	OrderNumber, Status, Date, Cashier string
 	CustomerName, CustomerPhone        string
+	CustomerGSTIN                      string
 	Lines                              []SaleLine
+	Breakup                            *taxes.Breakup // the sale's tax split; nil prints one "Tax" column
 	Subtotal, Discount, Tax, Grand     string
+	RoundOff, Payable                  string      // checkout waiver (signed) and the total after it; "" / "0.00" = none
 	Payments                           [][2]string // method code, amount
 }
 
@@ -34,37 +42,31 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 		Number: in.OrderNumber,
 		Date:   in.Date,
 		Meta:   [][2]string{{"Cashier", in.Cashier}},
-		Columns: []Column{
-			{Title: "#", Width: 5},
-			{Title: "Item", Width: 40},
-			{Title: "Qty", Width: 8, Right: true},
-			{Title: "Rate", Width: 13, Right: true},
-			{Title: "Discount", Width: 11, Right: true},
-			{Title: "Tax", Width: 11, Right: true},
-			{Title: "Amount", Width: 14, Right: true},
-		},
 	}
+	d.Meta = append(d.Meta, supplyMeta(in.Breakup)...)
+	d.Columns = append([]Column{{Title: "#", Width: 5}, {Title: "Item", Width: 40}}, itemColumns(in.Breakup, true)...)
 	if in.Status != "finalized" {
 		d.Stamp = strings.ToUpper(Label(in.Status))
 	}
 	if in.CustomerName != "" {
 		p := &Party{Label: "Bill to", Name: in.CustomerName}
+		if in.CustomerGSTIN != "" {
+			p.Lines = append(p.Lines, "GSTIN: "+in.CustomerGSTIN)
+		}
 		if in.CustomerPhone != "" {
-			p.Lines = []string{"Ph: " + in.CustomerPhone}
+			p.Lines = append(p.Lines, "Ph: "+in.CustomerPhone)
 		}
 		d.Party = p
 	}
 	for i, l := range in.Lines {
-		name := l.Name
-		if l.SKU != "" {
-			name += "\n" + l.SKU
-		}
 		detail := Qty(l.Quantity) + " × " + Amount(l.UnitPrice)
 		if isNonZero(l.Discount) {
 			detail += "  (−" + Amount(l.Discount) + ")"
 		}
+		cells := append([]string{itoa(i + 1), itemName(l.Name, l.SKU, l.HSN, in.Breakup)},
+			itemCells(in.Breakup, true, l.Quantity, l.UnitPrice, l.Discount, l.Tax, l.Total, l.LineTax)...)
 		d.Rows = append(d.Rows, Row{
-			Cells:  []string{itoa(i + 1), name, Qty(l.Quantity), Amount(l.UnitPrice), Amount(l.Discount), Amount(l.Tax), Amount(l.Total)},
+			Cells:  cells,
 			Title:  l.Name,
 			Detail: detail,
 			Amount: Amount(l.Total),
@@ -74,9 +76,16 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 	if isNonZero(in.Discount) {
 		d.Totals = append(d.Totals, Total{Label: "Discount", Value: "−" + INR(in.Discount)})
 	}
-	d.Totals = append(d.Totals,
-		Total{Label: "Tax", Value: INR(in.Tax)},
-		Total{Label: "Total", Value: INR(in.Grand), Bold: true})
+	d.Totals = append(d.Totals, taxTotals(in.Breakup, "Tax", in.Tax)...)
+	d.TaxTable = taxSummary(in.Breakup)
+	if isNonZero(in.RoundOff) {
+		d.Totals = append(d.Totals,
+			Total{Label: "Total", Value: INR(in.Grand)},
+			Total{Label: "Round off", Value: INR(in.RoundOff)},
+			Total{Label: "Net payable", Value: INR(in.Payable), Bold: true})
+	} else {
+		d.Totals = append(d.Totals, Total{Label: "Total", Value: INR(in.Grand), Bold: true})
+	}
 	for _, p := range in.Payments {
 		d.Payments = append(d.Payments, [2]string{Label(p[0]), INR(p[1])})
 	}
@@ -191,6 +200,7 @@ type BillInput struct {
 	Subtotal, Tax, Freight, Other, RoundOff, Grand, Paid, Balance string
 	Payments                                                      [][2]string // "method · date · ref", amount
 	PONumber                                                      string      // the GRN's purchase order, if any
+	TaxRows                                                       [][2]string // the supplier's tax, split (CGST / SGST / IGST); nil = one "GST" line
 }
 
 func PurchaseBill(in BillInput) Document {
@@ -223,7 +233,12 @@ func PurchaseBill(in BillInput) Document {
 	if isNonZero(in.Other) {
 		d.Totals = append(d.Totals, Total{Label: "Other charges", Value: INR(in.Other)})
 	}
-	d.Totals = append(d.Totals, Total{Label: "GST", Value: INR(in.Tax)})
+	if len(in.TaxRows) == 0 {
+		d.Totals = append(d.Totals, Total{Label: "GST", Value: INR(in.Tax)})
+	}
+	for _, t := range in.TaxRows {
+		d.Totals = append(d.Totals, Total{Label: t[0], Value: INR(t[1])})
+	}
 	if isNonZero(in.RoundOff) {
 		d.Totals = append(d.Totals, Total{Label: "Round off", Value: INR(in.RoundOff)})
 	}
@@ -303,4 +318,58 @@ func itoa(i int) string {
 		return string(rune('0' + i))
 	}
 	return itoa(i/10) + string(rune('0'+i%10))
+}
+
+// CreditNoteInput is a sales return as a GST credit note.
+type CreditNoteInput struct {
+	Number, Date, InvoiceNumber, InvoiceDate, Reason, RefundMethod, ProcessedBy string
+	CustomerName, CustomerPhone, CustomerGSTIN                                  string
+	Lines                                                                       []SaleLine // Total = the line's refund
+	Taxable, Tax, RoundOff, Refund                                              string
+	Breakup                                                                     *taxes.Breakup
+}
+
+// CreditNote: the goods given back with their taxable value and tax, split
+// as the invoice charged it, against the invoice it reverses.
+func CreditNote(lh Letterhead, in CreditNoteInput) Document {
+	d := Document{
+		Title:  "CREDIT NOTE",
+		Number: in.Number,
+		Date:   in.Date,
+		Meta:   [][2]string{{"Against invoice", in.InvoiceNumber}, {"Invoice date", in.InvoiceDate}},
+	}
+	d.Meta = append(d.Meta, supplyMeta(in.Breakup)...)
+	if in.ProcessedBy != "" {
+		d.Meta = append(d.Meta, [2]string{"Processed by", in.ProcessedBy})
+	}
+	d.Columns = append([]Column{{Title: "#", Width: 5}, {Title: "Item", Width: 40}}, itemColumns(in.Breakup, false)...)
+	if in.CustomerName != "" {
+		p := &Party{Label: "Customer", Name: in.CustomerName}
+		if in.CustomerGSTIN != "" {
+			p.Lines = append(p.Lines, "GSTIN: "+in.CustomerGSTIN)
+		}
+		if in.CustomerPhone != "" {
+			p.Lines = append(p.Lines, "Ph: "+in.CustomerPhone)
+		}
+		d.Party = p
+	}
+	for i, l := range in.Lines {
+		cells := append([]string{itoa(i + 1), itemName(l.Name, l.SKU, l.HSN, in.Breakup)},
+			itemCells(in.Breakup, false, l.Quantity, l.UnitPrice, "", l.Tax, l.Total, l.LineTax)...)
+		d.Rows = append(d.Rows, Row{Cells: cells, Title: l.Name, Detail: Qty(l.Quantity) + " × " + Amount(l.UnitPrice), Amount: Amount(l.Total)})
+	}
+	d.Totals = append(d.Totals, Total{Label: "Taxable value", Value: INR(in.Taxable)})
+	d.Totals = append(d.Totals, taxTotals(in.Breakup, "Tax", in.Tax)...)
+	if isNonZero(in.RoundOff) {
+		d.Totals = append(d.Totals, Total{Label: "Round off returned", Value: "−" + INR(in.RoundOff)})
+	}
+	d.Totals = append(d.Totals, Total{Label: "Refund", Value: INR(in.Refund), Bold: true})
+	d.TaxTable = taxSummary(in.Breakup)
+	if in.RefundMethod != "" {
+		d.Payments = [][2]string{{"Refunded by " + Label(in.RefundMethod), INR(in.Refund)}}
+	}
+	if in.Reason != "" {
+		d.Notes = []string{"Reason: " + in.Reason}
+	}
+	return d
 }

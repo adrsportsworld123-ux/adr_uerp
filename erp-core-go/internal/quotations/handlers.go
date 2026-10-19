@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -32,6 +33,7 @@ import (
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/sales"
 	"erp-core-go/internal/softdelete"
+	"erp-core-go/internal/taxes"
 )
 
 type Handler struct {
@@ -49,6 +51,15 @@ type quotationLine struct {
 	LineTotal   string `json:"line_total"`
 	// true = UnitPrice already contains tax (migrations/033)
 	PriceIncludesTax bool `json:"price_includes_tax"`
+	// migrations/060: GST rate (cess excluded), taxable value and the
+	// split by the quote's supply. Additive.
+	HSNCode      string `json:"hsn_code"`
+	TaxRate      string `json:"tax_rate"`
+	TaxableValue string `json:"taxable_value"`
+	CGSTAmount   string `json:"cgst_amount"`
+	SGSTAmount   string `json:"sgst_amount"`
+	IGSTAmount   string `json:"igst_amount"`
+	CessAmount   string `json:"cess_amount"`
 }
 
 type quotationResponse struct {
@@ -65,6 +76,10 @@ type quotationResponse struct {
 	ConvertedSalesOrderID *string         `json:"converted_sales_order_id"`
 	CreatedAt             string          `json:"created_at"`
 	Lines                 []quotationLine `json:"lines"`
+	// The quote's tax as its invoice would print it: CGST + SGST for a
+	// customer in the branch's state, IGST for one in another (from the
+	// customer's GSTIN), or the merchant's single tax. Additive.
+	TaxBreakup *taxes.Breakup `json:"tax_breakup"`
 }
 
 type quotationSummary struct {
@@ -266,28 +281,64 @@ func loadQuotation(ctx context.Context, tx pgx.Tx, quotationID string) (quotatio
 		return resp, err
 	}
 
+	// A quote has no place of supply of its own yet: it is the
+	// customer's GSTIN state, else the branch's — the rule a sale applies
+	// when it is finalized (migrations/060).
+	var customerState, branchState string
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(gst_state_of(c.gstin), ''), COALESCE(app_branch_state(q.branch_id), '')
+		FROM quotations q LEFT JOIN customers c ON c.id = q.customer_id
+		WHERE q.id = $1`, quotationID).Scan(&customerState, &branchState); err != nil {
+		return resp, err
+	}
+	inter := customerState != "" && branchState != "" && customerState != branchState
+	pos := customerState
+	if pos == "" {
+		pos = branchState
+	}
+
 	rows, err := tx.Query(ctx, `
 		SELECT ql.id::text, ql.variant_id::text, pv.sku, p.name, ql.quantity::text, ql.unit_price::text,
-		       ql.tax_amount::text, ql.line_total::text, ql.price_includes_tax
+		       ql.tax_amount::text, ql.line_total::text, ql.price_includes_tax,
+		       COALESCE(p.hsn_code, ''), COALESCE(ql.tax_rate, 0)::text, (ql.line_total - ql.tax_amount)::text,
+		       gst_cgst(ql.tax_amount, ql.cess_amount, $2)::text, gst_sgst(ql.tax_amount, ql.cess_amount, $2)::text,
+		       gst_igst(ql.tax_amount, ql.cess_amount, $2)::text, ql.cess_amount::text
 		FROM quotation_lines ql
 		JOIN product_variants pv ON pv.id = ql.variant_id
 		JOIN products p ON p.id = pv.product_id
 		WHERE ql.quotation_id = $1
-		ORDER BY ql.created_at`, quotationID)
+		ORDER BY ql.created_at`, quotationID, inter)
 	if err != nil {
 		return resp, err
 	}
 	defer rows.Close()
 	resp.Lines = []quotationLine{}
+	var taxLines []taxes.Line
 	for rows.Next() {
 		var l quotationLine
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity, &l.UnitPrice,
-			&l.TaxAmount, &l.LineTotal, &l.PriceIncludesTax); err != nil {
+			&l.TaxAmount, &l.LineTotal, &l.PriceIncludesTax,
+			&l.HSNCode, &l.TaxRate, &l.TaxableValue, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount); err != nil {
 			return resp, err
 		}
 		resp.Lines = append(resp.Lines, l)
+		taxLines = append(taxLines, taxes.Line{Rate: num(l.TaxRate), Taxable: num(l.TaxableValue), Tax: num(l.TaxAmount), Cess: num(l.CessAmount)})
 	}
-	return resp, rows.Err()
+	if err := rows.Err(); err != nil {
+		return resp, err
+	}
+	settings, err := taxes.Load(ctx, tx, resp.BranchID)
+	if err != nil {
+		return resp, err
+	}
+	b := taxes.Build(settings, inter, pos, taxLines)
+	resp.TaxBreakup = &b
+	return resp, nil
+}
+
+func num(s string) float64 {
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
 }
 
 // ---------------------------------------------------------------------

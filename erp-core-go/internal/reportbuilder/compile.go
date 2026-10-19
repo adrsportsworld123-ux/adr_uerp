@@ -135,7 +135,7 @@ func Compile(spec Spec, horizon time.Time, rowCap int) (Compiled, error) {
 				expr = strings.ToUpper(c.Agg) + "(" + f.SQL + ")"
 			}
 			m.Agg = c.Agg
-			m.Label = aggLabel[c.Agg] + " " + strings.ToLower(f.Label)
+			m.Label = aggLabel[c.Agg] + " " + lowerLabel(f.Label)
 		} else {
 			group = append(group, strconv.Itoa(i+1))
 		}
@@ -371,4 +371,13 @@ func Execute(ctx context.Context, tx pgx.Tx, c Compiled, rowCap int, timeout tim
 		res.Rows = append(res.Rows, cells)
 	}
 	return res, rows.Err()
+}
+
+// lowerLabel lower-cases a field label for "Total …", except an acronym
+// (CGST, IGST, HSN), which stays as it is.
+func lowerLabel(l string) string {
+	if l == strings.ToUpper(l) {
+		return l
+	}
+	return strings.ToLower(l)
 }

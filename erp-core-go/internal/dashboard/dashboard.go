@@ -11,7 +11,8 @@
 // dashboard shows their own branches only.
 //
 // Sales are completed sales (finalized, or partly or fully refunded since;
-// voids and open carts left out) at their grand total, counted on the day
+// voids and open carts left out) at what was paid — the grand total less
+// any checkout round-off waiver (migrations/059) — counted on the day
 // money changed hands (device_created_at for an offline sale, else
 // finalized_at) in India Standard Time.
 package dashboard
@@ -244,17 +245,17 @@ func kpis(ctx context.Context, tx pgx.Tx, f filters) ([]kpi, error) {
 	var v [12]float64
 	var n [8]int
 	err := tx.QueryRow(ctx, `
-		SELECT COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` = $3::date), 0),
+		SELECT COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` = $3::date), 0),
 		       count(*) FILTER (WHERE `+saleDay+` = $3::date),
-		       COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` = $3::date - 1), 0),
+		       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` = $3::date - 1), 0),
 		       count(*) FILTER (WHERE `+saleDay+` = $3::date - 1),
-		       COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` BETWEEN $4::date AND $3::date), 0),
+		       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` BETWEEN $4::date AND $3::date), 0),
 		       count(*) FILTER (WHERE `+saleDay+` BETWEEN $4::date AND $3::date),
-		       COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` BETWEEN $4::date - 7 AND $3::date - 7), 0),
+		       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` BETWEEN $4::date - 7 AND $3::date - 7), 0),
 		       count(*) FILTER (WHERE `+saleDay+` BETWEEN $4::date - 7 AND $3::date - 7),
-		       COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` BETWEEN $5::date AND $3::date), 0),
+		       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` BETWEEN $5::date AND $3::date), 0),
 		       count(*) FILTER (WHERE `+saleDay+` BETWEEN $5::date AND $3::date),
-		       COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` BETWEEN $6::date AND $7::date), 0),
+		       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` BETWEEN $6::date AND $7::date), 0),
 		       count(*) FILTER (WHERE `+saleDay+` BETWEEN $6::date AND $7::date)
 		FROM sales_orders so
 		WHERE `+completed+` AND `+saleDay+` BETWEEN LEAST($6::date, $4::date - 7) AND $3::date`,
@@ -326,7 +327,7 @@ func salesTracking(ctx context.Context, tx pgx.Tx, f filters) (tracking, error) 
 
 	byDay := map[string]float64{}
 	rows, err := tx.Query(ctx, `
-		SELECT `+saleDay+`::text, sum(so.grand_total)::float8 FROM sales_orders so
+		SELECT `+saleDay+`::text, sum(so.grand_total + so.round_off)::float8 FROM sales_orders so
 		WHERE `+completed+` AND `+saleDay+` BETWEEN $3::date AND $4::date GROUP BY 1`,
 		f.BranchID, f.Channel, prevStart.Format("2006-01-02"), ref.Format("2006-01-02"))
 	if err != nil {
@@ -389,8 +390,8 @@ func salesTracking(ctx context.Context, tx pgx.Tx, f filters) (tracking, error) 
 	t.FYLabel = fmt.Sprintf("FY %d–%02d", fyStart.Year(), (fyStart.Year()+1)%100)
 	var fy, fyPrev float64
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` BETWEEN $3::date AND $4::date), 0)::float8,
-		       COALESCE(sum(so.grand_total) FILTER (WHERE `+saleDay+` BETWEEN ($3::date - interval '1 year')::date AND ($4::date - interval '1 year')::date), 0)::float8
+		SELECT COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` BETWEEN $3::date AND $4::date), 0)::float8,
+		       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE `+saleDay+` BETWEEN ($3::date - interval '1 year')::date AND ($4::date - interval '1 year')::date), 0)::float8
 		FROM sales_orders so
 		WHERE `+completed+` AND `+saleDay+` BETWEEN ($3::date - interval '1 year')::date AND $4::date`,
 		f.BranchID, f.Channel, fyStart.Format("2006-01-02"), ref.Format("2006-01-02")).Scan(&fy, &fyPrev); err != nil {
@@ -443,14 +444,14 @@ func buildWidget(ctx context.Context, tx pgx.Tx, key string, f filters) (any, er
 		return series(ctx, tx, `
 			SELECT d::date::text, to_char(d, 'DD Mon'), COALESCE(s.sales, 0)::float8, COALESCE(s.orders, 0)
 			FROM generate_series($3::date, $4::date, interval '1 day') d
-			LEFT JOIN (SELECT `+saleDay+` AS day, sum(so.grand_total) sales, count(*) orders FROM sales_orders so
+			LEFT JOIN (SELECT `+saleDay+` AS day, sum(so.grand_total + so.round_off) sales, count(*) orders FROM sales_orders so
 			           WHERE `+completed+` AND `+inRange+` GROUP BY 1) s ON s.day = d::date
 			ORDER BY d`, args...)
 	case "weekly_sales":
 		return series(ctx, tx, `
 			SELECT w::date::text, to_char(w, 'DD Mon'), COALESCE(s.sales, 0)::float8, COALESCE(s.orders, 0)
 			FROM generate_series(date_trunc('week', $4::date) - interval '11 weeks', date_trunc('week', $4::date), interval '1 week') w
-			LEFT JOIN (SELECT date_trunc('week', `+saleDay+`) AS wk, sum(so.grand_total) sales, count(*) orders FROM sales_orders so
+			LEFT JOIN (SELECT date_trunc('week', `+saleDay+`) AS wk, sum(so.grand_total + so.round_off) sales, count(*) orders FROM sales_orders so
 			           WHERE `+completed+` AND `+saleDay+` BETWEEN (date_trunc('week', $4::date) - interval '11 weeks')::date AND $4::date
 			           GROUP BY 1) s ON s.wk = w
 			WHERE $3::date IS NOT NULL
@@ -459,7 +460,7 @@ func buildWidget(ctx context.Context, tx pgx.Tx, key string, f filters) (any, er
 		pts, err := series(ctx, tx, `
 			SELECT to_char(m, 'YYYY-MM'), to_char(m, 'Mon YY'), COALESCE(s.sales, 0)::float8, COALESCE(s.orders, 0)
 			FROM generate_series(date_trunc('month', $4::date) - interval '11 months', date_trunc('month', $4::date), interval '1 month') m
-			LEFT JOIN (SELECT date_trunc('month', `+saleDay+`) AS mo, sum(so.grand_total) sales, count(*) orders FROM sales_orders so
+			LEFT JOIN (SELECT date_trunc('month', `+saleDay+`) AS mo, sum(so.grand_total + so.round_off) sales, count(*) orders FROM sales_orders so
 			           WHERE `+completed+` AND `+saleDay+` BETWEEN (date_trunc('month', $4::date) - interval '23 months')::date AND $4::date
 			           GROUP BY 1) s ON s.mo = m
 			WHERE $3::date IS NOT NULL
@@ -470,7 +471,7 @@ func buildWidget(ctx context.Context, tx pgx.Tx, key string, f filters) (any, er
 		prior, err := series(ctx, tx, `
 			SELECT to_char(m + interval '1 year', 'YYYY-MM'), '', COALESCE(s.sales, 0)::float8, COALESCE(s.orders, 0)
 			FROM generate_series(date_trunc('month', $4::date) - interval '23 months', date_trunc('month', $4::date) - interval '12 months', interval '1 month') m
-			LEFT JOIN (SELECT date_trunc('month', `+saleDay+`) AS mo, sum(so.grand_total) sales, count(*) orders FROM sales_orders so
+			LEFT JOIN (SELECT date_trunc('month', `+saleDay+`) AS mo, sum(so.grand_total + so.round_off) sales, count(*) orders FROM sales_orders so
 			           WHERE `+completed+` AND `+saleDay+` BETWEEN (date_trunc('month', $4::date) - interval '23 months')::date AND $4::date
 			           GROUP BY 1) s ON s.mo = m
 			WHERE $3::date IS NOT NULL
@@ -508,14 +509,14 @@ func buildWidget(ctx context.Context, tx pgx.Tx, key string, f filters) (any, er
 			WHERE `+completed+` AND `+inRange+` GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10`, args...)
 	case "branch_sales":
 		return shares(ctx, tx, false, `
-			SELECT b.id::text, b.name, sum(so.grand_total)::float8, count(*)::int
+			SELECT b.id::text, b.name, sum(so.grand_total + so.round_off)::float8, count(*)::int
 			FROM sales_orders so JOIN branches b ON b.id = so.branch_id
 			WHERE `+completed+` AND `+inRange+` GROUP BY 1, 2 ORDER BY 3 DESC`, args...)
 	case "hourly_sales":
 		return series(ctx, tx, `
 			SELECT h::text, lpad(h::text, 2, '0') || ':00', COALESCE(s.sales, 0)::float8, COALESCE(s.orders, 0)
 			FROM generate_series(0, 23) h
-			LEFT JOIN (SELECT extract(hour FROM (`+moment+`) AT TIME ZONE 'Asia/Kolkata')::int AS hr, sum(so.grand_total) sales, count(*) orders
+			LEFT JOIN (SELECT extract(hour FROM (`+moment+`) AT TIME ZONE 'Asia/Kolkata')::int AS hr, sum(so.grand_total + so.round_off) sales, count(*) orders
 			           FROM sales_orders so WHERE `+completed+` AND `+inRange+` GROUP BY 1) s ON s.hr = h
 			ORDER BY h`, args...)
 	}

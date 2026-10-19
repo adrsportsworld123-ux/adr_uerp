@@ -7,7 +7,20 @@ part of '../pos_screen.dart';
 // the change to hand back; split lets the cashier take part of the bill on
 // one tender and the rest on another. Returns the payments to record, or
 // null if the cashier backs out. The server still validates the total.
+//
+// Round-off (Sales Policy, erp-core-go migrations/059): when the merchant
+// allows it, the cashier can waive a small balance — the paise by default,
+// or another amount up to the limit — so ₹105.75 is settled for ₹105. The
+// bill keeps its total; the waiver travels with the payments.
 // ---------------------------------------------------------------------
+
+/// What the payment sheet hands back: the tenders and the waiver taken
+/// (signed, 0 = none).
+class _PaymentResult {
+  final List<PaymentInput> payments;
+  final double roundOff;
+  const _PaymentResult(this.payments, {this.roundOff = 0});
+}
 
 const _tenders = [
   ('cash', 'Cash', Icons.payments_outlined),
@@ -36,9 +49,15 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   bool _working = false;
   String? _message;
 
+  /// Round-off: on for this sale, and an amount the cashier typed (null =
+  /// the bill's paise).
+  bool _roundOn = false;
+  double? _customWaive;
+
   @override
   void initState() {
     super.initState();
+    _roundOn = context.read<AppSession>().roundOffAuto;
     WidgetsBinding.instance.addPostFrameCallback((_) => _autoApplyPromotions());
   }
 
@@ -74,7 +93,35 @@ class _PaymentSheetState extends State<_PaymentSheet> {
 
   double _total(AppSession s) => double.tryParse(s.currentOrder?.grandTotal ?? '') ?? 0;
   double _paid() => _splits.fold(0, (sum, p) => sum + p.amount);
-  double _remaining(AppSession s) => _round2(_total(s) - _paid());
+  double _paise(AppSession s) => _round2(_total(s) - _total(s).floorToDouble());
+
+  /// The most this sale may waive: the merchant's limit, and never the whole bill.
+  double _waiveLimit(AppSession s) => _round2(s.roundOffMax < _total(s) - 0.01 ? s.roundOffMax : _total(s) - 0.01);
+
+  /// What this sale waives (0 when round-off is off, or the amount is over the limit).
+  double _waive(AppSession s) {
+    if (s.roundOffMax <= 0 || !_roundOn) return 0;
+    final w = _round2(_customWaive ?? _paise(s));
+    return w > 0 && w <= _waiveLimit(s) + 0.004 ? w : 0;
+  }
+
+  double _remaining(AppSession s) => _round2(_total(s) - _waive(s) - _paid());
+
+  Future<void> _otherWaive(AppSession s) async {
+    final text = await _promptText(context,
+        title: 'Round off — amount to waive (up to ${formatRupeesNum(_waiveLimit(s))})', label: 'Amount waived (${PosCurrency.symbol})', confirm: 'Apply');
+    if (text == null || !mounted) return;
+    final v = double.tryParse(text.trim());
+    setState(() {
+      if (v == null || v < 0 || v > _waiveLimit(s) + 0.004) {
+        _message = 'Enter an amount up to ${formatRupeesNum(_waiveLimit(s))}';
+        return;
+      }
+      _customWaive = _round2(v);
+      _roundOn = v > 0;
+      _message = null;
+    });
+  }
 
   String? _tenderDisabledReason(AppSession s, String method) {
     if (method == 'credit') {
@@ -100,9 +147,10 @@ class _PaymentSheetState extends State<_PaymentSheet> {
 
   void _complete(AppSession s) {
     final due = _remaining(s);
+    final roundOff = -_waive(s);
     if (_splitMode) {
       if (due > 0.004) return;
-      Navigator.pop(context, List<PaymentInput>.of(_splits));
+      Navigator.pop(context, _PaymentResult(List<PaymentInput>.of(_splits), roundOff: roundOff));
       return;
     }
     if (_method == 'cash') {
@@ -110,7 +158,10 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       if (tendered + 0.004 < due) return;
     }
     final ref = _referenceController.text.trim();
-    Navigator.pop(context, [PaymentInput(method: _method, amount: due, reference: (_method == 'card' || _method == 'upi') && ref.isNotEmpty ? ref : null)]);
+    Navigator.pop(
+        context,
+        _PaymentResult([PaymentInput(method: _method, amount: due, reference: (_method == 'card' || _method == 'upi') && ref.isNotEmpty ? ref : null)],
+            roundOff: roundOff));
   }
 
   void _addSplit(AppSession s) {
@@ -173,6 +224,26 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 key: const Key('amount-due'),
                 style: theme.textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
           ]),
+          if (session.roundOffMax > 0 && _total(session) > 0) ...[
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              FilterChip(
+                key: const Key('round-off'),
+                avatar: const Icon(Icons.price_change_outlined, size: 18),
+                label: Text(_waive(session) > 0 ? 'Round off −${formatRupeesNum(_waive(session))}' : 'Round off'),
+                selected: _waive(session) > 0,
+                onSelected: (_customWaive ?? _paise(session)) > 0 || _roundOn
+                    ? (on) => setState(() {
+                          _roundOn = on;
+                          if (!on) _customWaive = null;
+                        })
+                    : null,
+              ),
+              TextButton(onPressed: () => _otherWaive(session), child: const Text('Other amount')),
+              if (_waive(session) > 0)
+                Text('Bill ${formatRupeesNum(_total(session))}', key: const Key('bill-total'), style: theme.textTheme.bodySmall),
+            ]),
+          ],
           if (live) ...[
             const SizedBox(height: 12),
             _BeforeYouCharge(

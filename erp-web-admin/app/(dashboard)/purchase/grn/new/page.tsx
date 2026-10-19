@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { currencySymbol } from "@/lib/currency";
 export default function NewGRNPage() {
   const router = useRouter();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -80,11 +81,11 @@ export default function NewGRNPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="freight">Freight (₹)</Label>
+                <Label htmlFor="freight">Freight ({currencySymbol()})</Label>
                 <Input id="freight" type="number" min="0" step="0.01" value={freight} onChange={(e) => setFreight(e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="other">Other charges (₹)</Label>
+                <Label htmlFor="other">Other charges ({currencySymbol()})</Label>
                 <Input id="other" type="number" min="0" step="0.01" value={otherCharges} onChange={(e) => setOtherCharges(e.target.value)} />
               </div>
             </div>

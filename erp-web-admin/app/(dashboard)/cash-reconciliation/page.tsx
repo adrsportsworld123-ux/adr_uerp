@@ -25,6 +25,7 @@ import { Field, Panel } from "@/components/data/panel";
 import { BranchSelect, useMyBranches } from "@/components/data/branch-select";
 import { StatusChip } from "@/components/data/status-chip";
 
+import { currencySymbol } from "@/lib/currency";
 const DENOMINATIONS = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
 
 export default function CashReconciliationPage() {
@@ -109,7 +110,7 @@ function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; de
           <Field label="Date" htmlFor="date">
             <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-40" />
           </Field>
-          <Field label="Opening float (₹)" htmlFor="openingFloat" className="w-40">
+          <Field label={`Opening float (${currencySymbol()})`} htmlFor="openingFloat" className="w-40">
             <Input id="openingFloat" type="number" min="0" step="0.01" value={openingFloat} onChange={(e) => setOpeningFloat(e.target.value)} />
           </Field>
         </div>
@@ -122,7 +123,7 @@ function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; de
         <div className="grid grid-cols-5 gap-3">
           {DENOMINATIONS.map((d) => (
             <div key={d} className="flex flex-col gap-1">
-              <Label className="text-xs">₹{d}</Label>
+              <Label className="text-xs">{currencySymbol()}{d}</Label>
               <Input type="number" min="0" step="1" className="h-8" value={counts[d] ?? ""} onChange={(e) => setCounts({ ...counts, [d]: e.target.value })} />
             </div>
           ))}

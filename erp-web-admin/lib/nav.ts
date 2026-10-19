@@ -122,6 +122,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/bank-reconciliation", label: "Bank Reconciliation" },
       { href: "/cash-reconciliation", label: "Cash Reconciliation" },
       { href: "/payment-gateway-reconciliation", label: "Payment Gateway Reconciliation" },
+      { href: "/tax-settings", label: "Tax Settings" },
       { href: "/accounting/settings", label: "Accounting Settings" },
     ],
   },

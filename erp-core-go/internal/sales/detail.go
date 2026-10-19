@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +16,7 @@ import (
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/taxes"
 )
 
 // Phase 14: the back office's view of one sale and its one post-sale
@@ -34,8 +33,13 @@ type detailLine struct {
 	UnitPrice        string  `json:"unit_price"`
 	DiscountAmount   string  `json:"discount_amount"`
 	TaxableValue     string  `json:"taxable_value"`
-	TaxRate          string  `json:"tax_rate"` // effective %, from the line's own figures
+	TaxRate          string  `json:"tax_rate"` // GST %, as the line was written (migrations/060)
 	TaxAmount        string  `json:"tax_amount"`
+	CGSTAmount       string  `json:"cgst_amount"`
+	SGSTAmount       string  `json:"sgst_amount"`
+	IGSTAmount       string  `json:"igst_amount"`
+	CessAmount       string  `json:"cess_amount"`
+	HSNCode          string  `json:"hsn_code"`
 	LineTotal        string  `json:"line_total"`
 	PriceIncludesTax bool    `json:"price_includes_tax"`
 	OpenPrice        bool    `json:"open_price"`
@@ -48,6 +52,8 @@ type taxBucket struct {
 	Tax     string `json:"tax_amount"`
 	CGST    string `json:"cgst"`
 	SGST    string `json:"sgst"`
+	IGST    string `json:"igst"`
+	Cess    string `json:"cess"`
 }
 
 type detailPayment struct {
@@ -107,6 +113,7 @@ type orderDetail struct {
 	CustomerID      *string          `json:"customer_id"`
 	CustomerName    *string          `json:"customer_name"`
 	CustomerPhone   *string          `json:"customer_phone"`
+	CustomerGSTIN   *string          `json:"customer_gstin"`
 	CreatedAt       string           `json:"created_at"`
 	FinalizedAt     *string          `json:"finalized_at"`
 	DeviceCreatedAt *string          `json:"device_created_at"`
@@ -114,10 +121,13 @@ type orderDetail struct {
 	DiscountTotal   string           `json:"discount_total"`
 	TaxTotal        string           `json:"tax_total"`
 	GrandTotal      string           `json:"grand_total"`
+	RoundOff        string           `json:"round_off"`     // checkout waiver, signed
+	PayableTotal    string           `json:"payable_total"` // grand_total + round_off
 	CreditAmount    string           `json:"credit_amount"`
 	CreditPaid      string           `json:"credit_paid"`
 	Lines           []detailLine     `json:"lines"`
 	TaxSummary      []taxBucket      `json:"tax_summary"`
+	TaxBreakup      *taxes.Breakup   `json:"tax_breakup"`
 	Payments        []detailPayment  `json:"payments"`
 	Discounts       []detailDiscount `json:"discounts"`
 	Returns         []returnResponse `json:"returns"`
@@ -134,10 +144,11 @@ func ts(t *time.Time) *string {
 }
 
 // OrderDetail: GET /sales/orders/{id}/detail. Any signed-in user, like the
-// receipt. The tax summary groups lines by their effective rate (tax ÷
-// taxable value, from each line's own stored figures, so a later change to
-// a tax slab doesn't rewrite an old sale) and splits each bucket into equal
-// CGST and SGST, the intra-state split of a counter sale.
+// receipt. The tax summary groups lines by the GST rate each line was
+// written at (sales_order_lines.tax_rate, so a later change to a tax slab
+// doesn't rewrite an old sale) and splits each into CGST + SGST, or IGST
+// for an inter-state sale — internal/taxes, the same split the invoice
+// prints (migrations/060).
 func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -151,8 +162,9 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 		var finalized, device *time.Time
 		if err := tx.QueryRow(ctx, `
 			SELECT so.id, so.order_number, so.status, so.channel, so.branch_id, b.name, t.name, u.name,
-			       so.customer_id::text, c.name, c.phone, so.created_at, so.finalized_at, so.device_created_at,
+			       so.customer_id::text, c.name, c.phone, NULLIF(c.gstin, ''), so.created_at, so.finalized_at, so.device_created_at,
 			       so.subtotal::text, so.discount_total::text, so.tax_total::text, so.grand_total::text,
+			       so.round_off::text, (so.grand_total + so.round_off)::text,
 			       so.credit_amount::text, so.credit_paid::text
 			FROM sales_orders so
 			JOIN branches b ON b.id = so.branch_id
@@ -160,8 +172,8 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 			JOIN users u ON u.id = so.cashier_id
 			LEFT JOIN customers c ON c.id = so.customer_id
 			WHERE so.id::text = $1`, orderID).Scan(&d.OrderID, &d.OrderNumber, &d.Status, &d.Channel, &d.BranchID, &d.BranchName,
-			&d.TerminalName, &d.CashierName, &d.CustomerID, &d.CustomerName, &d.CustomerPhone, &created, &finalized, &device,
-			&d.Subtotal, &d.DiscountTotal, &d.TaxTotal, &d.GrandTotal, &d.CreditAmount, &d.CreditPaid); err != nil {
+			&d.TerminalName, &d.CashierName, &d.CustomerID, &d.CustomerName, &d.CustomerPhone, &d.CustomerGSTIN, &created, &finalized, &device,
+			&d.Subtotal, &d.DiscountTotal, &d.TaxTotal, &d.GrandTotal, &d.RoundOff, &d.PayableTotal, &d.CreditAmount, &d.CreditPaid); err != nil {
 			return err
 		}
 		d.CreatedAt = *ts(&created)
@@ -172,8 +184,12 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 			SELECT l.id, pv.sku, p.name, l.quantity::text,
 			       COALESCE((SELECT sum(rl.quantity) FROM sales_return_lines rl WHERE rl.sales_order_line_id = l.id), 0)::text,
 			       l.unit_price::text, l.discount_amount::text, l.taxable_value::text, l.taxable_value, l.tax_amount::text, l.tax_amount,
-			       l.line_total::text, l.price_includes_tax, l.open_price, au.name
+			       l.line_total::text, l.price_includes_tax, l.open_price, au.name,
+			       COALESCE(l.tax_rate, 0), l.cess_amount, COALESCE(p.hsn_code, ''),
+			       gst_cgst(l.tax_amount, l.cess_amount, so.inter_state)::text, gst_sgst(l.tax_amount, l.cess_amount, so.inter_state)::text,
+			       gst_igst(l.tax_amount, l.cess_amount, so.inter_state)::text, l.cess_amount::text
 			FROM sales_order_lines l
+			JOIN sales_orders so ON so.id = l.sales_order_id
 			JOIN product_variants pv ON pv.id = l.variant_id
 			JOIN products p ON p.id = pv.product_id
 			LEFT JOIN users au ON au.id = l.price_approved_by
@@ -181,48 +197,41 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		type acc struct{ taxable, tax float64 }
-		buckets := map[float64]*acc{}
 		d.Lines = []detailLine{}
+		var taxLines []taxes.Line
 		for rows.Next() {
 			var l detailLine
-			var taxable, tax float64
+			var taxable, tax, rate, cess float64
 			if err := rows.Scan(&l.LineID, &l.SKU, &l.ProductName, &l.Quantity, &l.ReturnedQuantity, &l.UnitPrice, &l.DiscountAmount,
-				&l.TaxableValue, &taxable, &l.TaxAmount, &tax, &l.LineTotal, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy); err != nil {
+				&l.TaxableValue, &taxable, &l.TaxAmount, &tax, &l.LineTotal, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy,
+				&rate, &cess, &l.HSNCode, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount); err != nil {
 				rows.Close()
 				return err
 			}
-			rate := 0.0
-			if taxable > 0 {
-				// Stored amounts are rounded to paise, so the quotient is
-				// near, not on, the slab rate: snap to the nearest 0.25%.
-				rate = math.Round(tax/taxable*100*4) / 4
-			}
 			l.TaxRate = fmt.Sprintf("%.2f", rate)
-			if buckets[rate] == nil {
-				buckets[rate] = &acc{}
-			}
-			buckets[rate].taxable += taxable
-			buckets[rate].tax += tax
+			taxLines = append(taxLines, taxes.Line{Rate: rate, Taxable: taxable, Tax: tax, Cess: cess})
 			d.Lines = append(d.Lines, l)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		rates := make([]float64, 0, len(buckets))
-		for k := range buckets {
-			rates = append(rates, k)
+		var pos string
+		var inter bool
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(place_of_supply, ''), inter_state FROM sales_orders WHERE id::text = $1`, orderID).
+			Scan(&pos, &inter); err != nil {
+			return err
 		}
-		sort.Float64s(rates)
+		settings, err := taxes.Load(ctx, tx, d.BranchID)
+		if err != nil {
+			return err
+		}
+		b := taxes.Build(settings, inter, pos, taxLines)
+		d.TaxBreakup = &b
 		d.TaxSummary = []taxBucket{}
-		for _, rate := range rates {
-			a := buckets[rate]
-			half := round2(a.tax / 2)
-			d.TaxSummary = append(d.TaxSummary, taxBucket{
-				Rate: fmt.Sprintf("%.2f", rate), Taxable: fmt.Sprintf("%.2f", a.taxable), Tax: fmt.Sprintf("%.2f", a.tax),
-				CGST: fmt.Sprintf("%.2f", half), SGST: fmt.Sprintf("%.2f", round2(a.tax-half)),
-			})
+		for _, s := range b.Summary {
+			d.TaxSummary = append(d.TaxSummary, taxBucket{Rate: s.Rate, Taxable: s.Taxable, Tax: s.Tax,
+				CGST: s.CGST, SGST: s.SGST, IGST: s.IGST, Cess: s.Cess})
 		}
 
 		// Payments, each with its corrections.

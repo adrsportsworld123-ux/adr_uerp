@@ -154,11 +154,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 children: [
                   Expanded(
                     child: Text([
-                      '${line.productName}\n${line.sku} · ${line.quantity} × ₹${line.unitPrice}',
+                      '${line.productName}\n${line.sku} · ${line.quantity} × ${formatRupees(line.unitPrice)}',
                       if (line.openPrice) line.priceApprovedBy == null ? ' · open price' : ' · open price, approved by ${line.priceApprovedBy}',
                     ].join()),
                   ),
-                  Text('₹${line.lineTotal}'),
+                  Text(formatRupees(line.lineTotal)),
                 ],
               ),
             ),
@@ -166,8 +166,26 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           _totalRow('Subtotal', r.subtotal),
           if (double.tryParse(r.discountTotal) != null && double.parse(r.discountTotal) > 0)
             _totalRow('Discount', '-${r.discountTotal}'),
-          _totalRow('Tax', r.taxTotal),
-          _totalRow('Total', r.grandTotal, emphasize: true),
+          if (r.taxBreakup?.rows.isNotEmpty == true)
+            for (final t in r.taxBreakup!.rows) _totalRow(t.label, t.amount)
+          else
+            _totalRow('Tax', r.taxTotal),
+          if (r.taxBreakup != null && r.taxBreakup!.split && r.taxBreakup!.placeOfSupply.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Text(
+                'Place of supply ${r.taxBreakup!.placeOfSupply} – ${r.taxBreakup!.placeOfSupplyName}'
+                '${r.taxBreakup!.interState ? ' · inter-state' : ''}',
+                key: const Key('receipt-place-of-supply'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          if (r.hasRoundOff) ...[
+            _totalRow('Total', r.grandTotal),
+            _totalRow('Round off', r.roundOff.replaceFirst('-', ''), sign: '−', key: const Key('receipt-round-off')),
+            _totalRow('Net payable', r.payableTotal, emphasize: true),
+          ] else
+            _totalRow('Total', r.grandTotal, emphasize: true),
           const SizedBox(height: 16),
           for (final p in r.payments)
             _totalRow(p.method.toUpperCase(), p.amount),
@@ -234,13 +252,13 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     );
   }
 
-  Widget _totalRow(String label, String value, {bool emphasize = false}) {
+  Widget _totalRow(String label, String value, {bool emphasize = false, String sign = '', Key? key}) {
     final style = emphasize ? const TextStyle(fontWeight: FontWeight.bold, fontSize: 18) : null;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [Text(label, style: style), Text('₹$value', style: style)],
+        children: [Text(label, style: style), Text('$sign${formatRupees(value)}', key: key, style: style)],
       ),
     );
   }

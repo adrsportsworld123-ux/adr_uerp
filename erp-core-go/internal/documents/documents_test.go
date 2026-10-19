@@ -7,8 +7,11 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"erp-core-go/internal/taxes"
 )
 
 func TestAmount(t *testing.T) {
@@ -135,6 +138,20 @@ func TestRender(t *testing.T) {
 			Supplier: Supplier{Name: "SG Sports"}, Lines: []PurchaseLine{{Name: "Ball", Quantity: "3.000", UnitCost: "200.00", Total: "600.00"}},
 			Grand: "600.00"}), FormatA4},
 	}
+	// GST split invoices: intra-state (CGST + SGST) and inter-state
+	// (IGST) with mixed rates, on both papers.
+	docs["receipt-gst-intra"] = struct {
+		d Document
+		f Format
+	}{SaleReceipt(lh, gstSale(false)), FormatA4}
+	docs["receipt-gst-inter"] = struct {
+		d Document
+		f Format
+	}{SaleReceipt(lh, gstSale(true)), FormatA4}
+	docs["receipt-gst-thermal"] = struct {
+		d Document
+		f Format
+	}{SaleReceipt(lh, gstSale(false)), FormatThermal}
 	// The same documents with no letterhead customisation at all.
 	docs["receipt-plain-thermal"] = struct {
 		d Document
@@ -177,5 +194,142 @@ func TestReceiptTitleAndStamp(t *testing.T) {
 	d = SaleReceipt(Letterhead{}, SaleInput{Status: "voided"})
 	if d.Title != "RECEIPT" || d.Stamp != "VOIDED" {
 		t.Errorf("got %q / %q", d.Title, d.Stamp)
+	}
+}
+
+func TestReceiptRoundOff(t *testing.T) {
+	d := SaleReceipt(Letterhead{}, SaleInput{Status: "finalized", Subtotal: "2299.00", Tax: "413.82", Grand: "2712.82", RoundOff: "-0.82", Payable: "2712.00"})
+	var labels []string
+	for _, tl := range d.Totals {
+		labels = append(labels, tl.Label+"="+tl.Value)
+	}
+	got := strings.Join(labels, ", ")
+	if got != "Subtotal=₹2,299.00, Tax=₹413.82, Total=₹2,712.82, Round off=-₹0.82, Net payable=₹2,712.00" {
+		t.Errorf("got %s", got)
+	}
+	d = SaleReceipt(Letterhead{}, SaleInput{Status: "finalized", Subtotal: "100.00", Tax: "0.00", Grand: "100.00", RoundOff: "0.00", Payable: "100.00"})
+	if last := d.Totals[len(d.Totals)-1]; last.Label != "Total" || !last.Bold {
+		t.Errorf("no round-off should end on a bold Total, got %+v", d.Totals)
+	}
+}
+
+// gstSale is a two-rate sale (18% and 5%) to a B2B customer, split for an
+// intra- or inter-state supply.
+func gstSale(inter bool) SaleInput {
+	lines := []taxes.Line{{Rate: 18, Taxable: 2000, Tax: 360}, {Rate: 5, Taxable: 24.29, Tax: 1.21}}
+	b := taxes.Build(taxes.Settings{Regime: taxes.RegimeGSTSplit, TaxLabel: "GST"}, inter, "29", lines)
+	in := SaleInput{OrderNumber: "BLR01-000124", Status: "finalized", Date: "19 Oct 2026, 17:20", Cashier: "Ravi",
+		CustomerName: "Sharma Traders", CustomerGSTIN: "29ABCDE1234F1Z5", Breakup: &b,
+		Subtotal: "2024.29", Discount: "0.00", Tax: "361.21", Grand: "2385.50"}
+	for i, l := range lines {
+		a := taxes.SplitLine(l.Tax, 0, inter)
+		in.Lines = append(in.Lines, SaleLine{Name: []string{"Cricket bat", "SS medal"}[i], SKU: "SKU-" + itoa(i+1),
+			Quantity: "1.000", UnitPrice: []string{"2000.00", "25.50"}[i], Discount: "0.00",
+			Tax: []string{"360.00", "1.21"}[i], Total: []string{"2360.00", "25.50"}[i],
+			LineTax: LineTax{HSN: "9506", Rate: []string{"18.00", "5.00"}[i], Taxable: []string{"2000.00", "24.29"}[i],
+				CGST: money2(a.CGST), SGST: money2(a.SGST), IGST: money2(a.IGST)}})
+	}
+	return in
+}
+
+func money2(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
+
+func TestGSTInvoiceLayout(t *testing.T) {
+	intra := SaleReceipt(Letterhead{GSTIN: "29AAACA1234A1Z5"}, gstSale(false))
+	var cols []string
+	for _, c := range intra.Columns {
+		cols = append(cols, c.Title)
+	}
+	if got := strings.Join(cols, "|"); got != "#|Item|Qty|Rate|Disc.|Taxable|GST %|CGST|SGST|Amount" {
+		t.Errorf("intra columns %s", got)
+	}
+	var totals []string
+	for _, tl := range intra.Totals {
+		totals = append(totals, tl.Label+"="+tl.Value)
+	}
+	if got := strings.Join(totals, ", "); got != "Subtotal=₹2,024.29, CGST=₹180.61, SGST=₹180.60, Total=₹2,385.50" {
+		t.Errorf("intra totals %s", got)
+	}
+	if intra.TaxTable == nil || len(intra.TaxTable.Rows) != 2 || intra.TaxTable.Rows[1][0] != "18% (9 + 9)" {
+		t.Errorf("intra summary %+v", intra.TaxTable)
+	}
+	if len(intra.Meta) < 2 || intra.Meta[1] != [2]string{"Place of supply", "29 – Karnataka"} {
+		t.Errorf("meta %+v", intra.Meta)
+	}
+	if !strings.Contains(intra.Rows[0].Cells[1], "HSN 9506") || intra.Party == nil || intra.Party.Lines[0] != "GSTIN: 29ABCDE1234F1Z5" {
+		t.Errorf("item cell %q / party %+v", intra.Rows[0].Cells[1], intra.Party)
+	}
+
+	inter := SaleReceipt(Letterhead{}, gstSale(true))
+	cols = cols[:0]
+	for _, c := range inter.Columns {
+		cols = append(cols, c.Title)
+	}
+	if got := strings.Join(cols, "|"); got != "#|Item|Qty|Rate|Disc.|Taxable|GST %|IGST|Amount" {
+		t.Errorf("inter columns %s", got)
+	}
+	if inter.Totals[1] != (Total{Label: "IGST", Value: "₹361.21"}) {
+		t.Errorf("inter totals %+v", inter.Totals)
+	}
+
+	// A single-tax merchant: one column and one total under its own label.
+	b := taxes.Build(taxes.Settings{Regime: taxes.RegimeSingle, TaxLabel: "VAT"}, false, "", []taxes.Line{{Rate: 5, Taxable: 100, Tax: 5}})
+	vat := SaleReceipt(Letterhead{}, SaleInput{Status: "finalized", Breakup: &b, Subtotal: "100.00", Tax: "5.00", Grand: "105.00",
+		Lines: []SaleLine{{Name: "Ball", Quantity: "1.000", UnitPrice: "100.00", Discount: "0.00", Tax: "5.00", Total: "105.00"}}})
+	if vat.Columns[5].Title != "VAT" || vat.Totals[1] != (Total{Label: "VAT @ 5%", Value: "₹5.00"}) || len(vat.Meta) != 1 {
+		t.Errorf("single regime %+v / %+v / %+v", vat.Columns, vat.Totals, vat.Meta)
+	}
+}
+
+func TestCurrencyLocalize(t *testing.T) {
+	usd := taxes.Currency{Code: "USD", Symbol: "$"}
+	for in, want := range map[string]string{
+		"₹1,23,456.50":               "$123,456.50",
+		"−₹350.00":                   "−$350.00",
+		"-₹0.82":                     "-$0.82",
+		"12,34,567.00":               "1,234,567.00",
+		"1 × 2,299.00  (−350.00)":    "1 × 2,299.00  (−350.00)",
+		"Reason: damaged":            "Reason: damaged",
+		"18% (9 + 9)":                "18% (9 + 9)",
+		"Refunded by Cash ₹2,712.82": "Refunded by Cash $2,712.82",
+	} {
+		if got := convertMoney(in, usd); got != want {
+			t.Errorf("convertMoney(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := convertMoney("₹1,000.00", taxes.Currency{Code: "AED", Symbol: "AED"}); got != "AED 1,000.00" {
+		t.Errorf("letter symbol: %q", got)
+	}
+	// An INR document renders untouched; a USD one is localized end to end.
+	d := SaleReceipt(Letterhead{}, gstSale(false))
+	l := localize(d, usd)
+	if l.Totals[len(l.Totals)-1].Value != "$2,385.50" || d.Totals[len(d.Totals)-1].Value != "₹2,385.50" {
+		t.Errorf("localize totals: %+v / original %+v", l.Totals, d.Totals)
+	}
+	if _, err := Render(Letterhead{Name: "Acme", Currency: usd}, d, FormatA4); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreditNoteLayout(t *testing.T) {
+	sale := gstSale(true)
+	d := CreditNote(Letterhead{}, CreditNoteInput{Number: "RET-1", Date: "19 Oct 2026", InvoiceNumber: sale.OrderNumber, InvoiceDate: "18 Oct 2026",
+		Reason: "Damaged", RefundMethod: "upi", CustomerName: "Sharma Traders", CustomerGSTIN: "29ABCDE1234F1Z5",
+		Lines: sale.Lines, Taxable: "2024.29", Tax: "361.21", RoundOff: "0.50", Refund: "2385.00", Breakup: sale.Breakup})
+	if d.Title != "CREDIT NOTE" || d.Meta[0] != [2]string{"Against invoice", sale.OrderNumber} {
+		t.Fatalf("header %q %+v", d.Title, d.Meta)
+	}
+	var totals []string
+	for _, tl := range d.Totals {
+		totals = append(totals, tl.Label+"="+tl.Value)
+	}
+	if got := strings.Join(totals, ", "); got != "Taxable value=₹2,024.29, IGST=₹361.21, Round off returned=−₹0.50, Refund=₹2,385.00" {
+		t.Errorf("totals %s", got)
+	}
+	if d.TaxTable == nil || len(d.Payments) != 1 || d.Payments[0][0] != "Refunded by UPI" {
+		t.Errorf("summary / payments %+v %+v", d.TaxTable, d.Payments)
+	}
+	if _, err := Render(Letterhead{Name: "Acme"}, d, FormatThermal); err != nil {
+		t.Fatal(err)
 	}
 }

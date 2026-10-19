@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { DownloadPdfButton } from "@/components/data/document-actions";
 
+import { rupees } from "@/lib/format";
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
   draft: "outline",
   completed: "default",
@@ -64,7 +65,7 @@ export default function GRNListPage() {
                     <span className="text-xs text-muted-foreground">Direct</span>
                   )}
                 </TableCell>
-                <TableCell>₹{g.grand_total}</TableCell>
+                <TableCell>{rupees(g.grand_total)}</TableCell>
                 <TableCell>{new Date(g.created_at).toLocaleString()}</TableCell>
                 <TableCell className="flex items-center gap-2">
                   <Link href={`/purchase/grn/${g.grn_id}`} className="text-sm underline">

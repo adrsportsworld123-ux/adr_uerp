@@ -27,6 +27,7 @@ import { SearchSelect, categoryOption } from "@/components/data/search-select";
 import { DaysOfWeekPicker, describeWhen, fromLocalInput, toLocalInput } from "@/components/pricing/schedule-fields";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { currencySymbol } from "@/lib/currency";
 export default function PromotionsPage() {
   return (
     <div className="flex max-w-6xl flex-col gap-6">
@@ -594,7 +595,7 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
   if (p.promoType === "fixed") {
     return (
       <div className="flex w-40 flex-col gap-2">
-        <Label htmlFor="valueAmount">Amount off (₹) *</Label>
+        <Label htmlFor="valueAmount">Amount off ({currencySymbol()}) *</Label>
         <Input id="valueAmount" type="number" min="0.01" step="0.01" required value={p.valueAmount} onChange={(e) => p.setValueAmount(e.target.value)} />
       </div>
     );
@@ -657,7 +658,7 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
   return (
     <div className="flex flex-wrap items-end gap-4">
       <div className="flex w-40 flex-col gap-2">
-        <Label htmlFor="minPurchaseAmount">Min purchase (₹) *</Label>
+        <Label htmlFor="minPurchaseAmount">Min purchase ({currencySymbol()}) *</Label>
         <Input id="minPurchaseAmount" type="number" min="0.01" step="0.01" required value={p.minPurchaseAmount} onChange={(e) => p.setMinPurchaseAmount(e.target.value)} />
       </div>
       <div className="flex w-44 flex-col gap-2">
@@ -665,13 +666,13 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
         <Select
           value={p.minValueMode}
           onValueChange={(v) => p.setMinValueMode((v as typeof p.minValueMode) ?? "discount_amount")}
-          items={{ discount_amount: "Flat amount (₹)", discount_pct: "Percent (%)" }}
+          items={{ discount_amount: `Flat amount (${currencySymbol()})`, discount_pct: "Percent (%)" }}
         >
           <SelectTrigger aria-label="Discount as">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="discount_amount">Flat amount (₹)</SelectItem>
+            <SelectItem value="discount_amount">Flat amount ({currencySymbol()})</SelectItem>
             <SelectItem value="discount_pct">Percent (%)</SelectItem>
           </SelectContent>
         </Select>
@@ -923,13 +924,13 @@ function CouponDialog({ coupon, branches, onClose, onSaved }: { coupon: Coupon |
             </Select>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="couponValue">{promoType === "percent" ? "Percent off *" : "Amount off (₹) *"}</Label>
+            <Label htmlFor="couponValue">{promoType === "percent" ? "Percent off *" : `Amount off (${currencySymbol()}) *`}</Label>
             <Input id="couponValue" type="number" min="0.01" max={promoType === "percent" ? 100 : undefined} step="0.01" required value={value} onChange={(e) => setValue(e.target.value)} />
           </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="minPurchase">Min purchase (₹)</Label>
+            <Label htmlFor="minPurchase">Min purchase ({currencySymbol()})</Label>
             <Input id="minPurchase" type="number" min="0" step="0.01" value={minPurchase} onChange={(e) => setMinPurchase(e.target.value)} placeholder="None" />
           </div>
           <div className="flex flex-col gap-2">
@@ -1038,11 +1039,11 @@ function LoyaltySettingsSection() {
         </p>
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex w-48 flex-col gap-2">
-            <Label htmlFor="earnRate">₹ spent per point earned</Label>
+            <Label htmlFor="earnRate">{currencySymbol()} spent per point earned</Label>
             <Input id="earnRate" type="number" min="0.01" step="0.01" value={earnRate} onChange={(e) => setEarnRate(e.target.value)} />
           </div>
           <div className="flex w-48 flex-col gap-2">
-            <Label htmlFor="redeemRate">Points per ₹1 redeemed</Label>
+            <Label htmlFor="redeemRate">Points per {currencySymbol()}1 redeemed</Label>
             <Input id="redeemRate" type="number" min="0.01" step="0.01" value={redeemRate} onChange={(e) => setRedeemRate(e.target.value)} />
           </div>
           <div className="flex w-48 flex-col gap-2">

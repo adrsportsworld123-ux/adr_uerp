@@ -13,6 +13,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { rupees } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 const SEGMENT_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   vip: "default",
   regular: "secondary",
@@ -155,7 +157,7 @@ export default function CustomerDetailPage() {
                 </>
               )}
               <dt className="text-muted-foreground">Total spend</dt>
-              <dd>₹{customer.total_spend}</dd>
+              <dd>{rupees(customer.total_spend)}</dd>
               <dt className="text-muted-foreground">Transactions</dt>
               <dd>{customer.transaction_count}</dd>
               <dt className="text-muted-foreground">Last purchase</dt>
@@ -237,7 +239,7 @@ export default function CustomerDetailPage() {
                   <TableCell className="font-mono text-xs">{o.order_number}</TableCell>
                   <TableCell>{o.branch_name}</TableCell>
                   <TableCell>{o.finalized_at}</TableCell>
-                  <TableCell>₹{o.grand_total}</TableCell>
+                  <TableCell>{rupees(o.grand_total)}</TableCell>
                 </TableRow>
               ))}
               {customer.recent_orders.length === 0 && (
@@ -342,7 +344,7 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
           <div className="flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="creditLimit">Credit limit (₹)</Label>
+                <Label htmlFor="creditLimit">Credit limit ({currencySymbol()})</Label>
                 <Input id="creditLimit" type="number" min="0" step="0.01" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
@@ -381,34 +383,34 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
         ) : (
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <dt className="text-muted-foreground">Credit limit</dt>
-            <dd>₹{credit.credit_limit}</dd>
+            <dd>{rupees(credit.credit_limit)}</dd>
             <dt className="text-muted-foreground">Payment terms</dt>
             <dd>{PAYMENT_TERMS_LABEL[credit.payment_terms] ?? credit.payment_terms}</dd>
             <dt className="text-muted-foreground">Outstanding</dt>
-            <dd className="font-semibold">₹{credit.outstanding_total}</dd>
+            <dd className="font-semibold">{rupees(credit.outstanding_total)}</dd>
           </dl>
         )}
 
         <div className="grid grid-cols-5 gap-2 text-xs border-t pt-3">
           <div className="flex flex-col gap-1">
             <span className="text-muted-foreground">Current</span>
-            <span>₹{credit.aging.current}</span>
+            <span>{rupees(credit.aging.current)}</span>
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-muted-foreground">0-30 days</span>
-            <span>₹{credit.aging.days_0_30}</span>
+            <span>{rupees(credit.aging.days_0_30)}</span>
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-muted-foreground">30-60 days</span>
-            <span>₹{credit.aging.days_30_60}</span>
+            <span>{rupees(credit.aging.days_30_60)}</span>
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-muted-foreground">60-90 days</span>
-            <span>₹{credit.aging.days_60_90}</span>
+            <span>{rupees(credit.aging.days_60_90)}</span>
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-destructive">90+ days</span>
-            <span className="text-destructive">₹{credit.aging.days_90_plus}</span>
+            <span className="text-destructive">{rupees(credit.aging.days_90_plus)}</span>
           </div>
         </div>
 
@@ -428,9 +430,9 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
               <TableRow key={inv.order_id}>
                 <TableCell className="font-mono text-xs">{inv.order_number}</TableCell>
                 <TableCell className="text-xs">{inv.due_date || "—"}</TableCell>
-                <TableCell>₹{inv.credit_amount}</TableCell>
-                <TableCell>₹{inv.credit_paid}</TableCell>
-                <TableCell className="font-medium">₹{inv.outstanding}</TableCell>
+                <TableCell>{rupees(inv.credit_amount)}</TableCell>
+                <TableCell>{rupees(inv.credit_paid)}</TableCell>
+                <TableCell className="font-medium">{rupees(inv.outstanding)}</TableCell>
                 <TableCell>
                   {payingInvoice === inv.order_id ? (
                     <div className="flex gap-1 items-center">

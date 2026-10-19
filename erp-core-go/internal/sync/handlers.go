@@ -8,6 +8,8 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"math"
 	"net/http"
 	"time"
 
@@ -25,6 +27,12 @@ import (
 type Handler struct {
 	DB *db.DB
 }
+
+// maxRoundOff mirrors internal/sales.MaxRoundOff (and the CHECK on
+// sales_orders.round_off): the most a synced sale may have waived.
+const maxRoundOff = 5.0
+
+var errBadRoundOff = errors.New("round_off must be between -5.00 and 0, and less than the bill")
 
 // ---------------------------------------------------------------------
 // POST /sync/push
@@ -60,6 +68,11 @@ type pushOrder struct {
 	DeviceCreatedAt string        `json:"device_created_at"` // RFC3339
 	Lines           []pushLine    `json:"lines"`
 	Payments        []pushPayment `json:"payments"`
+	// RoundOff: a waiver the till gave at checkout, signed (-0.75), as the
+	// online checkout takes it (internal/sales round_off.go). The sale
+	// already happened, so only the hard ceiling is checked, not the
+	// merchant's current setting.
+	RoundOff float64 `json:"round_off"`
 }
 
 type pushRequest struct {
@@ -215,16 +228,23 @@ func (h *Handler) pushOne(ctx context.Context, claims *authn.Claims, o pushOrder
 			}
 		}
 
+		roundOff := math.Round(o.RoundOff*100) / 100
+		if roundOff > 0 || roundOff < -maxRoundOff || -roundOff >= grandTotal {
+			return errBadRoundOff
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE sales_orders SET status = 'finalized', finalized_at = now(),
-			  subtotal = $1, discount_total = $2, tax_total = $3, grand_total = $4
-			WHERE id = $5`, subtotal, discountTotal, taxTotal, grandTotal, orderID); err != nil {
+			  subtotal = $1, discount_total = $2, tax_total = $3, grand_total = $4, round_off = $6
+			WHERE id = $5`, subtotal, discountTotal, taxTotal, grandTotal, orderID, roundOff); err != nil {
 			return err
 		}
 
-		debitLines := make([]accounting.JournalLine, 0, len(o.Payments))
+		debitLines := make([]accounting.JournalLine, 0, len(o.Payments)+1)
 		for _, p := range o.Payments {
 			debitLines = append(debitLines, accounting.JournalLine{AccountCode: accounting.AccountCodeForPaymentMethod(p.Method), Debit: p.Amount})
+		}
+		if roundOff < 0 {
+			debitLines = append(debitLines, accounting.JournalLine{AccountCode: accounting.AccountRoundOff, Debit: -roundOff})
 		}
 		lines := debitLines
 		if netRevenue := subtotal - discountTotal; netRevenue > 0 {

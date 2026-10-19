@@ -16,13 +16,14 @@ import { Column, DataTable } from "@/components/data/data-table";
 import { PageHeader } from "@/components/data/page-header";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
-import { qty } from "@/lib/format";
+import { qty, rupees } from "@/lib/format";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { currencySymbol } from "@/lib/currency";
 function marginClass(pct: number | null) {
   if (pct === null) return "";
   return pct < 0 ? "text-destructive font-medium" : "text-foreground";
@@ -79,18 +80,18 @@ function PricingList() {
     },
     { key: "sku", header: "SKU", cell: ({ variant }) => <span className="font-mono text-xs">{variant.sku}</span> },
     { key: "available", header: "Available", align: "right", cell: ({ variant }) => <StockCell v={variant} /> },
-    { key: "cost", header: "Cost", align: "right", cell: ({ variant }) => <span className="tabular">₹{variant.cost_price}</span> },
-    { key: "mrp", header: "MRP", align: "right", cell: ({ variant }) => <span className="tabular">₹{variant.mrp}</span> },
+    { key: "cost", header: "Cost", align: "right", cell: ({ variant }) => <span className="tabular">{rupees(variant.cost_price)}</span> },
+    { key: "mrp", header: "MRP", align: "right", cell: ({ variant }) => <span className="tabular">{rupees(variant.mrp)}</span> },
     {
       key: "selling",
       header: "Selling",
       align: "right",
       cell: ({ product, variant }) => (
         <div className="flex flex-col leading-tight">
-          <span className="tabular">₹{variant.selling_price}</span>
+          <span className="tabular">{rupees(variant.selling_price)}</span>
           {/* Server-computed (internal/taxcalc) — never derived in JS, see lib/api-client.ts's money note */}
           <span className="text-xs text-muted-foreground">
-            {product.price_includes_tax ? `net ₹${variant.net_selling_price}` : `customer pays ₹${variant.gross_selling_price}`}
+            {product.price_includes_tax ? `net ${rupees(variant.net_selling_price)}` : `customer pays ${rupees(variant.gross_selling_price)}`}
           </span>
         </div>
       ),
@@ -250,7 +251,7 @@ function PriceDialog({ row, onClose, onSaved }: { row: PriceRow; onClose: () => 
       open
       onOpenChange={(o) => !o && onClose()}
       title="Edit selling price"
-      description={`${product.name} · ${variant.sku} · cost ₹${variant.cost_price} · MRP ₹${variant.mrp}`}
+      description={`${product.name} · ${variant.sku} · cost ${rupees(variant.cost_price)} · MRP ${rupees(variant.mrp)}`}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
@@ -264,7 +265,7 @@ function PriceDialog({ row, onClose, onSaved }: { row: PriceRow; onClose: () => 
     >
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-2">
-          <Label htmlFor="sellingPrice">Selling price (₹{product.price_includes_tax ? ", incl. GST" : ""})</Label>
+          <Label htmlFor="sellingPrice">Selling price ({currencySymbol()}{product.price_includes_tax ? ", incl. GST" : ""})</Label>
           <Input id="sellingPrice" type="number" step="0.01" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} className="w-40" autoFocus />
         </div>
         <div className="flex flex-col gap-2">
@@ -474,7 +475,7 @@ function Calculator() {
       <CardContent>
         <form onSubmit={calculate} className="flex gap-2 items-end flex-wrap">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="cost">Cost price (₹)</Label>
+            <Label htmlFor="cost">Cost price ({currencySymbol()})</Label>
             <Input id="cost" type="number" min="0.01" step="0.01" required className="w-32" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
@@ -519,8 +520,8 @@ function Calculator() {
         {error && <p className="text-sm text-destructive mt-2">{error}</p>}
         {result && (
           <p className="text-sm mt-3">
-            Selling price: <span className="font-semibold">₹{result.selling_price}</span>
-            {result.selling_price !== result.net_selling_price && <> (incl. GST; net ₹{result.net_selling_price})</>} — margin{" "}
+            Selling price: <span className="font-semibold">{rupees(result.selling_price)}</span>
+            {result.selling_price !== result.net_selling_price && <> (incl. GST; net {rupees(result.net_selling_price)})</>} — margin{" "}
             {result.margin_pct}%, markup {result.markup_pct}% on the pre-GST price
           </p>
         )}
@@ -652,7 +653,7 @@ function BulkUpdate({ onApplied, categories, brands }: { onApplied: () => void; 
             <Input id="value" type="number" step="0.01" required className="w-28" value={value} onChange={(e) => setValue(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="roundTo">Round to (₹)</Label>
+            <Label htmlFor="roundTo">Round to ({currencySymbol()})</Label>
             <Input id="roundTo" type="number" min="0" step="1" className="w-24" value={roundTo} onChange={(e) => setRoundTo(e.target.value)} placeholder="0" />
           </div>
           <div className="flex flex-col gap-2">
@@ -687,8 +688,8 @@ function BulkUpdate({ onApplied, categories, brands }: { onApplied: () => void; 
                     <TableCell>
                       {it.product_name} <span className="text-muted-foreground">({it.sku})</span>
                     </TableCell>
-                    <TableCell>₹{it.old_price}</TableCell>
-                    <TableCell>₹{it.new_price}</TableCell>
+                    <TableCell>{rupees(it.old_price)}</TableCell>
+                    <TableCell>{rupees(it.new_price)}</TableCell>
                     <TableCell className={it.status === "skipped_negative_margin" ? "text-destructive" : ""}>{it.status}</TableCell>
                   </TableRow>
                 ))}

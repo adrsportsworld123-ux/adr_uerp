@@ -1,6 +1,10 @@
 package documents
 
-import "strings"
+import (
+	"strings"
+
+	"erp-core-go/internal/taxes"
+)
 
 // The two "before the transaction" documents: a purchase order to a
 // supplier and a B2B quotation to a customer. Neither is a tax document,
@@ -67,6 +71,7 @@ func PurchaseOrder(in POInput) Document {
 // QuotationLine is one quotation_lines row.
 type QuotationLine struct {
 	Name, SKU, Quantity, UnitPrice, Tax, Total string
+	LineTax
 }
 
 // Customer is the counterparty block of a quotation.
@@ -108,6 +113,7 @@ type QuotationInput struct {
 	Lines                                        []QuotationLine
 	Subtotal, Tax, Grand                         string
 	Notes                                        string
+	Breakup                                      *taxes.Breakup // nil prints one "GST" column
 }
 
 // Quotation: a draft prints with a DRAFT stamp (it may still change), a
@@ -120,14 +126,19 @@ func Quotation(in QuotationInput) Document {
 		Date:   in.Date,
 		Party:  in.Customer.party(),
 		Meta:   [][2]string{{"Valid until", in.ValidUntil}},
-		Columns: []Column{
+	}
+	d.Meta = append(d.Meta, supplyMeta(in.Breakup)...)
+	if in.Breakup == nil {
+		d.Columns = []Column{
 			{Title: "#", Width: 5},
 			{Title: "Item", Width: 44},
 			{Title: "Qty", Width: 9, Right: true},
 			{Title: "Rate", Width: 13, Right: true},
 			{Title: "GST", Width: 12, Right: true},
 			{Title: "Amount", Width: 14, Right: true},
-		},
+		}
+	} else {
+		d.Columns = append([]Column{{Title: "#", Width: 5}, {Title: "Item", Width: 44}}, itemColumns(in.Breakup, false)...)
 	}
 	if in.PreparedBy != "" {
 		d.Meta = append(d.Meta, [2]string{"Prepared by", in.PreparedBy})
@@ -137,17 +148,18 @@ func Quotation(in QuotationInput) Document {
 		d.Stamp = strings.ToUpper(Label(in.Status))
 	}
 	for i, l := range in.Lines {
-		name := l.Name
-		if l.SKU != "" {
-			name += "\n" + l.SKU
+		cells := []string{itoa(i + 1), itemName(l.Name, l.SKU, l.HSN, in.Breakup)}
+		if in.Breakup == nil {
+			cells = append(cells, Qty(l.Quantity), Amount(l.UnitPrice), Amount(l.Tax), Amount(l.Total))
+		} else {
+			cells = append(cells, itemCells(in.Breakup, false, l.Quantity, l.UnitPrice, "", l.Tax, l.Total, l.LineTax)...)
 		}
-		d.Rows = append(d.Rows, Row{Cells: []string{itoa(i + 1), name, Qty(l.Quantity), Amount(l.UnitPrice), Amount(l.Tax), Amount(l.Total)}})
+		d.Rows = append(d.Rows, Row{Cells: cells})
 	}
-	d.Totals = []Total{
-		{Label: "Subtotal", Value: INR(in.Subtotal)},
-		{Label: "GST", Value: INR(in.Tax)},
-		{Label: "Total", Value: INR(in.Grand), Bold: true},
-	}
+	d.Totals = []Total{{Label: "Subtotal", Value: INR(in.Subtotal)}}
+	d.Totals = append(d.Totals, taxTotals(in.Breakup, "GST", in.Tax)...)
+	d.Totals = append(d.Totals, Total{Label: "Total", Value: INR(in.Grand), Bold: true})
+	d.TaxTable = taxSummary(in.Breakup)
 	d.Notes = Lines(in.Notes)
 	d.Notes = append(d.Notes, "This is a quotation, not a tax invoice. Prices and availability are valid until "+in.ValidUntil+".")
 	return d

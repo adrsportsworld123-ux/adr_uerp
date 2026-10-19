@@ -12,6 +12,11 @@
 // "Discard sale" releases the cart (POST .../release): its stock goes back
 // on sale at once instead of sitting reserved; leaving the page with items
 // in the cart asks first.
+//
+// Round-off (Sales Policy, erp-core-go migrations/059): when the merchant
+// allows it, a small balance can be waived (₹105.75 settled for ₹105), up
+// to their limit. The server checks the limit and records the waiver; the
+// sums here are only for the on-screen amount due.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Ban, Loader2, Minus, Plus, Trash2, UserRound, X } from "lucide-react";
@@ -24,9 +29,11 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PlaceOfSupply, TaxRowsDl } from "@/components/tax/tax-breakup";
 import { PageHeader } from "@/components/data/page-header";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
+import { currencySymbol } from "@/lib/currency";
 type OpenPrice = { min: string; max: string; approval_above: string | null };
 type Payment = { method: string; amount: string; reference: string };
 
@@ -62,6 +69,21 @@ export default function NewSalePage() {
   const [discount, setDiscount] = useState("");
   const [discountReason, setDiscountReason] = useState("");
   const [payments, setPayments] = useState<Payment[]>([{ method: "cash", amount: "", reference: "" }]);
+  // Round-off: the merchant's limit (0 = off) and default, whether this
+  // sale takes it, and an amount the cashier typed (null = the paise).
+  const [roundOffMax, setRoundOffMax] = useState(0);
+  const [roundOn, setRoundOn] = useState(false);
+  const [customWaive, setCustomWaive] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .get<{ round_off_max: string; round_off_auto: boolean }>("/api/v1/sales/settings")
+      .then((st) => {
+        setRoundOffMax(Number(st.round_off_max) || 0);
+        setRoundOn(Number(st.round_off_max) > 0 && st.round_off_auto);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     api
@@ -104,6 +126,7 @@ export default function NewSalePage() {
       setOrder(null);
       setCustomer(null);
       setPayments([{ method: "cash", amount: "", reference: "" }]);
+      setCustomWaive(null);
       setDiscount("");
       setDiscountReason("");
       setCartKey(newKey());
@@ -180,6 +203,21 @@ export default function NewSalePage() {
       );
     });
 
+  // Goods delivered to another state (erp-core-go migrations/061): the
+  // delivery state is the place of supply, so the sale is IGST.
+  const [states, setStates] = useState<{ code: string; name: string }[]>([]);
+  useEffect(() => {
+    api
+      .get<{ states: { code: string; name: string }[] }>("/api/v1/tax/settings")
+      .then((s) => setStates(s.states ?? []))
+      .catch(() => setStates([]));
+  }, []);
+  const setShipTo = (code: string) =>
+    run(async () => {
+      const id = await ensureCart();
+      setOrder(await api.put<CartOrder>(`/api/v1/sales/orders/${id}/place-of-supply`, { state_code: code || null }));
+    });
+
   const attach = (c: Customer) =>
     run(async () => {
       const id = await ensureCart();
@@ -209,8 +247,13 @@ export default function NewSalePage() {
     });
 
   const total = Number(order?.grand_total ?? 0);
+  // The paise of the bill: what "round off" waives unless the cashier types an amount.
+  const paise = Math.round((total - Math.floor(total)) * 100) / 100;
+  const waive = roundOffMax > 0 && roundOn ? Math.round((customWaive !== null ? Number(customWaive) || 0 : paise) * 100) / 100 : 0;
+  const waiveInvalid = waive < 0 || waive > roundOffMax + 0.004 || (waive > 0 && waive >= total);
+  const payable = Math.round((total - waive) * 100) / 100;
   const paid = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  const remaining = Math.round((total - paid) * 100) / 100;
+  const remaining = Math.round((payable - paid) * 100) / 100;
   const creditWithoutCustomer = payments.some((p) => p.method === "credit" && Number(p.amount) > 0) && !customer;
 
   const checkout = () =>
@@ -220,6 +263,7 @@ export default function NewSalePage() {
         payments: payments
           .filter((p) => Number(p.amount) > 0)
           .map((p) => ({ method: p.method, amount: Number(p.amount), reference: p.reference.trim() || undefined })),
+        ...(waive > 0 ? { round_off: -waive } : {}),
       };
       const done = await api.post<CartOrder>(`/api/v1/sales/orders/${oid}/checkout`, body);
       toast.success(`Sale ${done.order_number} completed`);
@@ -419,6 +463,33 @@ export default function NewSalePage() {
             )}
           </div>
 
+          {order?.tax_breakup?.regime !== "single" && states.length > 0 && (
+            <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
+              <Label htmlFor="ship-to" className="text-sm font-semibold">
+                Place of supply
+              </Label>
+              <select
+                id="ship-to"
+                value={order?.ship_to_state ?? ""}
+                disabled={!allowed || busy}
+                onChange={(e) => setShipTo(e.target.value)}
+                className="h-9 rounded-lg border bg-card px-2 text-sm"
+              >
+                <option value="">Customer&apos;s GSTIN state, else this branch</option>
+                {states.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    Delivered to {s.code} – {s.name}
+                  </option>
+                ))}
+              </select>
+              {order?.tax_breakup?.place_of_supply && (
+                <p className="text-xs text-muted-foreground">
+                  <PlaceOfSupply breakup={order.tax_breakup} />
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-semibold">Discount</span>
@@ -435,7 +506,7 @@ export default function NewSalePage() {
                       setDiscount("");
                     }}
                   >
-                    {m === "percent" ? "%" : "₹"}
+                    {m === "percent" ? "%" : `${currencySymbol()}`}
                   </Button>
                 ))}
               </div>
@@ -444,7 +515,7 @@ export default function NewSalePage() {
               {discountMode === "percent" ? (
                 <Input aria-label="Discount percent" className="w-24" type="number" min={0} max={25} step="0.5" placeholder="%" value={discount} onChange={(e) => setDiscount(e.target.value)} />
               ) : (
-                <Input aria-label="Discount amount" className="w-28" type="number" min={0} step="0.01" placeholder="₹" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+                <Input aria-label="Discount amount" className="w-28" type="number" min={0} step="0.01" placeholder={`${currencySymbol()}`} value={discount} onChange={(e) => setDiscount(e.target.value)} />
               )}
               <Input aria-label="Discount reason" placeholder="Reason" value={discountReason} onChange={(e) => setDiscountReason(e.target.value)} />
             </div>
@@ -473,13 +544,58 @@ export default function NewSalePage() {
               <dd className="tabular text-right">{rupees(order?.subtotal ?? 0)}</dd>
               <dt className="text-muted-foreground">Discount</dt>
               <dd className="tabular text-right">{Number(order?.discount_total ?? 0) ? `−${rupees(order!.discount_total)}` : "—"}</dd>
-              <dt className="text-muted-foreground">Tax</dt>
-              <dd className="tabular text-right">{rupees(order?.tax_total ?? 0)}</dd>
-              <dt className="font-semibold">Total</dt>
-              <dd className="tabular text-right text-xl font-semibold" data-testid="sale-total">
+              <TaxRowsDl breakup={order?.tax_breakup} taxTotal={order?.tax_total ?? "0"} />
+              <dt className={waive > 0 ? "text-muted-foreground" : "font-semibold"}>Total</dt>
+              <dd className={waive > 0 ? "tabular text-right" : "tabular text-right text-xl font-semibold"} data-testid="sale-total">
                 {rupees(total)}
               </dd>
+              {waive > 0 && (
+                <>
+                  <dt className="text-muted-foreground">Round off</dt>
+                  <dd className="tabular text-right" data-testid="sale-round-off">
+                    −{rupees(waive)}
+                  </dd>
+                  <dt className="font-semibold">Net payable</dt>
+                  <dd className="tabular text-right text-xl font-semibold" data-testid="sale-payable">
+                    {rupees(payable)}
+                  </dd>
+                </>
+              )}
             </dl>
+            {roundOffMax > 0 && total > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 p-2 text-sm">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={roundOn}
+                    onChange={(e) => {
+                      setRoundOn(e.target.checked);
+                      setCustomWaive(null);
+                    }}
+                  />
+                  Round off
+                </label>
+                {roundOn && (
+                  <>
+                    <span className="text-muted-foreground">waive {currencySymbol()}</span>
+                    <Input
+                      aria-label="Amount waived"
+                      className="h-8 w-20"
+                      type="number"
+                      min={0}
+                      max={roundOffMax}
+                      step="0.01"
+                      value={customWaive ?? paise.toFixed(2)}
+                      aria-invalid={waiveInvalid}
+                      onChange={(e) => setCustomWaive(e.target.value)}
+                    />
+                    <span className={waiveInvalid ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+                      {waiveInvalid ? `Up to ${rupees(Math.min(roundOffMax, total))}` : `up to ${rupees(roundOffMax)}`}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
             <span className="text-sm font-semibold">Payment</span>
             {payments.map((p, i) => (
               <div key={i} className="flex flex-wrap gap-2">
@@ -534,8 +650,12 @@ export default function NewSalePage() {
               </Button>
             </div>
             {creditWithoutCustomer && <p className="text-xs text-destructive">A credit payment needs a customer.</p>}
-            <Button size="lg" disabled={!allowed || !order?.lines?.length || busy || Math.abs(remaining) > 0.004 || creditWithoutCustomer} onClick={checkout}>
-              Complete sale · {rupees(total)}
+            <Button
+              size="lg"
+              disabled={!allowed || !order?.lines?.length || busy || Math.abs(remaining) > 0.004 || creditWithoutCustomer || waiveInvalid}
+              onClick={checkout}
+            >
+              Complete sale · {rupees(payable)}
             </Button>
           </div>
         </div>

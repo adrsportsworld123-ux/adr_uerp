@@ -24,6 +24,7 @@ import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 import { DeleteDocumentButton } from "@/components/purchase/delete-document-dialog";
 
+import { currencySymbol } from "@/lib/currency";
 type ReceiveRow = { quantity: string; unitCost: string; batchNo: string; expiryDate: string };
 
 export default function PurchaseOrderPage() {
@@ -281,7 +282,7 @@ function AddLine({ disabled, onAdd }: { disabled: boolean; onAdd: (body: { varia
       <Field label="Quantity" htmlFor="poAddQty" className="w-28">
         <Input id="poAddQty" type="number" min="0.001" step="0.001" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
       </Field>
-      <Field label="Unit cost (₹)" htmlFor="poAddCost" className="w-32">
+      <Field label={`Unit cost (${currencySymbol()})`} htmlFor="poAddCost" className="w-32">
         <Input id="poAddCost" type="number" min="0" step="0.01" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
       </Field>
       <Button
@@ -370,7 +371,7 @@ function ReceiveDialog({ po, onClose, onCreated }: { po: PurchaseOrder; onClose:
                 <th className="pb-1 font-medium">Product</th>
                 <th className="pb-1 text-right font-medium">Pending</th>
                 <th className="pb-1 pl-3 font-medium">Received now</th>
-                <th className="pb-1 pl-3 font-medium">Unit cost (₹)</th>
+                <th className="pb-1 pl-3 font-medium">Unit cost ({currencySymbol()})</th>
                 <th className="pb-1 pl-3 font-medium">Batch / expiry</th>
               </tr>
             </thead>
@@ -415,10 +416,10 @@ function ReceiveDialog({ po, onClose, onCreated }: { po: PurchaseOrder; onClose:
           </table>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Freight (₹)" htmlFor="rcvFreight">
+          <Field label={`Freight (${currencySymbol()})`} htmlFor="rcvFreight">
             <Input id="rcvFreight" type="number" min="0" step="0.01" value={freight} onChange={(e) => setFreight(e.target.value)} />
           </Field>
-          <Field label="Other charges (₹)" htmlFor="rcvOther">
+          <Field label={`Other charges (${currencySymbol()})`} htmlFor="rcvOther">
             <Input id="rcvOther" type="number" min="0" step="0.01" value={other} onChange={(e) => setOther(e.target.value)} />
           </Field>
           <Field label="Delivery note / challan" htmlFor="rcvNotes">

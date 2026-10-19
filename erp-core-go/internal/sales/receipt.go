@@ -12,24 +12,34 @@ import (
 	"erp-core-go/internal/documents"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/printing"
+	"erp-core-go/internal/taxes"
 )
 
 type receiptResponse struct {
-	OrderNumber   string           `json:"order_number"`
-	Status        string           `json:"status"`
-	FinalizedAt   *string          `json:"finalized_at"`
-	MerchantName  string           `json:"merchant_name"`
-	MerchantGSTIN string           `json:"merchant_gstin"`
-	BranchName    string           `json:"branch_name"`
-	BranchGSTIN   string           `json:"branch_gstin"`
-	CashierName   string           `json:"cashier_name"`
-	CustomerName  *string          `json:"customer_name"`
-	Lines         []orderLine      `json:"lines"`
-	Subtotal      string           `json:"subtotal"`
-	DiscountTotal string           `json:"discount_total"`
-	TaxTotal      string           `json:"tax_total"`
-	GrandTotal    string           `json:"grand_total"`
-	Payments      []receiptPayment `json:"payments"`
+	OrderNumber   string      `json:"order_number"`
+	Status        string      `json:"status"`
+	FinalizedAt   *string     `json:"finalized_at"`
+	MerchantName  string      `json:"merchant_name"`
+	MerchantGSTIN string      `json:"merchant_gstin"`
+	BranchName    string      `json:"branch_name"`
+	BranchGSTIN   string      `json:"branch_gstin"`
+	CashierName   string      `json:"cashier_name"`
+	CustomerName  *string     `json:"customer_name"`
+	Lines         []orderLine `json:"lines"`
+	Subtotal      string      `json:"subtotal"`
+	DiscountTotal string      `json:"discount_total"`
+	TaxTotal      string      `json:"tax_total"`
+	GrandTotal    string      `json:"grand_total"`
+	// Checkout round-off waiver (signed, "0.00" when none) and what was
+	// payable after it (grand_total + round_off). Additive fields.
+	RoundOff     string           `json:"round_off"`
+	PayableTotal string           `json:"payable_total"`
+	Payments     []receiptPayment `json:"payments"`
+	// migrations/060: tax_total split as the branch prints it (CGST +
+	// SGST, IGST, or one labelled tax), and the B2B buyer's GSTIN.
+	// Additive fields.
+	TaxBreakup    *taxes.Breakup `json:"tax_breakup"`
+	CustomerGSTIN *string        `json:"customer_gstin"`
 
 	// Not part of the public JSON contract (GetReceipt already predates
 	// notifications and other clients may depend on its exact shape) —
@@ -119,6 +129,22 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 		DiscountTotal: resp.DiscountTotal,
 		TaxTotal:      resp.TaxTotal,
 		GrandTotal:    resp.GrandTotal,
+		RoundOff:      resp.RoundOff,
+		PayableTotal:  resp.PayableTotal,
+	}
+	if b := resp.TaxBreakup; b != nil {
+		for _, t := range b.Rows {
+			data.Taxes = append(data.Taxes, printing.ReceiptTax{Label: t.Label, Amount: t.Amount})
+		}
+		// A bill that mixes rates prints each rate's split too.
+		if len(b.Summary) > 1 {
+			for _, s := range b.Summary {
+				data.TaxSummary = append(data.TaxSummary, receiptSummaryLine(b, s))
+			}
+		}
+		if b.Regime != taxes.RegimeSingle && b.PlaceOfSupply != "" {
+			data.PlaceOfSupply = taxes.PlaceOfSupply(b.PlaceOfSupply)
+		}
 	}
 	for _, l := range resp.Lines {
 		data.Lines = append(data.Lines, printing.ReceiptLine{
@@ -152,8 +178,9 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 	if err := tx.QueryRow(ctx, `
 		SELECT so.order_number, so.status, so.finalized_at::text,
 		       m.legal_name, COALESCE(m.gstin, ''), b.name, COALESCE(b.gstin, ''),
-		       u.name, c.name, c.email, c.phone,
+		       u.name, c.name, c.email, c.phone, NULLIF(c.gstin, ''),
 		       so.subtotal::text, so.discount_total::text, so.tax_total::text, so.grand_total::text,
+		       so.round_off::text, (so.grand_total + so.round_off)::text,
 		       so.branch_id, to_char(COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone, 'DD Mon YYYY, HH24:MI')
 		FROM sales_orders so
 		JOIN merchants m ON m.id = so.merchant_id
@@ -163,8 +190,9 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 		WHERE so.id = $1`, orderID,
 	).Scan(&resp.OrderNumber, &resp.Status, &finalizedAt,
 		&resp.MerchantName, &resp.MerchantGSTIN, &resp.BranchName, &resp.BranchGSTIN,
-		&resp.CashierName, &customerName, &resp.CustomerEmail, &resp.CustomerPhone,
+		&resp.CashierName, &customerName, &resp.CustomerEmail, &resp.CustomerPhone, &resp.CustomerGSTIN,
 		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal,
+		&resp.RoundOff, &resp.PayableTotal,
 		&resp.BranchID, &resp.DateText); err != nil {
 		return resp, err
 	}
@@ -176,6 +204,9 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 		return resp, err
 	}
 	resp.Lines = lines
+	if resp.TaxBreakup, err = orderTaxBreakup(ctx, tx, orderID, lines); err != nil {
+		return resp, err
+	}
 
 	rows, err := tx.Query(ctx, `SELECT method, amount::text FROM payments WHERE sales_order_id = $1 AND status = 'captured'`, orderID)
 	if err != nil {

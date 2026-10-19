@@ -26,6 +26,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { rupees } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -115,14 +117,30 @@ function BranchDateReports() {
                 Orders: <span className="font-semibold">{daily.order_count}</span>
               </div>
               <div>
-                Subtotal: <span className="font-semibold">₹{daily.subtotal}</span>
+                Subtotal: <span className="font-semibold">{rupees(daily.subtotal)}</span>
               </div>
               <div>
-                Tax: <span className="font-semibold">₹{daily.tax_total}</span>
+                Tax: <span className="font-semibold">{rupees(daily.tax_total)}</span>
+                {daily.cgst_total != null && (Number(daily.cgst_total) !== 0 || Number(daily.igst_total) !== 0) && (
+                  <span className="block text-xs text-muted-foreground" data-testid="daily-tax-heads">
+                    CGST {rupees(daily.cgst_total)} · SGST {rupees(daily.sgst_total)}
+                    {Number(daily.igst_total) !== 0 && ` · IGST ${rupees(daily.igst_total)}`}
+                  </span>
+                )}
               </div>
               <div>
-                Grand total: <span className="font-semibold">₹{daily.grand_total}</span>
+                Grand total: <span className="font-semibold">{rupees(daily.grand_total)}</span>
               </div>
+              {Number(daily.round_off_total) !== 0 && (
+                <>
+                  <div>
+                    Round off: <span className="font-semibold" data-testid="daily-round-off">{rupees(daily.round_off_total)}</span>
+                  </div>
+                  <div>
+                    Net collected: <span className="font-semibold">{rupees(daily.net_total)}</span>
+                  </div>
+                </>
+              )}
             </div>
             {daily.by_payment_method.length > 0 && (
               <Table>
@@ -138,7 +156,7 @@ function BranchDateReports() {
                     <TableRow key={p.method}>
                       <TableCell className="uppercase">{p.method}</TableCell>
                       <TableCell>{p.count}</TableCell>
-                      <TableCell>₹{p.amount}</TableCell>
+                      <TableCell>{rupees(p.amount)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -149,7 +167,7 @@ function BranchDateReports() {
 
         {eod && (
           <p className="text-sm">
-            EOD cash: <span className="font-semibold">₹{eod.cash_total}</span> across {eod.cash_order_count} cash payment(s)
+            EOD cash: <span className="font-semibold">{rupees(eod.cash_total)}</span> across {eod.cash_order_count} cash payment(s)
           </p>
         )}
 
@@ -212,8 +230,9 @@ function ConsolidatedSalesSection() {
         {report && (
           <>
             <p className="text-sm">
-              Total: <span className="font-semibold">{report.total_order_count}</span> order(s), ₹
+              Total: <span className="font-semibold">{report.total_order_count}</span> order(s), {currencySymbol()}
               <span className="font-semibold">{report.total_grand_total}</span>
+              {report.total_net_total !== report.total_grand_total && <> ({rupees(report.total_net_total)} after round-off)</>}
             </p>
             <Table>
               <TableHeader>
@@ -221,6 +240,7 @@ function ConsolidatedSalesSection() {
                   <TableHead>Branch</TableHead>
                   <TableHead>Orders</TableHead>
                   <TableHead>Grand total</TableHead>
+                  <TableHead>Net (after round-off)</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -228,7 +248,8 @@ function ConsolidatedSalesSection() {
                   <TableRow key={b.branch_id}>
                     <TableCell>{b.branch_name}</TableCell>
                     <TableCell>{b.order_count}</TableCell>
-                    <TableCell>₹{b.grand_total}</TableCell>
+                    <TableCell>{rupees(b.grand_total)}</TableCell>
+                    <TableCell>{rupees(b.net_total)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

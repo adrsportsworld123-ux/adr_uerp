@@ -12,7 +12,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api-client";
 import { CatalogBrand, Category, SearchHit } from "@/lib/types";
-import { qty } from "@/lib/format";
+import { qty, rupees } from "@/lib/format";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Column, DataTable } from "@/components/data/data-table";
@@ -21,6 +21,7 @@ import { SearchOption, SearchSelect, categoryOption } from "@/components/data/se
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
 
+import { currencySymbol } from "@/lib/currency";
 function marginPct(sellingPrice: number, costPrice: number): number | null {
   if (sellingPrice <= 0) return null;
   return Math.round(((sellingPrice - costPrice) / sellingPrice) * 100 * 100) / 100;
@@ -55,8 +56,8 @@ const columns: Column<SearchHit>[] = [
       );
     },
   },
-  { key: "cost", header: "Cost", align: "right", cell: (h) => <span className="tabular">₹{h.cost_price}</span> },
-  { key: "selling", header: "Selling", align: "right", cell: (h) => <span className="tabular">₹{h.selling_price}</span> },
+  { key: "cost", header: "Cost", align: "right", cell: (h) => <span className="tabular">{rupees(h.cost_price)}</span> },
+  { key: "selling", header: "Selling", align: "right", cell: (h) => <span className="tabular">{rupees(h.selling_price)}</span> },
   {
     key: "margin",
     header: "Margin",
@@ -145,8 +146,8 @@ function SearchView() {
                 placeholder="All brands"
               />
             </div>
-            <PriceBound id="minPrice" label="Min price (₹)" placeholder="Min ₹" value={state.filters.min_price} onChange={(v) => update({ filters: { min_price: v } })} />
-            <PriceBound id="maxPrice" label="Max price (₹)" placeholder="Max ₹" value={state.filters.max_price} onChange={(v) => update({ filters: { max_price: v } })} />
+            <PriceBound id="minPrice" label={`Min price (${currencySymbol()})`} placeholder={`Min ${currencySymbol()}`} value={state.filters.min_price} onChange={(v) => update({ filters: { min_price: v } })} />
+            <PriceBound id="maxPrice" label={`Max price (${currencySymbol()})`} placeholder={`Max ${currencySymbol()}`} value={state.filters.max_price} onChange={(v) => update({ filters: { max_price: v } })} />
           </>
         }
         empty={{ title: "No products to search yet", body: "Products appear here as soon as they're added to the catalogue." }}

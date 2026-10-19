@@ -17,6 +17,8 @@ import { ProductPicker } from "@/components/data/product-picker";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 import { DeleteDocumentButton } from "@/components/purchase/delete-document-dialog";
 
+import { rupees } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 interface BarcodeLookup {
   product_id: string;
   product_name: string;
@@ -188,9 +190,9 @@ export default function GRNDetailPage() {
                       {l.product_name} <span className="text-muted-foreground">({l.sku})</span>
                     </TableCell>
                     <TableCell>{l.quantity}</TableCell>
-                    <TableCell>₹{l.unit_cost}</TableCell>
-                    <TableCell>{l.landed_unit_cost ? `₹${l.landed_unit_cost}` : "—"}</TableCell>
-                    <TableCell>₹{l.line_total}</TableCell>
+                    <TableCell>{rupees(l.unit_cost)}</TableCell>
+                    <TableCell>{l.landed_unit_cost ? `${rupees(l.landed_unit_cost)}` : "—"}</TableCell>
+                    <TableCell>{rupees(l.line_total)}</TableCell>
                     <TableCell>{l.batch_no ? `${l.batch_no}${l.expiry_date ? ` (exp. ${l.expiry_date})` : ""}` : "—"}</TableCell>
                   </TableRow>
                 ))}
@@ -203,19 +205,19 @@ export default function GRNDetailPage() {
           <div className="flex flex-col gap-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Subtotal</span>
-              <span>₹{grn.subtotal}</span>
+              <span>{rupees(grn.subtotal)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Freight</span>
-              <span>₹{grn.freight_amount}</span>
+              <span>{rupees(grn.freight_amount)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Other charges</span>
-              <span>₹{grn.other_charges}</span>
+              <span>{rupees(grn.other_charges)}</span>
             </div>
             <div className="flex justify-between font-semibold">
               <span>Grand total</span>
-              <span>₹{grn.grand_total}</span>
+              <span>{rupees(grn.grand_total)}</span>
             </div>
           </div>
         </CardContent>
@@ -268,7 +270,7 @@ export default function GRNDetailPage() {
                     <Input id="quantity" type="number" min="0.001" step="0.001" required value={quantity} onChange={(e) => setQuantity(e.target.value)} />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="unitCost">Unit cost (₹) *</Label>
+                    <Label htmlFor="unitCost">Unit cost ({currencySymbol()}) *</Label>
                     <Input id="unitCost" type="number" min="0" step="0.01" required value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
                   </div>
                 </div>

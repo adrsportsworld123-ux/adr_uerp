@@ -1,9 +1,27 @@
-/// Indian-style rupee formatting for DISPLAY only (₹1,23,456.00). Money
+/// The branch's currency (Tax Settings, erp-core-go migrations/061), set
+/// by `AppSession.refreshShift` and kept for offline sales. INR groups the
+/// Indian way (₹1,23,456.00); any other currency in thousands ($123,456.00).
+/// Amounts are never converted — this only names them.
+class PosCurrency {
+  static String code = 'INR';
+  static String symbol = '₹';
+
+  static void set(String newCode, String newSymbol) {
+    if (newCode.isEmpty || newSymbol.isEmpty) return;
+    code = newCode;
+    symbol = newSymbol;
+  }
+
+  /// The symbol before an amount: a letter symbol gets a space ("AED 10.00").
+  static String get prefix => RegExp(r'[A-Za-z]$').hasMatch(symbol) ? '$symbol ' : symbol;
+}
+
+/// Money formatting for DISPLAY only, in the branch's currency. Money
 /// arrives from the API as NUMERIC strings and goes back as given; this
 /// never feeds a value into arithmetic that is sent to the server.
 String formatRupees(String amount) {
   final v = double.tryParse(amount);
-  if (v == null) return '₹$amount';
+  if (v == null) return '${PosCurrency.prefix}$amount';
   return formatRupeesNum(v);
 }
 
@@ -15,6 +33,8 @@ String formatRupeesNum(double v) {
   String grouped;
   if (whole.length <= 3) {
     grouped = whole;
+  } else if (PosCurrency.code != 'INR') {
+    grouped = whole.replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
   } else {
     final last3 = whole.substring(whole.length - 3);
     var rest = whole.substring(0, whole.length - 3);
@@ -26,7 +46,7 @@ String formatRupeesNum(double v) {
     if (rest.isNotEmpty) pairs.insert(0, rest);
     grouped = '${pairs.join(',')},$last3';
   }
-  return '${negative ? '−' : ''}₹$grouped.${parts[1]}';
+  return '${negative ? '−' : ''}${PosCurrency.prefix}$grouped.${parts[1]}';
 }
 
 /// Quantities come back as "2.000"; show "2" for whole units.

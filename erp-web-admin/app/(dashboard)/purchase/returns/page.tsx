@@ -8,6 +8,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DownloadPdfButton } from "@/components/data/document-actions";
 
+import { rupees } from "@/lib/format";
 export default function PurchaseReturnsPage() {
   const [returns, setReturns] = useState<PurchaseReturnSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +47,7 @@ export default function PurchaseReturnsPage() {
               <TableRow key={r.return_id}>
                 <TableCell className="font-medium">{r.return_number}</TableCell>
                 <TableCell>{r.reason}</TableCell>
-                <TableCell>₹{r.grand_total}</TableCell>
+                <TableCell>{rupees(r.grand_total)}</TableCell>
                 <TableCell>{r.status}</TableCell>
                 <TableCell>{new Date(r.created_at).toLocaleString()}</TableCell>
                 <TableCell>

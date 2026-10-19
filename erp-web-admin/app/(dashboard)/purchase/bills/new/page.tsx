@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { rupees } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 export default function NewBillPage() {
   return (
     <Suspense>
@@ -25,6 +27,9 @@ function NewBillForm() {
   const [grnId, setGrnId] = useState(useSearchParams().get("grn_id") ?? "");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
   const [taxTotal, setTaxTotal] = useState("0");
+  // How the supplier's tax splits (erp-core-go migrations/060): "auto" lets
+  // the server compare the supplier's GSTIN state with the branch's.
+  const [supply, setSupply] = useState<"auto" | "intra" | "inter">("auto");
   const [dueDate, setDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +51,7 @@ function NewBillForm() {
         supplier_invoice_number: supplierInvoiceNumber,
         tax_total: Number(taxTotal) || 0,
         due_date: dueDate || undefined,
+        ...(supply === "auto" ? {} : { inter_state: supply === "inter" }),
       });
       router.push(`/purchase/bills/${bill.bill_id}`);
     } catch (e) {
@@ -67,7 +73,7 @@ function NewBillForm() {
               <Select
                 value={grnId}
                 onValueChange={(v) => setGrnId(v ?? "")}
-                items={Object.fromEntries(grns.map((g) => [g.grn_id, `${g.grn_number} — ₹${g.grand_total}`]))}
+                items={Object.fromEntries(grns.map((g) => [g.grn_id, `${g.grn_number} — ${rupees(g.grand_total)}`]))}
                 required
               >
                 <SelectTrigger>
@@ -76,7 +82,7 @@ function NewBillForm() {
                 <SelectContent>
                   {grns.map((g) => (
                     <SelectItem key={g.grn_id} value={g.grn_id}>
-                      {g.grn_number} — ₹{g.grand_total}
+                      {g.grn_number} — {rupees(g.grand_total)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -87,9 +93,24 @@ function NewBillForm() {
               <Label htmlFor="invoiceNumber">Supplier invoice number</Label>
               <Input id="invoiceNumber" value={supplierInvoiceNumber} onChange={(e) => setSupplierInvoiceNumber(e.target.value)} />
             </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="supply">Supplier&apos;s tax is</Label>
+              <select id="supply" value={supply} onChange={(e) => setSupply(e.target.value as typeof supply)} className="h-9 rounded-lg border bg-card px-2 text-sm">
+                <option value="auto">Decided by the supplier&apos;s GSTIN state</option>
+                <option value="intra">CGST + SGST (same state)</option>
+                <option value="inter">IGST (another state)</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {supply === "inter"
+                  ? "The whole tax is recorded as IGST."
+                  : supply === "intra"
+                    ? "The tax is recorded half as CGST and half as SGST."
+                    : "IGST when the supplier's GSTIN is from another state than the branch, else CGST + SGST."}
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="tax">GST on this bill (₹)</Label>
+                <Label htmlFor="tax">GST on this bill ({currencySymbol()})</Label>
                 <Input id="tax" type="number" min="0" step="0.01" value={taxTotal} onChange={(e) => setTaxTotal(e.target.value)} />
               </div>
               <div className="flex flex-col gap-2">
@@ -99,7 +120,7 @@ function NewBillForm() {
             </div>
             {selectedGrn && (
               <p className="text-xs text-muted-foreground">
-                Bill grand total will be ₹{selectedGrn.grand_total} (GRN) + ₹{taxTotal || 0} (GST) = ₹
+                Bill grand total will be {rupees(selectedGrn.grand_total)} (GRN) + {rupees(taxTotal || 0)} (GST) = {currencySymbol()}
                 {(Number(selectedGrn.grand_total) + (Number(taxTotal) || 0)).toFixed(2)}
               </p>
             )}

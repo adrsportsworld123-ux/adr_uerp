@@ -135,6 +135,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
           content: Text([
             'Return ${result.returnNumber} recorded.',
             'Give back ${formatRupees(result.refundAmount)} by ${_methodLabel(result.refundMethod)}.',
+            if (result.taxBreakup?.rows.isNotEmpty == true)
+              'Tax given back: ${result.taxBreakup!.rows.map((t) => '${t.label} ${formatRupees(t.amount)}').join(' · ')}.',
             result.restocked ? 'Items are back in stock.' : 'Items were not restocked.',
           ].join('\n')),
           actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],

@@ -60,7 +60,13 @@ const columns: Column<SaleSummaryRow>[] = [
     header: "Total",
     sort: "total",
     align: "right",
-    cell: (o) => <span className={`tabular font-medium ${o.status === "voided" ? "line-through text-muted-foreground" : ""}`}>{rupees(o.grand_total)}</span>,
+    // What was paid: the bill less any checkout round-off (shown under it).
+    cell: (o) => (
+      <span className={`tabular font-medium ${o.status === "voided" ? "line-through text-muted-foreground" : ""}`}>
+        {rupees(o.payable_total ?? o.grand_total)}
+        {Number(o.round_off) < 0 && <span className="block text-xs font-normal text-muted-foreground">round-off {rupees(o.round_off)}</span>}
+      </span>
+    ),
   },
 ];
 
@@ -136,11 +142,17 @@ function SalesView() {
       />
 
       {summary && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Summary for these filters">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5" aria-label="Summary for these filters">
           {[
             ["Sales", summary.order_count.toLocaleString("en-IN")],
             ["Net sales", rupees(summary.net_sales)],
+            ...(Number(summary.round_off_total) < 0 ? [["Round off", rupees(summary.round_off_total)]] : []),
             ["Tax", rupees(summary.tax_total)],
+            ...(summary.cgst_total != null && Number(summary.igst_total ?? 0) === 0 && Number(summary.cgst_total) !== 0
+              ? [["CGST · SGST", `${rupees(summary.cgst_total)} · ${rupees(summary.sgst_total ?? "0")}`]]
+              : summary.cgst_total != null && Number(summary.igst_total ?? 0) !== 0
+                ? [["CGST · SGST · IGST", `${rupees(summary.cgst_total)} · ${rupees(summary.sgst_total ?? "0")} · ${rupees(summary.igst_total ?? "0")}`]]
+                : []),
             ["Refunded · voided", `${summary.refunded_count} · ${summary.voided_count}`],
           ].map(([label, value]) => (
             <div key={label} className="rounded-xl border bg-card p-3">

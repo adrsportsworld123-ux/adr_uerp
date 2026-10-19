@@ -21,6 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+import { rupees } from "@/lib/format";
 export default function AIInsightsPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState("");
@@ -196,7 +197,7 @@ export default function AIInsightsPage() {
               {recommendations.map((r) => (
                 <TableRow key={r.variant_id}>
                   <TableCell>{r.product_name} <span className="text-xs text-muted-foreground">({r.sku})</span></TableCell>
-                  <TableCell>₹{r.selling_price}</TableCell>
+                  <TableCell>{rupees(r.selling_price)}</TableCell>
                   <TableCell>{r.co_occurrence_count}x</TableCell>
                   <TableCell>{(Number(r.confidence) * 100).toFixed(0)}%</TableCell>
                 </TableRow>

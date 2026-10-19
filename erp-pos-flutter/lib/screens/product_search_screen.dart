@@ -1,3 +1,4 @@
+import '../ui/format.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -196,7 +197,7 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              Text('₹${r.sellingPrice.toStringAsFixed(2)}'),
+                              Text(formatRupeesNum(r.sellingPrice)),
                               const SizedBox(width: 8),
                               if (widget.lookupMode)
                                 const Icon(Icons.chevron_right)

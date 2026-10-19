@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { DownloadPdfButton } from "@/components/data/document-actions";
 
+import { rupees } from "@/lib/format";
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
   unpaid: "outline",
   partially_paid: "secondary",
@@ -53,8 +54,8 @@ export default function BillsListPage() {
               <TableRow key={b.bill_id}>
                 <TableCell className="font-medium">{b.bill_number}</TableCell>
                 <TableCell>{b.bill_date}</TableCell>
-                <TableCell>₹{b.grand_total}</TableCell>
-                <TableCell>₹{b.amount_paid}</TableCell>
+                <TableCell>{rupees(b.grand_total)}</TableCell>
+                <TableCell>{rupees(b.amount_paid)}</TableCell>
                 <TableCell>
                   <Badge variant={STATUS_VARIANT[b.status] ?? "outline"}>{b.status}</Badge>
                 </TableCell>

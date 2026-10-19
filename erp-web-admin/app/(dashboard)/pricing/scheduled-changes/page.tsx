@@ -27,6 +27,7 @@ import { StatusChip } from "@/components/data/status-chip";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { toLocalInput } from "@/components/pricing/schedule-fields";
 
+import { rupees } from "@/lib/format";
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 const STATUS_TONE = { pending: "info", applied: "ok", cancelled: "muted", failed: "bad" } as const;
 
@@ -114,9 +115,9 @@ export default function ScheduledChangesPage() {
                     {c.reason && <div className="text-xs text-muted-foreground">{c.reason}</div>}
                   </TableCell>
                   <TableCell className="text-sm">
-                    {c.selling_price && <div>Selling ₹{c.selling_price}</div>}
-                    {c.mrp && <div>MRP ₹{c.mrp}</div>}
-                    {c.cost_price && <div>Cost ₹{c.cost_price}</div>}
+                    {c.selling_price && <div>Selling {rupees(c.selling_price)}</div>}
+                    {c.mrp && <div>MRP {rupees(c.mrp)}</div>}
+                    {c.cost_price && <div>Cost {rupees(c.cost_price)}</div>}
                   </TableCell>
                   <TableCell className="text-sm">{fmtWhen(c.effective_at)}</TableCell>
                   <TableCell>
@@ -258,7 +259,7 @@ function ScheduleDialog({ change, onClose, onSaved }: { change: ScheduledPriceCh
         <div className="flex flex-col gap-2">
           <Label htmlFor="scheduleVariant">Product variant *</Label>
           <ProductPicker id="scheduleVariant" ariaLabel="Product variant" value={variant} onChange={setVariant} placeholder="Choose a product variant" />
-          {variant?.sellingPrice && <p className="text-xs text-muted-foreground">Selling now at ₹{variant.sellingPrice}</p>}
+          {variant?.sellingPrice && <p className="text-xs text-muted-foreground">Selling now at {rupees(variant.sellingPrice)}</p>}
         </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div className="flex flex-col gap-2">

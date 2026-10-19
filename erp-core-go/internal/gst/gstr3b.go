@@ -100,18 +100,21 @@ func (h *Handler) GSTR3B(w http.ResponseWriter, r *http.Request) {
 
 		var taxable, cgst, sgst, igst, cess float64
 		if err := tx.QueryRow(ctx, `
-			SELECT
-			  COALESCE(SUM(sol.taxable_value), 0),
-			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.cgst_rate,0) / 100), 0),
-			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.sgst_rate,0) / 100), 0),
-			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.igst_rate,0) / 100), 0),
-			  COALESCE(SUM(sol.taxable_value * COALESCE(ts.cess_rate,0) / 100), 0)
-			FROM sales_order_lines sol
-			JOIN sales_orders so ON so.id = sol.sales_order_id
-			JOIN product_variants pv ON pv.id = sol.variant_id
-			JOIN products p ON p.id = pv.product_id
-			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-			WHERE so.status = 'finalized' AND so.finalized_at >= $1 AND so.finalized_at < $2`,
+			WITH lines AS (
+			  SELECT sol.taxable_value AS txval, gst_cgst(sol.tax_amount, sol.cess_amount, so.inter_state) AS cgst,
+			         gst_sgst(sol.tax_amount, sol.cess_amount, so.inter_state) AS sgst,
+			         gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state) AS igst, sol.cess_amount AS cess
+			  FROM sales_order_lines sol
+			  JOIN sales_orders so ON so.id = sol.sales_order_id
+			  WHERE so.status IN `+soldStatuses+` AND so.finalized_at >= $1 AND so.finalized_at < $2
+			  UNION ALL -- the period's credit notes (sales returns), split as their invoices were
+			  SELECT -rl.taxable_amount, -gst_cgst(rl.tax_amount, x.cess, so.inter_state), -gst_sgst(rl.tax_amount, x.cess, so.inter_state),
+			         -gst_igst(rl.tax_amount, x.cess, so.inter_state), -x.cess
+			  `+returnLineFrom+`
+			  WHERE r.created_at >= $1 AND r.created_at < $2
+			)
+			SELECT COALESCE(SUM(txval), 0), COALESCE(SUM(cgst), 0), COALESCE(SUM(sgst), 0), COALESCE(SUM(igst), 0), COALESCE(SUM(cess), 0)
+			FROM lines`,
 			start, end,
 		).Scan(&taxable, &cgst, &sgst, &igst, &cess); err != nil {
 			return err
@@ -146,18 +149,16 @@ func (h *Handler) GSTR3B(w http.ResponseWriter, r *http.Request) {
 		resp.GSTR3BJSON.SupDetails.OutwardTaxable = taxBreakup{
 			TaxableValue: formatMoney(taxable), IGST: formatMoney(igst), CGST: formatMoney(cgst), SGST: formatMoney(sgst), Cess: formatMoney(cess),
 		}
-		// internal/purchase's own GST Input posting (CreateBill) records
-		// only one lump tax_total per bill, never split by CGST/SGST/IGST
-		// the way sales tax IS split (via each line's own tax_slab rates)
-		// — there is no real CGST/SGST/IGST breakdown of ITC to report.
-		// Split it 50/50 CGST/SGST (0 IGST) as the honest, stated
-		// assumption that every purchase is intrastate, consistent with
-		// this codebase's existing tax model overall (IGST is never
-		// actually populated anywhere else either — the seeded tax slab
-		// only carries cgst_rate/sgst_rate).
-		resp.GSTR3BJSON.ITCEligible.Available = []itcAvlEntry{
-			{Type: "OTH", IGST: "0.00", CGST: formatMoney(itcAvailable / 2), SGST: formatMoney(itcAvailable / 2), Cess: "0.00"},
+		// ITC by head: each purchase bill in the period carries the
+		// supplier invoice's own CGST / SGST / IGST / cess
+		// (migrations/060). The ledger's GST Input balance stays the
+		// total (it also nets purchase returns); the bills' split is
+		// scaled to it when the two differ.
+		itc, err := itcByHead(ctx, tx, start, end, itcAvailable)
+		if err != nil {
+			return err
 		}
+		resp.GSTR3BJSON.ITCEligible.Available = []itcAvlEntry{itc}
 		resp.Reconciliation = reconciliationInfo{
 			ComputedGSTOutput: formatMoney(totalOutwardTax), LedgerGSTPayable: formatMoney(ledgerGSTPayable),
 			Matches: within(totalOutwardTax, ledgerGSTPayable, 0.02),

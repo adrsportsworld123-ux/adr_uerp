@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
+import { currencySymbol } from "@/lib/currency";
 type Suggestion = { variant_id: string; name: string; sku: string; mrp: string; score: number };
 type PreviewLine = {
   row: number;
@@ -235,7 +236,7 @@ export default function ImportInvoicePage() {
       <Card>
         <CardHeader>
           <CardTitle>Invoice</CardTitle>
-          <CardDescription>As printed on the supplier&apos;s invoice. The total is checked against the lines; a difference under ₹1 is booked as round-off.</CardDescription>
+          <CardDescription>As printed on the supplier&apos;s invoice. The total is checked against the lines; a difference under {currencySymbol()}1 is booked as round-off.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex flex-col gap-2">
@@ -255,15 +256,15 @@ export default function ImportInvoicePage() {
             <Input id="imp-date" type="date" max={today()} value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="imp-total">Invoice total (₹)</Label>
+            <Label htmlFor="imp-total">Invoice total ({currencySymbol()})</Label>
             <Input id="imp-total" inputMode="decimal" value={total} onChange={(e) => setTotal(e.target.value)} placeholder="26903" />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="imp-freight">Freight (₹)</Label>
+            <Label htmlFor="imp-freight">Freight ({currencySymbol()})</Label>
             <Input id="imp-freight" inputMode="decimal" value={freight} onChange={(e) => setFreight(e.target.value)} placeholder="0" />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="imp-other">Other charges (₹)</Label>
+            <Label htmlFor="imp-other">Other charges ({currencySymbol()})</Label>
             <Input id="imp-other" inputMode="decimal" value={other} onChange={(e) => setOther(e.target.value)} placeholder="0" />
           </div>
           <div className="flex flex-col gap-2">

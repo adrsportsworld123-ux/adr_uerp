@@ -70,11 +70,14 @@ type shiftClose struct {
 // shiftReport is the X report (open shift, live) and the Z report (closed,
 // frozen in pos_shifts.z_report).
 type shiftReport struct {
-	Kind          string            `json:"kind"` // "X" | "Z"
-	GeneratedAt   string            `json:"generated_at"`
-	OrderCount    int               `json:"order_count"`
-	VoidedCount   int               `json:"voided_count"`
-	NetSales      string            `json:"net_sales"`
+	Kind        string `json:"kind"` // "X" | "Z"
+	GeneratedAt string `json:"generated_at"`
+	OrderCount  int    `json:"order_count"`
+	VoidedCount int    `json:"voided_count"`
+	NetSales    string `json:"net_sales"`
+	// RoundOff: checkout waivers in the shift (signed sum, "-1.50"); net
+	// sales are after them, so they match the tenders.
+	RoundOff      string            `json:"round_off_total,omitempty"`
 	ByMethod      map[string]string `json:"by_payment_method"`
 	ReturnCount   int               `json:"return_count"`
 	RefundTotal   string            `json:"refund_total"`
@@ -154,17 +157,19 @@ func buildReport(ctx context.Context, tx pgx.Tx, s shiftResponse, to *time.Time)
 	}
 
 	const moment = `COALESCE(so.device_created_at, so.finalized_at)`
-	var net float64
+	var net, roundOff float64
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FILTER (WHERE so.status <> 'voided'), count(*) FILTER (WHERE so.status = 'voided'),
-		       COALESCE(sum(so.grand_total) FILTER (WHERE so.status <> 'voided'), 0)
+		       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE so.status <> 'voided'), 0),
+		       COALESCE(sum(so.round_off) FILTER (WHERE so.status <> 'voided'), 0)
 		FROM sales_orders so
 		WHERE so.pos_terminal_id::text = $1 AND so.status IN ('finalized', 'voided', 'partially_refunded', 'refunded')
 		  AND `+moment+` >= $2 AND ($3::timestamptz IS NULL OR `+moment+` < $3)`,
-		s.TerminalID, from, to).Scan(&rep.OrderCount, &rep.VoidedCount, &net); err != nil {
+		s.TerminalID, from, to).Scan(&rep.OrderCount, &rep.VoidedCount, &net, &roundOff); err != nil {
 		return rep, flow, 0, err
 	}
 	rep.NetSales = money(net)
+	rep.RoundOff = money(roundOff)
 	rows, err := tx.Query(ctx, `
 		SELECT p.method, sum(p.amount)
 		FROM payments p JOIN sales_orders so ON so.id = p.sales_order_id
