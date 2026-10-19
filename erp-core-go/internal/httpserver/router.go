@@ -16,6 +16,7 @@ import (
 	"erp-core-go/internal/branches"
 	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/customers"
+	"erp-core-go/internal/dashboard"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/dependencies"
 	"erp-core-go/internal/documents"
@@ -170,6 +171,20 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/report-builder/runs", rb.ListRuns)
 			protected.Get("/report-builder/runs/{id}", rb.GetRun)
 			protected.Get("/report-builder/runs/{id}/download", rb.Download)
+			// The standard report library and saved reports
+			// (internal/reportbuilder/library.go): every plan, any
+			// signed-in user, inside their branch scope.
+			protected.Get("/reports/library", rb.LibraryList)
+			protected.Post("/reports/library/{key}/run", rb.LibraryRun)
+			protected.Post("/reports/library/{key}/export", rb.LibraryExport)
+			protected.Get("/reports/saved", rb.SavedList)
+			protected.Post("/reports/saved", rb.SaveLibrary)
+			protected.Post("/reports/saved/{id}/run", rb.SavedRun)
+			protected.Post("/reports/saved/{id}/export", rb.SavedExport)
+			protected.Delete("/reports/saved/{id}", rb.SavedDelete)
+			protected.Get("/reports/runs", rb.ReportRuns)
+			protected.Get("/reports/runs/{id}/download", rb.ReportRunDownload)
+			protected.Post("/reports/runs/{id}/regenerate", rb.Regenerate)
 			protected.Post("/auth/logout", logout.ServeHTTP)
 			// Phase 11: the caller's permission codes (a UI hint — every
 			// gate below still enforces on its own), and "what uses this
@@ -302,6 +317,14 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/pos-shifts/{id}", orders.GetShift)
 			protected.Post("/pos-shifts/{id}/cash-movements", orders.AddCashMovement)
 			protected.Post("/pos-shifts/{id}/close", orders.CloseShift)
+			protected.Get("/pos-shifts/{id}/report/print", orders.PrintShiftReport)
+			// The day-wise Z report (internal/sales/day_report.go): read by
+			// anyone signed in, like the other reports; closing a day needs
+			// reports.day_close.
+			protected.Get("/reports/z-report", orders.ZReport)
+			protected.Get("/reports/z-report/print", orders.PrintZReport)
+			protected.Get("/reports/z-reports", orders.ListZReports)
+			protected.With(authn.RequirePermission(database, "reports.day_close")).Post("/reports/z-report/close", orders.CloseDay)
 			protected.Get("/sales/settings", orders.GetSettings)
 			protected.With(authn.RequirePermission(database, "sales.settings")).
 				Put("/sales/settings", orders.UpdateSettings)
@@ -328,6 +351,18 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "notifications.view")).
 				Get("/notifications", notify.ListNotifications)
 
+			// The sales dashboard (internal/dashboard): dashboard.view to see
+			// it, dashboard.configure to choose each role's widgets and the
+			// sales targets.
+			dash := &dashboard.Handler{DB: database}
+			dashView := authn.RequirePermission(database, "dashboard.view")
+			dashConfigure := authn.RequirePermission(database, "dashboard.configure")
+			protected.Get("/dashboard", dash.Dashboard)
+			protected.With(dashView).Get("/dashboard/widgets", dash.Catalog)
+			protected.With(dashView).Get("/dashboard/targets", dash.Targets)
+			protected.With(dashConfigure).Put("/dashboard/targets", dash.SetTargets)
+			protected.With(dashConfigure).Get("/dashboard/roles", dash.ListRoles)
+			protected.With(dashConfigure).Put("/dashboard/roles/{id}", dash.SetRole)
 			protected.Get("/reports/daily-sales", rpt.DailySales)
 			protected.Get("/reports/stock-summary", rpt.StockSummary)
 			protected.Get("/reports/eod-cash", rpt.EODCash)
@@ -343,12 +378,26 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/suppliers", pur.ListSuppliers)
 			protected.Patch("/suppliers/{id}", pur.UpdateSupplier)
 
+			// Purchase orders (migrations/057): PO → GRNs → a bill per GRN.
+			protected.Post("/purchase/orders", pur.CreatePurchaseOrder)
+			protected.Get("/purchase/orders", pur.ListPurchaseOrders)
+			protected.Get("/purchase/orders/{id}", pur.GetPurchaseOrder)
+			protected.Post("/purchase/orders/{id}/lines", pur.AddPurchaseOrderLine)
+			protected.Delete("/purchase/orders/{id}/lines/{line_id}", pur.DeletePurchaseOrderLine)
+			protected.Post("/purchase/orders/{id}/issue", pur.IssuePurchaseOrder)
+			protected.Post("/purchase/orders/{id}/cancel", pur.CancelPurchaseOrder)
+			protected.Post("/purchase/orders/{id}/close", pur.ClosePurchaseOrder)
+			protected.Post("/purchase/orders/{id}/grn", pur.ReceivePurchaseOrder)
+			protected.Get("/purchase/orders/{id}/pdf", pur.DownloadPurchaseOrder)
+			protected.Delete("/purchase/orders/{id}", pur.DeletePurchaseOrder)
+
 			protected.Post("/purchase/grn", pur.CreateGRN)
 			protected.Get("/purchase/grn", pur.ListGRNs)
 			protected.Get("/purchase/grn/{id}", pur.GetGRN)
 			protected.Post("/purchase/grn/{id}/lines", pur.AddGRNLine)
 			protected.Post("/purchase/grn/{id}/complete", pur.CompleteGRN)
 			protected.Get("/purchase/grn/{id}/pdf", pur.DownloadGRN)
+			protected.Delete("/purchase/grn/{id}", pur.DeleteGRN)
 
 			// Supplier invoice import from the CSV template (import.go).
 			protected.Get("/purchase/imports/template", pur.ImportTemplate)
@@ -671,6 +720,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/quotations", quoH.CreateQuotation)
 			protected.Get("/quotations", quoH.ListQuotations)
 			protected.Get("/quotations/{id}", quoH.GetQuotation)
+			protected.Get("/quotations/{id}/pdf", quoH.DownloadQuotation)
 			protected.Post("/quotations/{id}/send", quoH.SendQuotation)
 			protected.Post("/quotations/{id}/accept", quoH.AcceptQuotation)
 			protected.Post("/quotations/{id}/reject", quoH.RejectQuotation)

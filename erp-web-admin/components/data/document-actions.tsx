@@ -1,9 +1,10 @@
 "use client";
 
 // Download / print for the server-rendered business documents (erp-core-go
-// internal/documents): sale receipts, GRNs, purchase bills and purchase
-// returns, each under its branch's letterhead. The PDF comes from the API,
-// not the browser, so it is byte-for-byte what the POS downloads too.
+// internal/documents): sale receipts, quotations, purchase orders, GRNs,
+// purchase bills and purchase returns, each under its branch's letterhead.
+// The PDF comes from the API, not the browser, so it is byte-for-byte what
+// the POS downloads too.
 import { useState } from "react";
 import { Download, Printer } from "lucide-react";
 import { toast } from "sonner";

@@ -127,12 +127,16 @@ Returns are online-only, and an offline sale can't be returned until it has sync
 
 It also reopens the keypad after a failed approval PIN. Offline, the device enforces the cached range (local DB v3 adds the range columns and `pending_order_lines.open_price`) and refuses prices that need approval.
 
+**Attendance in the status bar (2026-10-18).** Check-in/check-out is a chip in the status bar, next to the shift chip; it is no longer in the overflow menu. The chip shows "Check in" (warn tone) or "In · 9:02 AM" (pay tone), and tapping it opens `AttendanceScreen`. `AppSession.attendance` holds the state: `refreshAttendance()` loads it when `PosScreen` starts and again after the attendance screen closes, and the screen pushes what it loads with `setAttendance`. The chip is disabled offline. On a phone-width bar the ADR badge is hidden so the terminal name keeps its room. Tested in `test/shift_test.dart`.
+
 **Shifts (Phase 13).** `lib/screens/shift_screen.dart` has three parts:
 - `ShiftScreen`: open with a float, the X report, and cash in/out via `CashMovementDialog`, which keeps one idempotency key across retries
 - `CloseShiftScreen`: a denomination count with live variance. When the count doesn't match, it asks for a reason and a manager's code and PIN. It syncs offline sales before counting.
 - `ShiftReportView`: the X and Z reports
 
 The status bar's shift chip opens it. `AppSession.refreshShift()` loads the open shift and `shifts_required`. When shifts are required and none is open, `PosScreen` starts on the shift screen. Shifts are online-only; offline selling is never blocked.
+
+**X and Z reports (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60).** The X report is one shift (the shift screen; a closed shift's is "X report (final)"); the Z report is the branch's whole business day. Menu → X / Z reports (`lib/screens/till_reports_screen.dart`) lists shifts by dates (this till or the branch) and shows the day's Z report, printed through `PrinterService` from the server's ESC/POS bytes (`/pos-shifts/{id}/report/print`, `/reports/z-report/print`), and closes a day that has ended (`reports.day_close`, the server decides). `test/till_reports_test.dart` prints to a real `ServerSocket`.
 
 **Sync queue (Phase 13).** `lib/screens/sync_queue_screen.dart` (menu → Sync queue) shows the device's offline sales:
 - waiting to sync

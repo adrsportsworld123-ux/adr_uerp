@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
 import { GRNSummary, Bill } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -11,9 +11,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function NewBillPage() {
+  return (
+    <Suspense>
+      <NewBillForm />
+    </Suspense>
+  );
+}
+
+// ?grn_id= preselects the GRN (the "Enter bill" links on a GRN and a PO).
+function NewBillForm() {
   const router = useRouter();
   const [grns, setGrns] = useState<GRNSummary[]>([]);
-  const [grnId, setGrnId] = useState("");
+  const [grnId, setGrnId] = useState(useSearchParams().get("grn_id") ?? "");
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState("");
   const [taxTotal, setTaxTotal] = useState("0");
   const [dueDate, setDueDate] = useState("");
@@ -21,7 +30,8 @@ export default function NewBillPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get<{ grns: GRNSummary[] }>("/api/v1/purchase/grn?status=completed").then((d) => setGrns(d.grns));
+    // A GRN is billed once; already-billed ones aren't offered.
+    api.get<{ grns: GRNSummary[] }>("/api/v1/purchase/grn?status=completed").then((d) => setGrns(d.grns.filter((g) => !g.billed)));
   }, []);
 
   const selectedGrn = grns.find((g) => g.grn_id === grnId);

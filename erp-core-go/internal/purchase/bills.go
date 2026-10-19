@@ -19,6 +19,7 @@ import (
 
 var errGRNNotCompleted = errors.New("grn must be completed before billing")
 var errBillOverpaid = errors.New("payment would exceed the bill's grand total")
+var errGRNAlreadyBilled = errors.New("grn already has a purchase bill")
 
 type billResponse struct {
 	BillID                string `json:"bill_id"`
@@ -94,6 +95,8 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "PERIOD_LOCKED", "that date is in a locked accounting period")
 	case errors.Is(err, errGRNNotCompleted):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "the GRN must be completed before it can be billed")
+	case errors.Is(err, errGRNAlreadyBilled):
+		httpx.Error(w, http.StatusConflict, "GRN_ALREADY_BILLED", "this GRN already has a purchase bill")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "GRN not found")
 	case err != nil:
@@ -113,12 +116,21 @@ func createBillTx(ctx context.Context, tx pgx.Tx, req createBillRequest, userID 
 	var subtotal, freight, otherCharges float64
 	if err := tx.QueryRow(ctx, `
 		SELECT supplier_id, branch_id, status, subtotal, freight_amount, other_charges
-		FROM goods_receipt_notes WHERE id = $1`, req.GRNID,
+		FROM goods_receipt_notes WHERE id = $1 FOR UPDATE`, req.GRNID,
 	).Scan(&supplierID, &branchID, &grnStatus, &subtotal, &freight, &otherCharges); err != nil {
 		return billResponse{}, err
 	}
 	if grnStatus != "completed" {
 		return billResponse{}, errGRNNotCompleted
+	}
+	// One bill per GRN: a second would book the same goods' payable twice.
+	// The row lock above makes two simultaneous attempts queue here.
+	var billed bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM purchase_bills WHERE grn_id = $1)`, req.GRNID).Scan(&billed); err != nil {
+		return billResponse{}, err
+	}
+	if billed {
+		return billResponse{}, errGRNAlreadyBilled
 	}
 
 	billNumber := fmt.Sprintf("BILL-%d", time.Now().UnixNano())

@@ -150,6 +150,7 @@ type GRNInput struct {
 	Lines                            []PurchaseLine
 	Subtotal, Freight, Other, Grand  string
 	Notes                            string
+	PONumber                         string // the purchase order received against; "" for a direct GRN
 }
 
 func GRN(in GRNInput) Document {
@@ -161,6 +162,9 @@ func GRN(in GRNInput) Document {
 		Columns: purchaseColumns(),
 		Rows:    purchaseRows(in.Lines),
 		Meta:    [][2]string{{"Status", Label(in.Status)}},
+	}
+	if in.PONumber != "" {
+		d.Meta = append(d.Meta, [2]string{"Against PO", in.PONumber})
 	}
 	if in.ReceivedBy != "" {
 		d.Meta = append(d.Meta, [2]string{"Received by", in.ReceivedBy})
@@ -186,6 +190,7 @@ type BillInput struct {
 	Lines                                                         []PurchaseLine
 	Subtotal, Tax, Freight, Other, RoundOff, Grand, Paid, Balance string
 	Payments                                                      [][2]string // "method · date · ref", amount
+	PONumber                                                      string      // the GRN's purchase order, if any
 }
 
 func PurchaseBill(in BillInput) Document {
@@ -199,6 +204,9 @@ func PurchaseBill(in BillInput) Document {
 	}
 	if in.SupplierInvoice != "" {
 		d.Meta = append(d.Meta, [2]string{"Supplier invoice", in.SupplierInvoice})
+	}
+	if in.PONumber != "" {
+		d.Meta = append(d.Meta, [2]string{"PO", in.PONumber})
 	}
 	if in.GRNNumber != "" {
 		d.Meta = append(d.Meta, [2]string{"GRN", in.GRNNumber})

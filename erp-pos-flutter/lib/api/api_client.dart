@@ -1006,6 +1006,148 @@ class Shift {
       );
 }
 
+/// One row of the till's shift list (GET /pos-shifts): net sales and
+/// bills come from the frozen report, so they're null while it's open.
+class ShiftSummary {
+  final String shiftId;
+  final int shiftNumber;
+  final String status;
+  final String terminalName;
+  final String openedBy;
+  final String openedAt;
+  final String? closedAt;
+  final String? variance;
+  final int? orderCount;
+  final String? netSales;
+
+  ShiftSummary({
+    required this.shiftId,
+    required this.shiftNumber,
+    required this.status,
+    required this.terminalName,
+    required this.openedBy,
+    required this.openedAt,
+    this.closedAt,
+    this.variance,
+    this.orderCount,
+    this.netSales,
+  });
+
+  factory ShiftSummary.fromJson(Map<String, dynamic> j) => ShiftSummary(
+        shiftId: j['shift_id'] as String,
+        shiftNumber: j['shift_number'] as int,
+        status: j['status'] as String,
+        terminalName: j['terminal_name'] as String? ?? '',
+        openedBy: j['opened_by'] as String? ?? '',
+        openedAt: j['opened_at'] as String,
+        closedAt: j['closed_at'] as String?,
+        variance: j['variance'] as String?,
+        orderCount: j['order_count'] as int?,
+        netSales: j['net_sales'] as String?,
+      );
+}
+
+/// A branch's business day — the Z report (erp-core-go
+/// internal/sales/day_report.go dayReport): live until the day is closed,
+/// then frozen with its Z number. Kept close to the JSON: the screen shows
+/// the maps as they come.
+class DayReport {
+  final String branchName;
+  final String date;
+  final String status; // 'open' (live) | 'closed'
+  final int? zNumber;
+  final String? closedBy;
+  final String? closedAt;
+  final String generatedAt;
+  final String? firstOrder;
+  final String? lastOrder;
+  final int orderCount;
+  final String subtotal;
+  final String discountTotal;
+  final String taxTotal;
+  final String netSales;
+  final String averageBill;
+  final int voidedCount;
+  final String voidedTotal;
+  final int releasedCount;
+  final Map<String, String> byMethod;
+  final Map<String, String> byChannel;
+  final int returnCount;
+  final String refundTotal;
+  final List<Map<String, dynamic>> taxRates; // rate, taxable_value, tax
+  final List<Map<String, dynamic>> cashiers; // cashier, orders, net_sales
+  final Map<String, String> cash; // cash_sales ... net_cash, counted, variance
+  final List<Map<String, dynamic>> shifts;
+  final int openShifts;
+  final Map<String, dynamic>? changedSinceClose;
+
+  DayReport({
+    required this.branchName,
+    required this.date,
+    required this.status,
+    this.zNumber,
+    this.closedBy,
+    this.closedAt,
+    required this.generatedAt,
+    this.firstOrder,
+    this.lastOrder,
+    required this.orderCount,
+    required this.subtotal,
+    required this.discountTotal,
+    required this.taxTotal,
+    required this.netSales,
+    required this.averageBill,
+    required this.voidedCount,
+    required this.voidedTotal,
+    required this.releasedCount,
+    required this.byMethod,
+    required this.byChannel,
+    required this.returnCount,
+    required this.refundTotal,
+    required this.taxRates,
+    required this.cashiers,
+    required this.cash,
+    required this.shifts,
+    required this.openShifts,
+    this.changedSinceClose,
+  });
+
+  bool get isClosed => status == 'closed';
+
+  static List<Map<String, dynamic>> _list(dynamic v) => (v as List<dynamic>? ?? const []).cast<Map<String, dynamic>>();
+
+  factory DayReport.fromJson(Map<String, dynamic> j) => DayReport(
+        branchName: j['branch_name'] as String? ?? '',
+        date: j['date'] as String,
+        status: j['status'] as String,
+        zNumber: j['z_number'] as int?,
+        closedBy: j['closed_by'] as String?,
+        closedAt: j['closed_at'] as String?,
+        generatedAt: j['generated_at'] as String? ?? '',
+        firstOrder: j['first_order_number'] as String?,
+        lastOrder: j['last_order_number'] as String?,
+        orderCount: j['order_count'] as int? ?? 0,
+        subtotal: j['subtotal'] as String? ?? '0.00',
+        discountTotal: j['discount_total'] as String? ?? '0.00',
+        taxTotal: j['tax_total'] as String? ?? '0.00',
+        netSales: j['net_sales'] as String? ?? '0.00',
+        averageBill: j['average_bill'] as String? ?? '0.00',
+        voidedCount: j['voided_count'] as int? ?? 0,
+        voidedTotal: j['voided_total'] as String? ?? '0.00',
+        releasedCount: j['released_count'] as int? ?? 0,
+        byMethod: (j['by_payment_method'] as Map<String, dynamic>? ?? const {}).cast<String, String>(),
+        byChannel: (j['by_channel'] as Map<String, dynamic>? ?? const {}).cast<String, String>(),
+        returnCount: j['return_count'] as int? ?? 0,
+        refundTotal: j['refund_total'] as String? ?? '0.00',
+        taxRates: _list(j['tax_rates']),
+        cashiers: _list(j['cashiers']),
+        cash: (j['cash'] as Map<String, dynamic>? ?? const {}).cast<String, String>(),
+        shifts: _list(j['shifts']),
+        openShifts: j['open_shifts'] as int? ?? 0,
+        changedSinceClose: j['changed_since_close'] as Map<String, dynamic>?,
+      );
+}
+
 /// Talks to erp-core-go's /api/v1 surface, exactly as specified in
 /// phase0_1_design.md §3 and implemented (and verified against live
 /// Postgres) in internal/authn, internal/catalog, internal/sales.
@@ -1914,6 +2056,58 @@ class ApiClient {
       }),
     );
     return Shift.fromJson(_decode(resp));
+  }
+
+  /// GET /pos-shifts — shifts opened between [from] and [to]
+  /// (YYYY-MM-DD), newest first; [terminalId] null = the whole branch.
+  Future<List<ShiftSummary>> listShifts({required String branchId, String? terminalId, String? from, String? to, int limit = 50}) async {
+    final uri = Uri.parse('$baseUrl/api/v1/pos-shifts').replace(queryParameters: {
+      'branch_id': branchId,
+      if (terminalId != null) 'terminal_id': terminalId,
+      if (from != null) 'from': from,
+      if (to != null) 'to': to,
+      'limit': '$limit',
+    });
+    final body = _decode(await _http.get(uri, headers: _authHeaders));
+    return (body['shifts'] as List<dynamic>).map((e) => ShiftSummary.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// GET /pos-shifts/{id} — with its X report (live, or final once closed).
+  Future<Shift> getShift(String shiftId) async {
+    return Shift.fromJson(_decode(await _http.get(Uri.parse('$baseUrl/api/v1/pos-shifts/$shiftId'), headers: _authHeaders)));
+  }
+
+  Future<List<int>> _printBytes(Uri uri) async {
+    final resp = await _http.get(uri, headers: _authHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      _decode(resp); // throws the API's own error
+      throw ApiException(resp.statusCode, 'PRINT_FAILED', 'could not fetch the printable report');
+    }
+    return resp.bodyBytes;
+  }
+
+  /// GET /pos-shifts/{id}/report/print — the shift's X report as ESC/POS.
+  Future<List<int>> shiftReportBytes(String shiftId) => _printBytes(Uri.parse('$baseUrl/api/v1/pos-shifts/$shiftId/report/print'));
+
+  /// GET /reports/z-report — the branch's business day.
+  Future<DayReport> zReport({required String branchId, required String date}) async {
+    final uri = Uri.parse('$baseUrl/api/v1/reports/z-report').replace(queryParameters: {'branch_id': branchId, 'date': date});
+    return DayReport.fromJson(_decode(await _http.get(uri, headers: _authHeaders)));
+  }
+
+  /// GET /reports/z-report/print — the day's Z report as ESC/POS.
+  Future<List<int>> zReportBytes({required String branchId, required String date}) =>
+      _printBytes(Uri.parse('$baseUrl/api/v1/reports/z-report/print').replace(queryParameters: {'branch_id': branchId, 'date': date}));
+
+  /// POST /reports/z-report/close — reports.day_close: freeze the day with
+  /// its Z number. Closing a closed day returns it again.
+  Future<DayReport> closeDay({required String branchId, required String date}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/reports/z-report/close'),
+      headers: _authHeaders,
+      body: jsonEncode({'branch_id': branchId, 'date': date}),
+    );
+    return DayReport.fromJson(_decode(resp)['report'] as Map<String, dynamic>);
   }
 
   /// GET /sales/settings — the POS reads `shifts_required`.

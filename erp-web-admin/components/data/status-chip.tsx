@@ -43,6 +43,19 @@ const statusTone: Record<string, Tone> = {
   rejected: "bad",
 };
 
+// A purchase order's stages (erp-core-go migrations/057).
+export const PO_TONE = {
+  draft: "muted",
+  open: "info",
+  partially_received: "warn",
+  completed: "ok",
+  cancelled: "muted",
+  closed: "plum",
+} as const satisfies Record<string, Tone>;
+
+// A journal voucher's stages (Phase 14): posted reads as done, not as a refund.
+export const VOUCHER_TONE = { draft: "muted", submitted: "warn", approved: "info", posted: "ok", reversed: "plum" } as const satisfies Record<string, Tone>;
+
 function labelFor(status: string) {
   const s = status.replace(/_/g, " ");
   return s.charAt(0).toUpperCase() + s.slice(1);

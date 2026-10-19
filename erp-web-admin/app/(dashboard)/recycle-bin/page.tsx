@@ -30,6 +30,8 @@ const ENTITY_LABEL: Record<string, string> = {
   report_template: "Report template",
   quotation: "Quotation (draft)",
   journal_voucher: "Journal voucher (draft)",
+  purchase_order: "Purchase order",
+  grn: "Goods receipt (draft GRN)",
 };
 
 export default function RecycleBinPage() {

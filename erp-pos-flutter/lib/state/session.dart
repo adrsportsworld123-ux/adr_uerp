@@ -1032,6 +1032,35 @@ class AppSession extends ChangeNotifier {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Attendance (erp-core-go internal/hr/attendance.go). Kept here so the
+  // status bar's check-in chip shows the cashier's state at a glance.
+  // ---------------------------------------------------------------------
+
+  /// The signed-in user's attendance, null when not loaded yet.
+  MyAttendance? attendance;
+
+  /// Loads the caller's attendance. Quietly does nothing offline; the
+  /// status bar then shows the last known state.
+  Future<void> refreshAttendance() async {
+    if (offlineMode) return;
+    try {
+      attendance = await api.myAttendance();
+      notifyListeners();
+    } catch (e) {
+      if (_isNetworkError(e)) {
+        offlineMode = true;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// Sets the attendance the attendance screen just loaded or punched.
+  void setAttendance(MyAttendance me) {
+    attendance = me;
+    notifyListeners();
+  }
+
   Future<Shift> openShift(double openingFloat, String idempotencyKey) async {
     final s = await _live(() => api.openShift(terminalId: posTerminalId, openingFloat: openingFloat, idempotencyKey: idempotencyKey));
     currentShift = s;
@@ -1074,6 +1103,45 @@ class AppSession extends ChangeNotifier {
     currentShift = null;
     notifyListeners();
     return closed;
+  }
+
+  // ---------------------------------------------------------------------
+  // X and Z reports (erp-core-go day_report.go): the X report is one shift
+  // of a till, the Z report this branch's whole business day. Online only.
+  // ---------------------------------------------------------------------
+
+  Future<List<ShiftSummary>> listShifts({bool thisTerminalOnly = true, String? from, String? to}) =>
+      _live(() => api.listShifts(branchId: branchId, terminalId: thisTerminalOnly ? posTerminalId : null, from: from, to: to));
+
+  Future<Shift> loadShift(String shiftId) => _live(() => api.getShift(shiftId));
+
+  Future<DayReport> loadDayReport(String date) => _live(() => api.zReport(branchId: branchId, date: date));
+
+  Future<DayReport> closeDay(String date) => _live(() => api.closeDay(branchId: branchId, date: date));
+
+  /// Prints a shift's X report on the receipt printer; false with
+  /// [lastError] set when it couldn't.
+  Future<bool> printShiftReport(String shiftId, PrinterService printer) =>
+      _printReport(() => api.shiftReportBytes(shiftId), printer);
+
+  /// Prints the branch's Z report for [date] on the receipt printer.
+  Future<bool> printDayReport(String date, PrinterService printer) =>
+      _printReport(() => api.zReportBytes(branchId: branchId, date: date), printer);
+
+  Future<bool> _printReport(Future<List<int>> Function() bytes, PrinterService printer) async {
+    _lastError = null;
+    try {
+      await printer.printBytes(await _live(bytes));
+      return true;
+    } catch (e) {
+      _lastError = e is StateError
+          ? e.message
+          : e is ApiException
+              ? e.message
+              : 'Could not print the report: $e';
+      notifyListeners();
+      return false;
+    }
   }
 
   // ---------------------------------------------------------------------

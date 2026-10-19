@@ -74,6 +74,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final me = await api.myAttendance();
       if (!mounted) return;
       setState(() => _me = me);
+      context.read<AppSession>().setAttendance(me);
       _locate();
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);

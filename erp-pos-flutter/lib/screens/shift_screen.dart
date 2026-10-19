@@ -3,15 +3,28 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../printing/printer_service.dart';
 import '../state/session.dart';
 import '../ui/approval_pin_pad.dart';
 import '../ui/format.dart';
 
 /// The till's shift (Phase 13, erp-core-go internal/sales/shifts.go):
 /// open with a float, see the live X report, move cash in and out, and
-/// close with a counted drawer, which produces the Z report. The close is
-/// recorded as the shift's cash reconciliation, so the back office sees it
-/// alongside the daily counts.
+/// close with a counted drawer, which makes the X report final. The close
+/// is recorded as the shift's cash reconciliation, so the back office sees
+/// it alongside the daily counts. The X report prints on the receipt
+/// printer; the day's Z report (every till) is under menu → X / Z reports
+/// (till_reports_screen.dart).
+///
+/// Prints the shift's X report on the receipt printer, with a snackbar
+/// saying how it went.
+Future<void> printShiftReport(BuildContext context, String shiftId) async {
+  final session = context.read<AppSession>();
+  final messenger = ScaffoldMessenger.of(context);
+  final ok = await session.printShiftReport(shiftId, PrinterService());
+  messenger.showSnackBar(SnackBar(content: Text(ok ? 'X report sent to the printer' : (session.lastError ?? 'Could not print'))));
+}
+
 class ShiftScreen extends StatefulWidget {
   const ShiftScreen({super.key});
 
@@ -81,10 +94,17 @@ class _ShiftScreenState extends State<ShiftScreen> {
     if (closed == null || !mounted) return;
     await Navigator.of(context).pushReplacement(MaterialPageRoute(
       builder: (ctx) => Scaffold(
-        appBar: AppBar(title: Text('Z report · shift ${closed.shiftNumber}')),
+        appBar: AppBar(title: Text('Shift closed · shift ${closed.shiftNumber}')),
         body: ListView(padding: const EdgeInsets.all(16), children: [
           if (closed.report != null) ShiftReportView(report: closed.report!),
           const SizedBox(height: 16),
+          OutlinedButton.icon(
+            key: const Key('print-x-report'),
+            onPressed: () => printShiftReport(ctx, closed.shiftId),
+            icon: const Icon(Icons.print),
+            label: const Text('Print X report'),
+          ),
+          const SizedBox(height: 8),
           FilledButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Done')),
         ]),
       ),
@@ -153,6 +173,12 @@ class _ShiftScreenState extends State<ShiftScreen> {
                           icon: const Icon(Icons.swap_vert),
                           label: const Text('Cash in / out'),
                         ),
+                        OutlinedButton.icon(
+                          key: const Key('print-x-report'),
+                          onPressed: () => printShiftReport(context, shift.shiftId),
+                          icon: const Icon(Icons.print),
+                          label: const Text('Print X report'),
+                        ),
                         FilledButton.icon(
                           key: const Key('close-shift'),
                           onPressed: _close,
@@ -185,8 +211,11 @@ String _methodLabel(String m) => switch (m) { 'upi' => 'UPI', 'cash' => 'Cash', 
 String _kindLabel(String k) =>
     switch (k) { 'float_in' => 'Float in', 'drop' => 'Drop to safe', 'paid_in' => 'Paid in', 'paid_out' => 'Paid out', _ => k };
 
-/// The X or Z report: sales and tenders, returns, and the drawer's cash
-/// from the opening float to the expected (and, for Z, counted) amount.
+/// A shift's X report: sales and tenders, returns, and the drawer's cash
+/// from the opening float to the expected (and, once the shift is closed,
+/// counted) amount. The server marks a closed shift's report kind "Z" (its
+/// frozen close); on screen it's the shift's final X report, the Z report
+/// being the branch's day.
 class ShiftReportView extends StatelessWidget {
   final ShiftReport report;
 
@@ -220,7 +249,7 @@ class ShiftReportView extends StatelessWidget {
     final close = report.close;
     final variance = double.tryParse(close?['variance'] as String? ?? '0') ?? 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text(report.kind == 'Z' ? 'Z report (final)' : 'X report (so far)', key: Key('report-${report.kind}'), style: theme.textTheme.labelLarge),
+      Text(report.kind == 'Z' ? 'X report (final)' : 'X report (so far)', key: Key('report-${report.kind}'), style: theme.textTheme.labelLarge),
       const SizedBox(height: 8),
       section('Sales', [
         Text('${report.orderCount} sale${report.orderCount == 1 ? '' : 's'}${report.voidedCount > 0 ? ' · ${report.voidedCount} voided' : ''}'),

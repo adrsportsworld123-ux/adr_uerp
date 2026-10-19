@@ -20,10 +20,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/data/page-header";
-import { StatusChip } from "@/components/data/status-chip";
+import { PartyCell } from "@/components/accounting/party-cell";
+import { StatusChip, VOUCHER_TONE } from "@/components/data/status-chip";
 import { VoucherForm } from "@/components/accounting/voucher-form";
-
-const TONE = { draft: "muted", submitted: "warn", approved: "info", posted: "ok", reversed: "plum" } as const;
 
 export default function VoucherPage() {
   const { id } = useParams<{ id: string }>();
@@ -88,7 +87,7 @@ export default function VoucherPage() {
         title={`Voucher ${v.voucher_number}`}
         description={
           <span className="flex flex-wrap items-center gap-2">
-            <StatusChip status={v.status} tone={TONE[v.status]} /> {v.entry_date} · made by {v.created_by}
+            <StatusChip status={v.status} tone={VOUCHER_TONE[v.status]} /> {v.entry_date} · made by {v.created_by}
           </span>
         }
         actions={
@@ -160,6 +159,7 @@ export default function VoucherPage() {
               <thead className="text-left text-xs text-muted-foreground">
                 <tr>
                   <th className="pb-1 font-medium">Account</th>
+                  <th className="pb-1 font-medium">Party</th>
                   <th className="pb-1 text-right font-medium">Debit</th>
                   <th className="pb-1 text-right font-medium">Credit</th>
                   <th className="pb-1 font-medium">Memo</th>
@@ -171,6 +171,9 @@ export default function VoucherPage() {
                     <td className="py-1.5">
                       {l.account_code} · {l.account_name}
                     </td>
+                    <td className="py-1.5" data-testid="jv-line-party">
+                      <PartyCell type={l.party_type} id={l.party_id} name={l.party_name} />
+                    </td>
                     <td className="tabular py-1.5 text-right">{Number(l.debit) ? rupees(l.debit) : ""}</td>
                     <td className="tabular py-1.5 text-right">{Number(l.credit) ? rupees(l.credit) : ""}</td>
                     <td className="py-1.5 text-muted-foreground">{l.memo}</td>
@@ -179,7 +182,9 @@ export default function VoucherPage() {
               </tbody>
               <tfoot>
                 <tr className="border-t font-medium">
-                  <td className="pt-2">Total</td>
+                  <td className="pt-2" colSpan={2}>
+                    Total
+                  </td>
                   <td className="tabular pt-2 text-right">{rupees(v.total)}</td>
                   <td className="tabular pt-2 text-right">{rupees(v.total)}</td>
                   <td />

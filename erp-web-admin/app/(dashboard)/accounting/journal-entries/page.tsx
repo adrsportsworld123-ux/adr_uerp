@@ -15,13 +15,12 @@ import { SOURCE_LABEL, rupees } from "@/lib/format";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Column, DataTable } from "@/components/data/data-table";
 import { PageHeader } from "@/components/data/page-header";
+import { selectClass } from "@/components/data/panel";
 import { StatusChip } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
 
 const FILTER_KEYS = ["source_type", "from", "to"];
-const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
-
 const columns: Column<LedgerEntry>[] = [
   {
     key: "entry",

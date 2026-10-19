@@ -42,6 +42,7 @@ export default function GRNListPage() {
             <TableRow>
               <TableHead>GRN Number</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Purchase order</TableHead>
               <TableHead>Grand Total</TableHead>
               <TableHead>Created</TableHead>
               <TableHead></TableHead>
@@ -53,6 +54,15 @@ export default function GRNListPage() {
                 <TableCell className="font-medium">{g.grn_number}</TableCell>
                 <TableCell>
                   <Badge variant={STATUS_VARIANT[g.status] ?? "outline"}>{g.status}</Badge>
+                </TableCell>
+                <TableCell>
+                  {g.purchase_order_id ? (
+                    <Link href={`/purchase/orders/${g.purchase_order_id}`} className="text-sm underline-offset-2 hover:underline">
+                      {g.po_number}
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Direct</span>
+                  )}
                 </TableCell>
                 <TableCell>₹{g.grand_total}</TableCell>
                 <TableCell>{new Date(g.created_at).toLocaleString()}</TableCell>

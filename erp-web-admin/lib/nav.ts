@@ -90,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Truck,
     items: [
       { href: "/suppliers", label: "Suppliers", match: ["/suppliers/"] },
+      { href: "/purchase/orders", label: "Purchase Orders", match: ["/purchase/orders/"] },
       { href: "/purchase/import", label: "Import Invoice" },
       { href: "/purchase/grn", label: "Goods Receipt (GRN)", match: ["/purchase/grn/"] },
       { href: "/purchase/bills", label: "Purchase Bills", match: ["/purchase/bills/"] },
@@ -130,6 +131,9 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: ChartColumn,
     items: [
       { href: "/reports", label: "Reports" },
+      { href: "/reports/library", label: "Report Library" },
+      { href: "/reports/saved", label: "Saved Reports" },
+      { href: "/reports/x-z", label: "X & Z Reports" },
       { href: "/reports/builder", label: "Report Builder", feature: "custom_report_builder" },
     ],
   },
@@ -168,6 +172,7 @@ export const EXTRA_DESTINATIONS: (NavItem & { group: string })[] = [
   { href: "/products/new", label: "New product", group: "Catalog" },
   { href: "/customers/new", label: "New customer", group: "Customers" },
   { href: "/suppliers/new", label: "New supplier", group: "Purchasing" },
+  { href: "/purchase/orders/new", label: "New purchase order", group: "Purchasing" },
   { href: "/purchase/grn/new", label: "New goods receipt", group: "Purchasing" },
   { href: "/purchase/bills/new", label: "New purchase bill", group: "Purchasing" },
   { href: "/purchase/returns/new", label: "New purchase return", group: "Purchasing" },

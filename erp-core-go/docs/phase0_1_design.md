@@ -222,6 +222,10 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `ORDER_NOT_HELD` | 409 | `POST /sales/orders/{id}/void-held` | Only a held order can be voided this way (a completed sale uses `/void`) |
 | `ORDER_NOT_RELEASABLE` | 409 | `POST /sales/orders/{id}/release` | Only an open cart or a held order can be released (a completed sale is voided) |
 | `CART_IN_USE` | 409 | `POST /sales/orders/{id}/release` | Another cashier's cart was worked on within the 15-minute reservation window |
+| `DAY_NOT_OVER` | 409 | `POST /reports/z-report/close` | Only a business day that has ended (IST) can be closed; today's Z report stays live |
+| `SHIFT_STILL_OPEN` | 409 | `POST /reports/z-report/close` | A shift that was open during the day is still open; `details.open_shifts` names the tills |
+| `DAY_ALREADY_CLOSED` | 409 | `POST /reports/z-report/close` | Someone closed the same day at the same moment (a plain retry replays with 200 instead) |
+| `DASHBOARD_NOT_ALLOWED` | 403 | `GET /dashboard` | The caller's roles lack `dashboard.view`; the web shows its shortcuts instead |
 | `ATTENDANCE_HAS_SESSIONS` | 409 | `PATCH /hr/attendance/{id}` | The day has several check-in sessions; correct their times with `PATCH /hr/attendance/sessions/{id}` |
 | `SESSION_OVERLAP` | 409 | `PATCH /hr/attendance/sessions/{id}`, `POST /hr/attendance/{id}/sessions`, `PATCH /hr/attendance/{id}` | The times overlap another session of the same employee |
 | `IN_USE` | 409 | every master `DELETE` | Something still uses the record (`details.dependencies`, or a rule in the message) — deactivate instead |
@@ -230,6 +234,15 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `LAST_RBAC_HOLDER` | 409 | `DELETE`/`PATCH /hr/employees/{id}` | No one else could manage roles and permissions |
 | `LAST_BRANCH` | 409 | `DELETE /branches/{id}` | The merchant's only branch |
 | `DUPLICATE` / `DUPLICATE_CODE` | 409 | `PATCH /hr/employees/{id}`, `PATCH /accounting/accounts/{id}` | Email/phone/employee code, or account code, already used (an account code also by a deleted account) |
+| `PO_NOT_EDITABLE` | 409 | `/purchase/orders/{id}` lines, `issue`, `cancel`, `close` | Only a draft PO's lines change; issue needs a draft with lines; cancel needs draft/open; close needs partially received (§3.65) |
+| `PO_NOT_RECEIVABLE` | 409 | `POST /purchase/orders/{id}/grn`, GRN add-line/complete | The PO isn't open or partially received (draft, completed, cancelled or closed) |
+| `PO_OVER_RECEIPT` | 409 | `POST /purchase/orders/{id}/grn`, GRN add-line/complete | More than the PO line still has pending (counting other draft GRNs at entry; authoritative at completion) |
+| `PO_LINE_MISMATCH` | 400 | `POST /purchase/orders/{id}/grn`, GRN add-line/complete | The item or `po_line_id` isn't on the GRN's purchase order |
+| `PO_HAS_RECEIPTS` | 409 | `POST /purchase/orders/{id}/cancel`, `close` | A GRN exists against the PO (cancel), or a draft GRN is still open (close) |
+| `GRN_ALREADY_BILLED` | 409 | `POST /purchase/bills` | The GRN already has a purchase bill; billing it again would book the payable twice |
+| `PO_NOT_DELETABLE` | 409 | `DELETE /purchase/orders/{id}` | Only a draft or open PO can be deleted; a received, completed, closed or cancelled one stays on record (§3.66) |
+| `GRN_NOT_DELETABLE` | 409 | `DELETE /purchase/grn/{id}` | Only a draft GRN can be deleted; a completed one is corrected with a purchase return |
+| `GRN_HAS_RETURN` | 409 | `DELETE /purchase/grn/{id}` | A purchase return refers to this draft GRN |
 
 ### 3.1 Auth
 
@@ -2053,6 +2066,184 @@ It runs in a savepoint (`cart_change.go`): a promotion that fails to evaluate is
   - `price-lists`, `phase16-report-builder`, `credit`, `documents`, `notifications`, `pharmacy` and others passed.
   - `einvoice`, `fixed-discount` (the seed bat's price has drifted), `grocery`, `payment-gateway-reconciliation` and `phase10-pricing` fail identically against an API built from the previous commit, so they predate this change.
   - `phase15-approval-policies` is stale: the Inventory screen's product field became a typeahead. When it times out it leaves `stock_adjust_approval_above` at 100, which blocks later specs' stock top-ups; reset it after such a run.
+
+### 3.60 X and Z reports (2026-10-18)
+
+**X = one till's shift, Z = one branch's business day** (the user's definition). The shift report that `pos_shifts` already kept (live while open, frozen in `pos_shifts.z_report` at the close) is the **X report**; the POS and web now call a closed shift's report "X report (final)". The stored JSON keeps `kind: "Z"` for a closed shift, so nothing already saved changes.
+
+**The day's Z report** (`internal/sales/day_report.go`, `GET /reports/z-report?branch_id=&date=`):
+- The business day is the calendar day in IST, whatever the database's time zone (a fixed +05:30 zone, so the distroless image needs no tzdata). A sale counts at `COALESCE(device_created_at, finalized_at)`, the same moment as the X report and the cash count.
+- Contents:
+  - sales (bills, subtotal, discounts, tax, net, credit, average bill, first and last bill number);
+  - tenders, plus `credit` for the on-account part;
+  - channels; GST by the product slab's rate; cashiers;
+  - returns by refund method;
+  - voided sales; released carts (`held_voided`, by `voided_at`);
+  - the branch's cash flow over the day (`accounting.ComputeCashFlow` with the day's window);
+  - every shift open at any point of the day, with its own X figures, count and variance.
+- **Closing a day** (`POST /reports/z-report/close {branch_id, date}`, `reports.day_close`):
+  - who can: Merchant Admin and Branch Manager by default (migration 056);
+  - what it does: freezes the report in `z_reports` with the branch's next Z number (one close at a time per branch: `SELECT … FOR UPDATE` on the branch);
+  - refusals: today or later → `DAY_NOT_OVER`; a shift of the day still open → `SHIFT_STILL_OPEN`;
+  - idempotent on (branch, date): closing a closed day returns it with `replayed: true`;
+  - a closed day is always shown frozen, and if the live figures have moved since (a sale synced late, a later void), the response carries `changed_since_close` instead of rewriting the printed report.
+- `GET /reports/z-reports?branch_id=&from=&to=` lists closed days. `z_reports` has the tenant and branch-scope policies.
+
+**Printing.** `printing.BuildReport` lays out a heading and label/value sections on a 32-column receipt, the same way `BuildReceipt` lays out a sale. Two endpoints return the ESC/POS bytes:
+- `GET /pos-shifts/{id}/report/print` — the X report;
+- `GET /reports/z-report/print?branch_id=&date=` — the Z report.
+
+The web prints either through the browser (paper or PDF); the shell's sidebar and header are `print:hidden` now.
+
+`GET /pos-shifts` rows gained `branch_name`, `closed_by`, and (closed shifts) `order_count`/`net_sales`; `GET /pos-shifts/{id}` gained `branch_name`.
+
+**Screens.**
+- Web: **Reports → X & Z Reports**:
+  - X tab: shifts filtered by branch, till, status and dates; open one for its X report.
+  - Z tab: the branch's day, Close day, and the closed-days history.
+- POS: **menu → X / Z reports** (`till_reports_screen.dart`):
+  - X tab: this till's or the branch's shifts by dates.
+  - Z tab: the day by date, printed to the receipt printer; Close day for a day that has ended.
+- The shift screen prints the X report too.
+
+### 3.61 The party on journal vouchers (2026-10-18)
+
+Found:
+- The voucher form had no party fields at all.
+- The older `POST /accounting/journal-entries` dropped `party_type`/`party_id` before saving. On live, every manual line on 1100/2002 had no party.
+- The journal entry page showed only the type.
+
+Now:
+- **Validation** (`vouchers.go validate` and `writeVoucherLines`):
+  - a party is all or nothing;
+  - its id must be a real customer or supplier;
+  - a line on a control account must name the matching kind: **1100 Accounts Receivable → a customer, 2002 Accounts Payable → a supplier**. That way the party ledger keeps agreeing with the control account.
+- **Responses:** voucher lines and journal entry lines return `party_name`.
+- **Journal list:** `GET /accounting/journal-entries` takes `party_id`, and its CSV export gains a `party_name` column.
+- **Party ledger:** `GET /accounting/party-ledger` gains:
+  - `from`/`to`, with an `opening_balance`;
+  - entry id, number, account and a running balance per line;
+  - `party_name` and the totals.
+  - The cash book's lines carry the same fields.
+- **Web:**
+  - The voucher form has a Party column: type, then a server-searched picker (`PartyPicker`). Choosing 1100 or 2002 sets the type, and Post stays disabled until the party is chosen.
+  - Voucher and journal entry pages show the party, linked to its ledger.
+  - The party ledger page searches parties, takes dates, shows a running balance and prints as a statement.
+
+### 3.62 The sales dashboard (2026-10-18)
+
+`internal/dashboard`; `GET /dashboard?from=&to=&branch_id=&channel=` returns the caller's widgets and their data in one call.
+
+**Widgets:**
+- headline figures: today, the week and the month so far, and the average bill, each against the same days of the period before;
+- sales tracking: month-to-date against the target and against last month, day by day; the projection; ₹ needed per day; the Indian financial year to date against the year before;
+- daily sales (the chosen dates); weekly sales (12 weeks to the end date); monthly sales (12 months, beside the same month a year before);
+- payment mix; top 10 products; top 10 categories; sales by branch; sales by hour.
+
+**What counts as a sale.** Completed sales (finalized, or partly or fully refunded since; never voids or open carts) at their grand total, counted on their IST day. The dates are capped at 366 days.
+
+**Access by role** (migration 056):
+- `dashboard.view` is needed to see the dashboard at all. Merchant Admin has it by default, and Roles & Permissions grants it to any other role. Without it, `DASHBOARD_NOT_ALLOWED` is returned and the page shows its shortcuts.
+- `dashboard.configure` (Merchant Admin) chooses each role's widgets and their order in `dashboard_role_widgets`, through `PUT /dashboard/roles/{id} {widgets | null}`.
+  - A role with no row sees every widget.
+  - Someone with several roles sees the union of their roles' widgets.
+- Branch scope applies as everywhere, so a Branch Manager's dashboard covers their own branches.
+
+**Targets.** `PUT /dashboard/targets` sets one monthly target per branch plus one for the whole business (`sales_targets`). When no branch is picked, tracking uses the whole-business target, or else the sum of the branch targets.
+
+**Web.**
+- The dashboard is drawn with recharts 3.9 (a new dependency of `erp-web-admin`).
+- Filters: date presets or custom dates, branch, and channel. The page refreshes every two minutes.
+- **Customize** (`/dashboard/settings`) sets the widgets per role and the targets.
+- Recharts makes each chart focusable for keyboard users. After a client-side navigation from the dashboard that left nothing focused, Tab used to resume past the end of the next page. The app shell now puts focus back at the top on navigation, so the skip link is again the first Tab stop on every page.
+
+### 3.63 The standard report library and saved reports (2026-10-18)
+
+`internal/reportbuilder/library.go` holds 37 ready-made reports, in eight groups, over the builder's allow-listed datasets. They therefore share its compiler, limits, branch scope and background exports.
+
+| Group | Reports |
+|---|---|
+| Sales | register; daily and monthly summaries; by branch, cashier and customer; by hour |
+| Items | item-wise, category-wise and brand-wise sales; items sold register; GST rate summary |
+| Payments | by method, daily by method, register |
+| Stock | on hand, valuation by category, low stock, movement register and summary |
+| Products | price list, lowest margins |
+| Purchases | register, by supplier, outstanding payables, items purchased, by product |
+| Accounts | profit and loss (and monthly), journal report, trial balance, general ledger, ledger by party |
+| Audit | audit report, changes by user, sales audit report and summary |
+
+**New datasets:**
+- `purchases` (supplier bills);
+- `purchase_items` (completed GRN lines);
+- `audit_log`;
+- `sales_audit`: voids, released carts, returns, manual discounts and open-price lines, with who did and who approved each;
+- `profit_loss`: ledger income and expenses plus the cost of goods sold at the current cost price, less items restocked by returns. Amounts are signed, so their total is the profit.
+- `journal_lines` gained `party_type` and `party`.
+
+Datasets marked **statutory** are not limited by the plan's report history, matching `subscriptions.retentionRoutes`' rule: sales, payments, the ledger, purchases and the audit trail.
+
+**Periods.** `Spec.period` (`today`, `this_week` … `this_fy`, `last_fy`; IST; weeks start Monday, the financial year in April) is used when no dates are given. A saved "this month" therefore always means the current month.
+
+**Endpoints** (every plan, any signed-in user, inside their branch scope):
+- `GET /reports/library`.
+- `POST /reports/library/{key}/run` (preview of the first 1,000 rows, with the dates covered) and `/export` (CSV or XLSX in the background, recorded with `report_runs.library_key`, so the runner skips the builder's plan check).
+- Saved reports: `POST /reports/saved` keeps a library report with its filters and period (`report_templates.library_key`). `GET /reports/saved` lists those along with the builder's own templates. `POST /reports/saved/{id}/run`, `/export` and `DELETE` work on one; a built template still needs the builder's plan feature.
+- Generated reports: `GET /reports/runs` and `/reports/runs/{id}/download`. `POST /reports/runs/{id}/regenerate {format?, refresh? | date_from+date_to}` produces it again with the same dates, with its period re-read as of today, or with other dates.
+
+**Web:**
+- **Report Library**: groups, search, period or custom dates, quick filters, run with a totals row (shown as "Profit" on the P&L), Print/PDF, CSV and Excel, and Save to my reports.
+- **Saved Reports**: saved reports to run, export or delete, and generated reports to download or regenerate.
+
+### Verified (2026-10-18)
+
+- **Go:** build, vet and test all pass, including new tests for the library (every report compiles; periods), report printing, and padRow.
+- **Dry run against a fresh copy of live** (`erp_dryrun` with 056 applied, test API on :8082): every check in `verify_round10.py` passed, about 100 in all. They cover:
+  - party validation, legacy-path party, party names, ledger running and opening balance, CSV column, party filter;
+  - X print; Z today/yesterday; `DAY_NOT_OVER`; close, replay, list and print of a past day;
+  - dashboard defaults and filters, targets, role widgets and reset;
+  - all 37 library reports run, the trial balance balances, P&L, saved/run/export/download/regenerate.
+- **POS:** `flutter analyze` is clean. All 54 tests pass, including the new `till_reports_test.dart`; `shift_test` now expects "X report (final)".
+- **Web:**
+  - `tsc` and `lint` are clean.
+  - The new `reports-round10.spec.ts` passes, twice in a row. It covers: a voucher's party through to the party ledger; X by shift and the Z close of a past day; widgets per role, the target, and no dashboard for a cashier; the library through to regenerating an export.
+  - `phase14-jv-workflow` passes with its CSV header now ending in `party_name`, along with `phase13-shifts`, `reports`, `phase16-report-builder`, `purchase-and-accounting`, `rbac`, `release-cart-promotions` and `phase11-a11y` (after the focus fix).
+
+### 3.64 Book totals from the server; e-invoices on the sale (2026-10-19)
+
+**Day Book and Cash Book totals.** The web app doesn't add money up itself, so the server now returns the totals, summed in SQL as `NUMERIC(14,2)` text:
+- `GET /accounting/day-book` adds `total_debit`/`total_credit` for the day, and the same two fields on each entry.
+- `GET /accounting/cash-book` adds `total_debit` (money in) and `total_credit` (money out). `net_movement` is now `SUM(debit − credit)` in SQL, not a float sum; each line's running balance is unchanged.
+
+All fields are additive, so existing callers are unaffected. A day with nothing posted returns `"0.00"`.
+
+**E-invoice and e-way bill on the sale.** `/sales/{id}` shows both documents for a completed sale, when the plan includes `gst_compliance`, with generate and cancel. The web component is `EInvoiceDocuments`; writes still need `einvoice.manage`. `/e-invoicing` stays as the lookup by order ID and opens straight onto one with `?order_id=`. The component fixes two things in the old page: the e-invoice and e-way bill no longer share one cancel-reason field, and a document can't be generated twice by a double-click.
+
+### 3.65 Purchase orders: PO → GRN → purchase invoice; quotation PDF (2026-10-19)
+
+`migrations/057_purchase_orders.sql` adds the formal purchase flow that migration 006 deferred. It is additive: a GRN without a PO (direct receipt, the invoice importer) behaves exactly as before.
+
+- **PO** (`purchase_orders`, `purchase_order_lines`): supplier, delivery branch, expected date, lines with ordered quantity and agreed unit cost. It never moves stock or posts to the books. Branch-scoped by RLS like GRNs (migration 044).
+- **Status:** `draft` (lines editable) → `open` (issued) → `partially_received` → `completed`. `draft`/`open` with no GRN → `cancelled`. `partially_received` → `closed` (short-closed, reason required, refused while a draft GRN is open).
+- **Receiving:** `POST /purchase/orders/{id}/grn {lines:[{po_line_id, quantity, unit_cost?, batch_no?, expiry_date?}], freight_amount?, other_charges?, notes?}` creates a draft GRN linked to the PO (`goods_receipt_notes.purchase_order_id`, `goods_receipt_lines.po_line_id`). A line may receive any quantity up to what is pending; `unit_cost` defaults to the PO's. `POST /purchase/grn/{id}/lines` on a PO-linked GRN accepts only that PO's items and maps them to the PO line. Many GRNs per PO.
+- **Completion is the authoritative point.** `completeGRNTx` locks the PO row, refuses an over-receipt (`PO_OVER_RECEIPT`) before any stock moves, adds the quantities to `received_qty`, and sets the PO to `partially_received` or, once nothing is pending, `completed`. A `CHECK (received_qty <= quantity)` backs this up. Draft GRNs never count as received.
+- **Purchase invoice** is the existing purchase bill, one per GRN, so the ledger posting is unchanged. New guard: a GRN can be billed only once (`GRN_ALREADY_BILLED`, with a row lock on the GRN). Previously nothing stopped a second bill doubling the payable.
+- **Read side:** `GET /purchase/orders` follows the Phase 11 list convention (`q`, `status` incl. `pending`, `supplier_id`, `branch_id`, `sort`, `page`, `limit`, `total`), with ordered/received totals. `GET /purchase/orders/{id}` returns lines with `received_qty`/`pending_qty` and the GRNs with their bills. GRN responses add `purchase_order_id`, `po_number`, `bill_id`, `bill_number`, and each line's `po_line_id`; the GRN list adds `purchase_order_id`, `po_number`, `billed` and a `purchase_order_id` filter. All additive.
+- **PDFs:** `GET /purchase/orders/{id}/pdf` (supplier-facing letterhead footer; draft/cancelled/closed stamped). GRN and bill PDFs now show the PO number.
+- **Access:** same as GRNs and bills today (any authenticated user, branch-scoped). There are no purchase permissions yet; adding `purchase.manage`/`purchase.approve` is the natural next step if issuing a PO should need approval.
+
+**B2B quotation PDF.** `GET /quotations/{id}/pdf`: an A4 "QUOTATION" under the branch letterhead (customer-facing footer), with the customer's company, contact, address and GSTIN, valid-until date, lines with rate/GST/amount, and totals. Draft, rejected and expired quotes print with a stamp. The web Quotations page has Download PDF and Print.
+
+Verified on a fresh database built from all 57 migrations: an API script covering every transition and refusal above (32 checks), stock and WAC per GRN, balanced purchase journals, and the web flows in `e2e/purchase-orders.spec.ts` and `e2e/quotations.spec.ts`.
+
+### 3.66 Deleting a draft or open PO and a draft GRN (2026-10-19)
+
+`migrations/058_purchase_draft_delete.sql` puts `purchase_orders`, `purchase_order_lines`, `goods_receipt_notes` and `goods_receipt_lines` under the migration 050 soft delete: a deleted row is stamped, audited (with the optional `?reason=`), hidden from every query by RLS, and restorable from the recycle bin (`purchase_order`, `grn`) together with its lines.
+
+- `DELETE /purchase/orders/{id}?reason=`: a `draft` or `open` PO with no GRN against it. A PO with a draft GRN answers `PO_HAS_RECEIPTS` (delete the GRN first); anything else `PO_NOT_DELETABLE` (cancel, or close short).
+- `DELETE /purchase/grn/{id}?reason=`: a `draft` GRN only, with or without a PO, and not referenced by a purchase return. A draft has moved no stock, cost or PO quantity, so nothing is reversed; the PO's pending quantity is free again at once. Locks the GRN and its PO, like completion.
+- Restoring a GRN whose PO is deleted is refused (`RESTORE_CONFLICT`); restore the PO first. A restored draft GRN is checked against pending again when it completes.
+
+Web: a Delete button with a reason on the PO page (draft/open, no GRN) and the GRN page (draft), via `components/purchase/delete-document-dialog.tsx`. An open PO keeps its Cancel button for orders the supplier already has. Verified on a fresh database: 27 API checks, and the web flow in `e2e/purchase-orders.spec.ts`.
 
 ## 4. What Phase 0 concretely delivers against this design
 

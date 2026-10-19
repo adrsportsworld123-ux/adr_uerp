@@ -82,7 +82,7 @@ test("e-invoice and e-way bill: generate and cancel an interstate B2B order's co
   await test.step("generate the e-invoice and see a real-shaped IRN", async () => {
     await page.click("text=Generate e-invoice");
     await expect(page.getByText(/IRN:/)).toBeVisible();
-    await expect(page.getByText("generated", { exact: true })).toBeVisible();
+    await expect(page.getByText("Generated", { exact: true })).toBeVisible();
   });
 
   await test.step("generate the e-way bill and see the interstate/required-by-rule badges", async () => {
@@ -92,6 +92,17 @@ test("e-invoice and e-way bill: generate and cancel an interstate B2B order's co
     await expect(page.getByText(/EWB No:/)).toBeVisible();
     await expect(page.getByText("Interstate", { exact: true })).toBeVisible();
     await expect(page.getByText(/Required by rule/)).toBeVisible();
+  });
+
+  await test.step("the sale's own page shows both documents, and opens the lookup page straight onto the order", async () => {
+    await page.goto(`/sales/${orderId}`);
+    const docs = page.getByTestId("sale-einvoice");
+    await expect(docs.getByText(/IRN:/)).toBeVisible();
+    await expect(docs.getByText(/EWB No:/)).toBeVisible();
+    await expect(docs.getByRole("button", { name: "Cancel e-invoice" })).toBeVisible();
+
+    await page.goto(`/e-invoicing?order_id=${orderId}`);
+    await expect(page.getByText(/EWB No:/)).toBeVisible();
   });
 
   await test.step("cancel both documents", async () => {

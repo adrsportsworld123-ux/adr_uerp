@@ -15,6 +15,8 @@
 // - Correct a payment method (FRD §3 "Bill Modification"): a manager's
 //   code + PIN and a reason; the ledger is reclassed and audited.
 // Prices and quantities are corrected with a return and a new sale.
+// - E-invoice and e-way bill (einvoice.manage, plans with GST compliance):
+//   generated or cancelled here on a completed sale.
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -32,6 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/data/page-header";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 import { StatusChip } from "@/components/data/status-chip";
+import { EInvoiceDocuments } from "@/components/sales/einvoice-documents";
 
 const DISCOUNT_LABEL: Record<string, string> = { manual: "Manual", coupon: "Coupon", promotion: "Promotion", loyalty: "Loyalty points" };
 
@@ -55,11 +58,11 @@ function ApproverFields({ code, pin, onCode, onPin, idPrefix }: { code: string; 
   );
 }
 
-function Section({ title, children, aside }: { title: string; children: React.ReactNode; aside?: React.ReactNode }) {
+function Section({ title, children, aside }: { title: React.ReactNode; children: React.ReactNode; aside?: React.ReactNode }) {
   return (
     <section className="rounded-xl border bg-card">
       <div className="flex items-center justify-between border-b px-4 py-2.5">
-        <h2 className="text-sm font-semibold">{title}</h2>
+        <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold">{title}</h2>
         {aside}
       </div>
       <div className="p-4">{children}</div>
@@ -69,7 +72,7 @@ function Section({ title, children, aside }: { title: string; children: React.Re
 
 export default function SaleDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { can } = usePermissions();
+  const { can, has } = usePermissions();
   const [sale, setSale] = useState<SaleDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
@@ -327,6 +330,12 @@ export default function SaleDetailPage() {
           )}
         </div>
       </div>
+
+      {completed && has("gst_compliance") && (
+        <div className="grid gap-5 lg:grid-cols-2" data-testid="sale-einvoice">
+          <EInvoiceDocuments orderId={sale.order_id} frame={Section} />
+        </div>
+      )}
 
       {voiding && <VoidDialog sale={sale} onClose={() => setVoiding(false)} onDone={load} />}
       {returning && <ReturnDialog sale={sale} onClose={() => setReturning(false)} onDone={load} />}

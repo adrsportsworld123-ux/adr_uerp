@@ -120,15 +120,18 @@ type Template struct {
 	CreatedName string    `json:"created_by_name"`
 	Mine        bool      `json:"mine"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// LibraryKey: saved from a standard report (library.go), not built.
+	LibraryKey *string `json:"library_key"`
 }
 
-const templateSelect = `SELECT t.id, t.name, t.description, t.spec, t.shared, t.created_by, u.name, t.created_by::text = $1, t.updated_at
+const templateSelect = `SELECT t.id, t.name, t.description, t.spec, t.shared, t.created_by, u.name, t.created_by::text = $1, t.updated_at,
+	       t.library_key
 	FROM report_templates t JOIN users u ON u.id = t.created_by`
 
 func scanTemplate(row pgx.Row) (Template, error) {
 	var t Template
 	var spec []byte
-	if err := row.Scan(&t.ID, &t.Name, &t.Description, &spec, &t.Shared, &t.CreatedBy, &t.CreatedName, &t.Mine, &t.UpdatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.Name, &t.Description, &spec, &t.Shared, &t.CreatedBy, &t.CreatedName, &t.Mine, &t.UpdatedAt, &t.LibraryKey); err != nil {
 		return Template{}, err
 	}
 	return t, json.Unmarshal(spec, &t.Spec)

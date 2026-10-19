@@ -23,9 +23,10 @@ test("chart of accounts: add, edit, deactivate, delete, restore", async ({ page 
   const name = `E2E Account ${unique}`;
   await login(page);
   await page.goto("/accounting/chart-of-accounts");
+  await page.getByRole("button", { name: "New account" }).click();
   await page.fill("#code", code);
   await page.fill("#name", name);
-  await page.getByRole("button", { name: "Add account" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Add account" }).click();
   await expect(page.getByRole("cell", { name, exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: `Edit ${code} ${name}` }).click();

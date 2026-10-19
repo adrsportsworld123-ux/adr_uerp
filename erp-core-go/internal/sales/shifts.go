@@ -89,6 +89,7 @@ type shiftResponse struct {
 	ShiftNumber   int          `json:"shift_number"`
 	Status        string       `json:"status"`
 	BranchID      string       `json:"branch_id"`
+	BranchName    string       `json:"branch_name"`
 	TerminalID    string       `json:"pos_terminal_id"`
 	TerminalName  string       `json:"terminal_name"`
 	OpeningFloat  string       `json:"opening_float"`
@@ -107,17 +108,18 @@ type shiftResponse struct {
 func loadShift(ctx context.Context, tx pgx.Tx, merchantID, shiftID string, lock bool) (shiftResponse, error) {
 	var s shiftResponse
 	q := `
-		SELECT sh.id, sh.shift_number, sh.status, sh.branch_id, sh.pos_terminal_id, t.name, sh.opening_float::text, sh.opening_float,
+		SELECT sh.id, sh.shift_number, sh.status, sh.branch_id, b.name, sh.pos_terminal_id, t.name, sh.opening_float::text, sh.opening_float,
 		       ou.name, sh.opened_at, cu.name, sh.closed_at, sh.z_report
 		FROM pos_shifts sh
 		JOIN pos_terminals t ON t.id = sh.pos_terminal_id AND t.merchant_id = $2
+		JOIN branches b ON b.id = sh.branch_id
 		JOIN users ou ON ou.id = sh.opened_by
 		LEFT JOIN users cu ON cu.id = sh.closed_by
 		WHERE sh.id::text = $1`
 	if lock {
 		q += ` FOR UPDATE OF sh`
 	}
-	err := tx.QueryRow(ctx, q, shiftID, merchantID).Scan(&s.ShiftID, &s.ShiftNumber, &s.Status, &s.BranchID, &s.TerminalID, &s.TerminalName,
+	err := tx.QueryRow(ctx, q, shiftID, merchantID).Scan(&s.ShiftID, &s.ShiftNumber, &s.Status, &s.BranchID, &s.BranchName, &s.TerminalID, &s.TerminalName,
 		&s.OpeningFloat, &s.openingFloatV, &s.OpenedBy, &s.openedAtTime, &s.ClosedBy, &s.closedAtTime, &s.zReport)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, errShiftNotFound
@@ -681,13 +683,18 @@ func (h *Handler) ListShifts(w http.ResponseWriter, r *http.Request) {
 		ShiftID      string  `json:"shift_id"`
 		ShiftNumber  int     `json:"shift_number"`
 		Status       string  `json:"status"`
+		BranchID     string  `json:"branch_id"`
+		BranchName   string  `json:"branch_name"`
 		TerminalID   string  `json:"pos_terminal_id"`
 		TerminalName string  `json:"terminal_name"`
 		OpeningFloat string  `json:"opening_float"`
 		OpenedBy     string  `json:"opened_by"`
 		OpenedAt     string  `json:"opened_at"`
+		ClosedBy     *string `json:"closed_by"`
 		ClosedAt     *string `json:"closed_at"`
 		Variance     *string `json:"variance"`
+		OrderCount   *int    `json:"order_count"` // closed shifts (from the frozen report); null while open
+		NetSales     *string `json:"net_sales"`
 	}
 	list := []row{}
 	total := 0
@@ -696,6 +703,8 @@ func (h *Handler) ListShifts(w http.ResponseWriter, r *http.Request) {
 			FROM pos_shifts sh
 			JOIN pos_terminals t ON t.id = sh.pos_terminal_id
 			JOIN users u ON u.id = sh.opened_by
+			JOIN branches b ON b.id = sh.branch_id
+			LEFT JOIN users cu ON cu.id = sh.closed_by
 			LEFT JOIN cash_reconciliations cr ON cr.pos_shift_id = sh.id
 			WHERE ($1 = '' OR sh.branch_id::text = $1) AND ($2 = '' OR sh.pos_terminal_id::text = $2)
 			  AND ($3 = '' OR sh.status = $3)
@@ -705,9 +714,10 @@ func (h *Handler) ListShifts(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		rows, err := tx.Query(ctx, `
-			SELECT sh.id, sh.shift_number, sh.status, sh.pos_terminal_id, t.name, sh.opening_float::text, u.name,
-			       to_char(sh.opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-			       to_char(sh.closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), cr.variance::text`+where+`
+			SELECT sh.id, sh.shift_number, sh.status, sh.branch_id, b.name, sh.pos_terminal_id, t.name, sh.opening_float::text, u.name,
+			       to_char(sh.opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), cu.name,
+			       to_char(sh.closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), cr.variance::text,
+			       (sh.z_report->>'order_count')::int, sh.z_report->>'net_sales'`+where+`
 			ORDER BY `+p.OrderBy+`, sh.id LIMIT $6 OFFSET $7`, append(args, p.Limit, p.Offset)...)
 		if err != nil {
 			return err
@@ -715,8 +725,8 @@ func (h *Handler) ListShifts(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var x row
-			if err := rows.Scan(&x.ShiftID, &x.ShiftNumber, &x.Status, &x.TerminalID, &x.TerminalName, &x.OpeningFloat, &x.OpenedBy,
-				&x.OpenedAt, &x.ClosedAt, &x.Variance); err != nil {
+			if err := rows.Scan(&x.ShiftID, &x.ShiftNumber, &x.Status, &x.BranchID, &x.BranchName, &x.TerminalID, &x.TerminalName, &x.OpeningFloat,
+				&x.OpenedBy, &x.OpenedAt, &x.ClosedBy, &x.ClosedAt, &x.Variance, &x.OrderCount, &x.NetSales); err != nil {
 				return err
 			}
 			list = append(list, x)

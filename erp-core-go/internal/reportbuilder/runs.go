@@ -104,11 +104,12 @@ func (rn *Runner) sweep(ctx context.Context) {
 func (rn *Runner) execute(ctx context.Context, merchantID, runID string) {
 	var spec Spec
 	var name, format, userID string
+	var libraryKey *string
 	claimed := false
 	err := rn.DB.WithTenant(ctx, merchantID, func(ctx context.Context, tx pgx.Tx) error {
 		var raw []byte
 		err := tx.QueryRow(ctx, `UPDATE report_runs SET status = 'running', started_at = now() WHERE id = $1 AND status = 'queued'
-			RETURNING spec, name, format, requested_by`, runID).Scan(&raw, &name, &format, &userID)
+			RETURNING spec, name, format, requested_by, library_key`, runID).Scan(&raw, &name, &format, &userID, &libraryKey)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil // someone else has it, or it's done
 		}
@@ -148,7 +149,9 @@ func (rn *Runner) execute(ctx context.Context, merchantID, runID string) {
 		fail("could not check the plan")
 		return
 	}
-	if !ent.Plan.Has(subscriptions.FeatureCustomReportBuilder) {
+	// A standard report (library.go) runs on every plan; a built one needs
+	// the builder.
+	if libraryKey == nil && !ent.Plan.Has(subscriptions.FeatureCustomReportBuilder) {
 		fail("the custom report builder isn't part of the current plan")
 		return
 	}
@@ -196,13 +199,19 @@ type Run struct {
 	Error      *string    `json:"error"`
 	CreatedAt  time.Time  `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at"`
+	LibraryKey *string    `json:"library_key"`
+	DateFrom   *string    `json:"date_from"`
+	DateTo     *string    `json:"date_to"`
+	Period     *string    `json:"period"`
 }
 
-const runColumns = `id, template_id, name, format, status, row_count, truncated, error, created_at, finished_at`
+const runColumns = `id, template_id, name, format, status, row_count, truncated, error, created_at, finished_at, library_key,
+	NULLIF(spec->>'date_from', ''), NULLIF(spec->>'date_to', ''), NULLIF(spec->>'period', '')`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var x Run
-	err := row.Scan(&x.ID, &x.TemplateID, &x.Name, &x.Format, &x.Status, &x.RowCount, &x.Truncated, &x.Error, &x.CreatedAt, &x.FinishedAt)
+	err := row.Scan(&x.ID, &x.TemplateID, &x.Name, &x.Format, &x.Status, &x.RowCount, &x.Truncated, &x.Error, &x.CreatedAt, &x.FinishedAt,
+		&x.LibraryKey, &x.DateFrom, &x.DateTo, &x.Period)
 	return x, err
 }
 

@@ -17,19 +17,12 @@ import {
 } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/data/page-header";
+import { Field, Panel } from "@/components/data/panel";
+import { StatusChip } from "@/components/data/status-chip";
+import { METHOD_LABEL, localDate, rupees } from "@/lib/format";
 
-function daysAgo(n: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 export default function PaymentGatewayReconciliationPage() {
   // A match/unmatch made from either section below has to invalidate the
@@ -46,8 +39,8 @@ export default function PaymentGatewayReconciliationPage() {
   const [refreshToken, setRefreshToken] = useState(0);
   const bump = useCallback(() => setRefreshToken((v) => v + 1), []);
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Payment Gateway Reconciliation</h1>
+    <div className="flex max-w-5xl flex-col gap-5">
+      <PageHeader title="Payment Gateway Reconciliation" description="Import a gateway settlement, match each line to a captured card or UPI payment, and find payments that never settled." />
       <ImportSection refreshToken={refreshToken} onMatchChanged={bump} />
       <ReconciliationReportSection refreshToken={refreshToken} onMatchChanged={bump} />
     </div>
@@ -125,75 +118,71 @@ function ImportSection({ refreshToken, onMatchChanged }: { refreshToken: number;
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Import a payment gateway settlement</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <p className="text-xs text-muted-foreground">
-          CSV only, columns in order: settlement_date (YYYY-MM-DD), reference (the gateway&apos;s UTR/transaction id), amount
-          (net of the gateway&apos;s own fee). Auto-matches against captured card/UPI payments by exact reference on import;
-          unmatched or duplicate lines are left for manual review below.
-        </p>
-        <div className="flex items-center gap-3">
-          <Label htmlFor="gateway" className="text-sm">
-            Gateway
-          </Label>
+    <Panel title="Import a payment gateway settlement">
+      <p className="text-xs text-muted-foreground">
+        CSV only, columns in order: settlement_date (YYYY-MM-DD), reference (the gateway&apos;s UTR/transaction id), amount
+        (net of the gateway&apos;s own fee). Auto-matches against captured card/UPI payments by exact reference on import;
+        unmatched or duplicate lines are left for manual review below.
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Gateway" htmlFor="gateway">
           <Input id="gateway" value={gateway} onChange={(e) => setGateway(e.target.value)} disabled={busy} className="w-40" />
-          <Input ref={fileInput} type="file" accept=".csv,text/csv" onChange={handleFile} disabled={busy} className="max-w-xs" />
-          {busy && <span className="text-sm text-muted-foreground">Importing...</span>}
-        </div>
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        </Field>
+        <Field label="Settlement CSV" htmlFor="settlement-file">
+          <Input id="settlement-file" ref={fileInput} type="file" accept=".csv,text/csv" onChange={handleFile} disabled={busy} className="max-w-xs" />
+        </Field>
+        {busy && <span className="pb-2 text-sm text-muted-foreground">Importing…</span>}
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
-        {imports.length > 0 && (
-          <div className="flex flex-col gap-2 border-t pt-4">
-            <p className="text-xs font-medium text-muted-foreground">Past imports</p>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Gateway</TableHead>
-                  <TableHead>File</TableHead>
-                  <TableHead>Lines</TableHead>
-                  <TableHead>Matched</TableHead>
-                  <TableHead>Imported</TableHead>
-                  <TableHead></TableHead>
+      {imports.length > 0 && (
+        <div className="flex flex-col gap-2 border-t pt-4">
+          <p className="text-xs font-medium text-muted-foreground">Past imports</p>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Gateway</TableHead>
+                <TableHead>File</TableHead>
+                <TableHead>Lines</TableHead>
+                <TableHead>Matched</TableHead>
+                <TableHead>Imported</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {imports.map((imp) => (
+                <TableRow key={imp.import_id}>
+                  <TableCell>{imp.gateway}</TableCell>
+                  <TableCell>{imp.filename || "—"}</TableCell>
+                  <TableCell>{imp.line_count}</TableCell>
+                  <TableCell>
+                    {imp.matched_count} / {imp.line_count}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{imp.imported_at}</TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="outline" onClick={() => loadLines(imp.import_id)}>
+                      View
+                    </Button>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {imports.map((imp) => (
-                  <TableRow key={imp.import_id}>
-                    <TableCell>{imp.gateway}</TableCell>
-                    <TableCell>{imp.filename || "—"}</TableCell>
-                    <TableCell>{imp.line_count}</TableCell>
-                    <TableCell>
-                      {imp.matched_count} / {imp.line_count}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{imp.imported_at}</TableCell>
-                    <TableCell>
-                      <Button size="sm" variant="outline" onClick={() => loadLines(imp.import_id)}>
-                        View
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
-        {activeImport && (
-          <div className="border-t pt-4" data-testid="import-lines">
-            <SettlementLinesTable
-              lines={activeImport.lines}
-              onChanged={() => {
-                loadLines(activeImport.import_id);
-                onMatchChanged();
-              }}
-            />
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      {activeImport && (
+        <div className="border-t pt-4" data-testid="import-lines">
+          <SettlementLinesTable
+            lines={activeImport.lines}
+            onChanged={() => {
+              loadLines(activeImport.import_id);
+              onMatchChanged();
+            }}
+          />
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -238,7 +227,7 @@ function SettlementLinesTable({ lines, onChanged }: { lines: SettlementLine[]; o
         <TableRow>
           <TableHead>Date</TableHead>
           <TableHead>Reference</TableHead>
-          <TableHead>Amount</TableHead>
+          <TableHead className="text-right">Amount</TableHead>
           <TableHead>Status</TableHead>
           <TableHead></TableHead>
         </TableRow>
@@ -249,11 +238,9 @@ function SettlementLinesTable({ lines, onChanged }: { lines: SettlementLine[]; o
             <TableRow>
               <TableCell className="text-xs">{l.settlement_date}</TableCell>
               <TableCell className="font-mono text-xs">{l.reference}</TableCell>
-              <TableCell>₹{l.amount}</TableCell>
+              <TableCell className="tabular text-right">{rupees(l.amount)}</TableCell>
               <TableCell>
-                <Badge variant={l.status === "matched" ? "default" : l.status === "duplicate" ? "destructive" : "secondary"}>
-                  {l.status}
-                </Badge>
+                <StatusChip status={l.status} tone={l.status === "matched" ? "ok" : l.status === "duplicate" ? "bad" : "warn"} />
               </TableCell>
               <TableCell>
                 {l.status === "matched" ? (
@@ -276,9 +263,9 @@ function SettlementLinesTable({ lines, onChanged }: { lines: SettlementLine[]; o
                     {candidates.map((c) => (
                       <div key={c.payment_id} className="flex items-center gap-3 text-sm">
                         <span className="text-xs text-muted-foreground">{c.created_at}</span>
-                        <Badge variant="outline">{c.method}</Badge>
+                        <StatusChip status={c.method} tone="muted" label={METHOD_LABEL[c.method] ?? c.method} />
                         <span className="font-mono text-xs">{c.reference_no || "—"}</span>
-                        <span>₹{c.amount}</span>
+                        <span className="tabular">{rupees(c.amount)}</span>
                         <Button size="sm" onClick={() => match(l.line_id, c.payment_id)}>
                           Select
                         </Button>
@@ -310,8 +297,8 @@ function SettlementLinesTable({ lines, onChanged }: { lines: SettlementLine[]; o
 // ---------------------------------------------------------------------
 
 function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refreshToken: number; onMatchChanged: () => void }) {
-  const [start, setStart] = useState(daysAgo(30));
-  const [end, setEnd] = useState(today());
+  const [start, setStart] = useState(localDate(-30));
+  const [end, setEnd] = useState(localDate());
   const [report, setReport] = useState<PaymentGatewayReconciliationReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -327,93 +314,86 @@ function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refresh
   useEffect(load, [load, refreshToken]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Reconciliation report</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex items-center gap-2">
-          <Label htmlFor="start" className="text-sm">
-            From
-          </Label>
+    <Panel title="Reconciliation report">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="From" htmlFor="start">
           <Input id="start" type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-40" />
-          <Label htmlFor="end" className="text-sm">
-            To
-          </Label>
+        </Field>
+        <Field label="To" htmlFor="end">
           <Input id="end" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-40" />
-        </div>
+        </Field>
+      </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
-        {report && (
-          <>
-            <p className="text-sm">
-              Matched total in range: <span className="font-semibold">₹{report.matched_total}</span>
-            </p>
+      {report && (
+        <>
+          <p className="text-sm">
+            Matched total in range: <span className="tabular font-semibold">{rupees(report.matched_total)}</span>
+          </p>
 
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium text-muted-foreground">Unmatched settlement lines ({report.unmatched_settlement_lines.length})</p>
-              {report.unmatched_settlement_lines.length === 0 ? (
-                <p className="text-sm text-muted-foreground">None — every imported line in range is matched.</p>
-              ) : (
-                <SettlementLinesTable
-                  lines={report.unmatched_settlement_lines}
-                  onChanged={() => {
-                    load();
-                    onMatchChanged();
-                  }}
-                />
-              )}
-            </div>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium text-muted-foreground">Unmatched settlement lines ({report.unmatched_settlement_lines.length})</p>
+            {report.unmatched_settlement_lines.length === 0 ? (
+              <p className="text-sm text-muted-foreground">None — every imported line in range is matched.</p>
+            ) : (
+              <SettlementLinesTable
+                lines={report.unmatched_settlement_lines}
+                onChanged={() => {
+                  load();
+                  onMatchChanged();
+                }}
+              />
+            )}
+          </div>
 
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium text-muted-foreground">Duplicate settlement lines ({report.duplicate_settlement_lines.length})</p>
-              {report.duplicate_settlement_lines.length === 0 ? (
-                <p className="text-sm text-muted-foreground">None.</p>
-              ) : (
-                <SettlementLinesTable
-                  lines={report.duplicate_settlement_lines}
-                  onChanged={() => {
-                    load();
-                    onMatchChanged();
-                  }}
-                />
-              )}
-            </div>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium text-muted-foreground">Duplicate settlement lines ({report.duplicate_settlement_lines.length})</p>
+            {report.duplicate_settlement_lines.length === 0 ? (
+              <p className="text-sm text-muted-foreground">None.</p>
+            ) : (
+              <SettlementLinesTable
+                lines={report.duplicate_settlement_lines}
+                onChanged={() => {
+                  load();
+                  onMatchChanged();
+                }}
+              />
+            )}
+          </div>
 
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium text-muted-foreground">Missing payments ({report.missing_payments.length})</p>
-              <p className="text-xs text-muted-foreground">Captured card/UPI payments in range with no matching settlement — money collected that hasn&apos;t shown up in the bank yet.</p>
-              {report.missing_payments.length === 0 ? (
-                <p className="text-sm text-muted-foreground">None — every captured card/UPI payment in range has settled.</p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Method</TableHead>
-                      <TableHead>Reference</TableHead>
-                      <TableHead>Amount</TableHead>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium text-muted-foreground">Missing payments ({report.missing_payments.length})</p>
+            <p className="text-xs text-muted-foreground">Captured card/UPI payments in range with no matching settlement — money collected that hasn&apos;t shown up in the bank yet.</p>
+            {report.missing_payments.length === 0 ? (
+              <p className="text-sm text-muted-foreground">None — every captured card/UPI payment in range has settled.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Method</TableHead>
+                    <TableHead>Reference</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {report.missing_payments.map((p) => (
+                    <TableRow key={p.payment_id}>
+                      <TableCell className="text-xs">{p.created_at}</TableCell>
+                      <TableCell>
+                        <StatusChip status={p.method} tone="muted" label={METHOD_LABEL[p.method] ?? p.method} />
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{p.reference_no || "—"}</TableCell>
+                      <TableCell className="tabular text-right">{rupees(p.amount)}</TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {report.missing_payments.map((p) => (
-                      <TableRow key={p.payment_id}>
-                        <TableCell className="text-xs">{p.created_at}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{p.method}</Badge>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{p.reference_no || "—"}</TableCell>
-                        <TableCell>₹{p.amount}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </>
+      )}
+    </Panel>
   );
 }

@@ -205,6 +205,8 @@ export interface GRNLine {
   line_total: string;
   batch_no: string;
   expiry_date: string | null;
+  /** The purchase order line this receives; null on a direct GRN. */
+  po_line_id: string | null;
 }
 
 export interface GRN {
@@ -217,6 +219,12 @@ export interface GRN {
   other_charges: string;
   subtotal: string;
   grand_total: string;
+  /** The purchase order received against; null for a direct GRN. */
+  purchase_order_id: string | null;
+  po_number: string;
+  /** Its purchase bill (the supplier's invoice), once entered. */
+  bill_id: string | null;
+  bill_number: string | null;
   lines: GRNLine[];
 }
 
@@ -227,6 +235,68 @@ export interface GRNSummary {
   supplier_id: string;
   branch_id: string;
   grand_total: string;
+  created_at: string;
+  purchase_order_id: string | null;
+  po_number: string;
+  /** Has a purchase bill already (a GRN is billed once). */
+  billed: boolean;
+}
+
+// Purchase orders (erp-core-go migrations/057): PO → GRNs → a bill per GRN.
+export type PurchaseOrderStatus = "draft" | "open" | "partially_received" | "completed" | "cancelled" | "closed";
+
+export interface PurchaseOrderLine {
+  line_id: string;
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  quantity: string;
+  unit_cost: string;
+  line_total: string;
+  received_qty: string;
+  pending_qty: string;
+  track_batch: boolean;
+}
+
+export interface PurchaseOrderGRN {
+  grn_id: string;
+  grn_number: string;
+  status: string;
+  grand_total: string;
+  created_at: string;
+  bill_id: string | null;
+  bill_number: string | null;
+}
+
+export interface PurchaseOrder {
+  po_id: string;
+  po_number: string;
+  status: PurchaseOrderStatus;
+  branch_id: string;
+  supplier_id: string;
+  supplier_name: string;
+  order_date: string;
+  expected_date: string | null;
+  subtotal: string;
+  notes: string;
+  close_reason: string;
+  created_at: string;
+  lines: PurchaseOrderLine[];
+  grns: PurchaseOrderGRN[];
+}
+
+export interface PurchaseOrderSummary {
+  po_id: string;
+  po_number: string;
+  status: PurchaseOrderStatus;
+  branch_id: string;
+  supplier_id: string;
+  supplier_name: string;
+  order_date: string;
+  expected_date: string | null;
+  subtotal: string;
+  ordered_qty: string;
+  received_qty: string;
   created_at: string;
 }
 
@@ -275,11 +345,16 @@ export interface Account {
 }
 
 export interface LedgerLine {
+  entry_id: string;
+  entry_number: string;
   entry_date: string;
   description: string;
   source_type: string;
+  account_code: string;
+  account_name: string;
   debit: string;
   credit: string;
+  running_balance: string;
 }
 
 export interface DayBookLine {
@@ -293,7 +368,24 @@ export interface DayBookEntry {
   entry_number: string;
   source_type: string;
   description: string;
+  total_debit: string;
+  total_credit: string;
   lines: DayBookLine[];
+}
+
+/** GET /accounting/day-book: the totals are summed by the server. */
+export interface DayBook {
+  entries: DayBookEntry[];
+  total_debit: string;
+  total_credit: string;
+}
+
+/** GET /accounting/cash-book: the totals are summed by the server. */
+export interface CashBook {
+  lines: LedgerLine[];
+  net_movement: string;
+  total_debit: string;
+  total_credit: string;
 }
 
 // Mirrors erp-core-go's internal/promotions.promoConfig — one unified
@@ -1482,6 +1574,9 @@ export interface VoucherLine {
   account_name: string;
   debit: string;
   credit: string;
+  party_type: "customer" | "supplier" | null;
+  party_id: string | null;
+  party_name: string | null;
   memo: string | null;
 }
 
@@ -1517,7 +1612,15 @@ export interface LedgerEntry {
   branch_name: string | null;
   amount: string;
   created_by: string | null;
-  lines?: { account_code: string; account_name: string; debit: string; credit: string; party_type: string | null; party_id: string | null }[];
+  lines?: {
+    account_code: string;
+    account_name: string;
+    debit: string;
+    credit: string;
+    party_type: "customer" | "supplier" | null;
+    party_id: string | null;
+    party_name: string | null;
+  }[];
 }
 
 export interface AccountingSettings {

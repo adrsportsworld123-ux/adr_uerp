@@ -1,8 +1,9 @@
 // Phase 13 shifts on the POS, against a scripted backend that answers with
 // erp-core-go's shapes (internal/sales/shifts.go): open with a float, a
 // paid-out that needs a manager, a matching close straight through, a
-// short count that needs a reason and approval, and the till opening on
-// the shift screen when the merchant requires shifts.
+// short count that needs a reason and approval, the till opening on
+// the shift screen when the merchant requires shifts, and the status bar's
+// check-in chip.
 import 'dart:convert';
 import 'dart:io';
 
@@ -14,6 +15,7 @@ import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:erp_pos_app/api/api_client.dart';
+import 'package:erp_pos_app/screens/attendance_screen.dart';
 import 'package:erp_pos_app/screens/pos_screen.dart';
 import 'package:erp_pos_app/screens/shift_screen.dart';
 import 'package:erp_pos_app/state/session.dart';
@@ -23,6 +25,7 @@ class _Backend {
   final requests = <http.Request>[];
   bool open = false;
   bool required = false;
+  bool checkedIn = false;
   double float = 0;
   double paidOut = 0;
   final movements = <Map<String, dynamic>>[];
@@ -121,6 +124,15 @@ class _Backend {
         'cash_reconciliation_id': 'recon-1',
       }));
     }
+    if (path == '/api/v1/hr/attendance/me') {
+      final rec = {'id': 'att-1', 'work_date': '2026-10-10', 'status': 'present', 'clock_in': '2026-10-10 09:02:00+05:30'};
+      return json(200, {
+        'open': checkedIn ? rec : null,
+        'open_since': checkedIn ? '2026-10-10 09:02:00+05:30' : null,
+        'today': checkedIn ? rec : null,
+        'settings': {'allow_pos': true},
+      });
+    }
     if (path == '/api/v1/categories') return json(200, {'categories': []});
     if (path == '/api/v1/products/search') return json(200, {'results': [], 'total': 0});
     return json(404, {
@@ -166,7 +178,7 @@ void main() {
     await databaseFactory.setDatabasesPath(Directory.systemTemp.createTempSync('pos_shift_test').path);
   });
 
-  testWidgets('open with a float, a paid-out needs a manager, a matching count closes to a Z report', (tester) async {
+  testWidgets('open with a float, a paid-out needs a manager, a matching count makes the X report final', (tester) async {
     final backend = _Backend();
     final session = _session(backend);
     await _pump(tester, session, const ShiftScreen());
@@ -221,7 +233,9 @@ void main() {
     expect(find.byKey(const Key('close-reason')), findsNothing);
     await tester.tap(find.byKey(const Key('confirm-close')));
     await _settle(tester);
-    expect(find.text('Z report (final)'), findsOneWidget);
+    expect(find.text('X report (final)'), findsOneWidget);
+    expect(find.text('Shift closed · shift 4'), findsOneWidget);
+    expect(find.byKey(const Key('print-x-report')), findsOneWidget);
     expect(tester.widget<Text>(find.byKey(const Key('variance'))).data, '₹0.00');
     expect(session.currentShift, isNull);
     final den = (backend.lastClose!['denominations'] as List).firstWhere((d) => d['denomination'] == 2000);
@@ -269,6 +283,26 @@ void main() {
     await _settle(tester);
     expect(find.byType(ShiftScreen), findsOneWidget);
     expect(find.text('Open a shift before taking payment.'), findsOneWidget);
+    session.dispose();
+  });
+
+  testWidgets('the status bar shows check-in state and opens attendance', (tester) async {
+    final backend = _Backend();
+    final session = _session(backend);
+    await _pump(tester, session, const PosScreen());
+    await _settle(tester);
+    final chip = find.byKey(const Key('attendance-chip'));
+    expect(find.descendant(of: chip, matching: find.text('Check in')), findsOneWidget);
+
+    backend.checkedIn = true;
+    await tester.tap(chip);
+    await _settle(tester);
+    expect(find.byType(AttendanceScreen), findsOneWidget);
+    expect(session.attendance!.checkedIn, isTrue);
+
+    await tester.pageBack();
+    await _settle(tester);
+    expect(find.descendant(of: chip, matching: find.textContaining('In · ')), findsOneWidget);
     session.dispose();
   });
 }

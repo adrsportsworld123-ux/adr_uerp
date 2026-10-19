@@ -12,11 +12,10 @@ import { rupees } from "@/lib/format";
 import { buttonVariants } from "@/components/ui/button";
 import { Column, DataTable } from "@/components/data/data-table";
 import { PageHeader } from "@/components/data/page-header";
-import { StatusChip } from "@/components/data/status-chip";
+import { selectClass } from "@/components/data/panel";
+import { StatusChip, VOUCHER_TONE } from "@/components/data/status-chip";
 import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
-
-const VOUCHER_TONE = { draft: "muted", submitted: "warn", approved: "info", posted: "ok", reversed: "plum" } as const;
 
 const columns: Column<Voucher>[] = [
   {
@@ -67,7 +66,7 @@ function VouchersView() {
         searchPlaceholder="Voucher number or description"
         searchLabel="Search vouchers"
         filters={
-          <select aria-label="Status" value={state.status || "all"} onChange={(e) => update({ status: e.target.value })} className="h-9 rounded-lg border bg-card px-2 text-sm">
+          <select aria-label="Status" value={state.status || "all"} onChange={(e) => update({ status: e.target.value })} className={selectClass}>
             <option value="all">All statuses</option>
             <option value="draft">Draft</option>
             <option value="submitted">Waiting for approval</option>

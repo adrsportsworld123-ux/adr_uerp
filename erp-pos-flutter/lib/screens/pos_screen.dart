@@ -18,6 +18,7 @@ import 'product_search_screen.dart';
 import 'receipt_screen.dart';
 import 'shift_screen.dart';
 import 'sync_queue_screen.dart';
+import 'till_reports_screen.dart';
 
 part 'pos/cart_panel.dart';
 part 'pos/dialogs.dart';
@@ -64,6 +65,7 @@ class _PosScreenState extends State<PosScreen> {
       // can't take payment.
       await session.refreshShift();
       session.refreshPermissions();
+      session.refreshAttendance();
       if (mounted && session.shiftsRequired && session.currentShift == null && !session.offlineMode) {
         await _openShift();
       }
@@ -343,6 +345,12 @@ class _PosScreenState extends State<PosScreen> {
     _refocusScan();
   }
 
+  Future<void> _openAttendance() async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const AttendanceScreen())));
+    if (mounted) context.read<AppSession>().refreshAttendance();
+    _refocusScan();
+  }
+
   Future<void> _openSalesHistory() async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const OrdersScreen())));
     _refocusScan();
@@ -355,6 +363,9 @@ class _PosScreenState extends State<PosScreen> {
         await _openHeldOrders();
       case _MenuAction.salesHistory:
         await _openSalesHistory();
+      case _MenuAction.tillReports:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const TillReportsScreen())));
+        _refocusScan();
       case _MenuAction.productSearch:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen()));
         _refocusScan();
@@ -363,9 +374,6 @@ class _PosScreenState extends State<PosScreen> {
         _refocusScan();
       case _MenuAction.syncNow:
         await _sync();
-      case _MenuAction.attendance:
-        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const AttendanceScreen())));
-        _refocusScan();
       case _MenuAction.syncQueue:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const SyncQueueScreen())));
         _refocusScan();
@@ -466,7 +474,7 @@ class _PosScreenState extends State<PosScreen> {
       child: CallbackShortcuts(
         bindings: _shortcuts,
         child: Scaffold(
-          appBar: _StatusBar(busy: _busy, onSync: _sync, onShift: _openShift, onMenu: _onMenu),
+          appBar: _StatusBar(busy: _busy, onSync: _sync, onShift: _openShift, onAttendance: _openAttendance, onMenu: _onMenu),
           body: Column(
             children: [
               if (session.offlineMode)

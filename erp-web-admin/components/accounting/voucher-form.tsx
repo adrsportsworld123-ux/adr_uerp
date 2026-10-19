@@ -6,17 +6,25 @@
 // can post straight away (today's behaviour); with it on, it's submitted
 // for someone else to approve. Amounts are checked here for balance, and
 // again on the server, to the paisa.
+//
+// Each line can name its party (a customer or a supplier), which is what
+// puts it on that party's ledger. A line on Accounts Receivable (1100) or
+// Accounts Payable (2002) must name one, so the party ledger keeps agreeing
+// with the control account; choosing either account picks the party type.
 import { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
 import { Account, AccountingSettings, Branch, Voucher } from "@/lib/types";
 import { rupees } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { PartyPicker, PartyType } from "@/components/data/party-picker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type Line = { account_code: string; debit: string; credit: string; memo: string };
-const blankLine = (): Line => ({ account_code: "", debit: "", credit: "", memo: "" });
+type Line = { account_code: string; debit: string; credit: string; memo: string; party_type: PartyType | ""; party_id: string; party_name: string };
+const blankLine = (): Line => ({ account_code: "", debit: "", credit: "", memo: "", party_type: "", party_id: "", party_name: "" });
+// Control accounts and the party each one is kept by (erp-core-go vouchers.go partyAccounts).
+const PARTY_ACCOUNTS: Record<string, PartyType> = { "1100": "customer", "2002": "supplier" };
 const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
 
 function paise(v: string) {
@@ -38,6 +46,9 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
           debit: Number(l.debit) ? l.debit : "",
           credit: Number(l.credit) ? l.credit : "",
           memo: l.memo ?? "",
+          party_type: l.party_type ?? "",
+          party_id: l.party_id ?? "",
+          party_name: l.party_name ?? "",
         }))
       : [blankLine(), blankLine()],
   );
@@ -56,7 +67,20 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
   const filled = lines.filter((l) => l.account_code && (paise(l.debit) > 0) !== (paise(l.credit) > 0));
   const balanced = dr > 0 && dr === cr && filled.length >= 2 && filled.length === lines.filter((l) => l.account_code || l.debit || l.credit).length;
   const locked = settings?.locked_through && date <= settings.locked_through;
-  const ready = balanced && description.trim() !== "" && !locked;
+  // A party is all or nothing, and a control account needs its own kind.
+  const partyProblem = (l: Line) =>
+    l.party_type && !l.party_id
+      ? `Choose the ${l.party_type}`
+      : PARTY_ACCOUNTS[l.account_code] && l.party_type !== PARTY_ACCOUNTS[l.account_code]
+        ? `Needs a ${PARTY_ACCOUNTS[l.account_code]}`
+        : null;
+  const partiesOk = lines.every((l) => !l.account_code || !partyProblem(l));
+  const ready = balanced && partiesOk && description.trim() !== "" && !locked;
+  const chooseAccount = (i: number, code: string) => {
+    const want = PARTY_ACCOUNTS[code];
+    const l = lines[i];
+    update(i, want && l.party_type !== want ? { account_code: code, party_type: want, party_id: "", party_name: "" } : { account_code: code });
+  };
 
   async function save(action: "draft" | "submit" | "post") {
     setBusy(true);
@@ -65,7 +89,14 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
       branch_id: branchId,
       entry_date: date,
       description: description.trim(),
-      lines: filled.map((l) => ({ account_code: l.account_code, debit: Number(l.debit) || 0, credit: Number(l.credit) || 0, memo: l.memo })),
+      lines: filled.map((l) => ({
+        account_code: l.account_code,
+        debit: Number(l.debit) || 0,
+        credit: Number(l.credit) || 0,
+        memo: l.memo,
+        party_type: l.party_id ? l.party_type : "",
+        party_id: l.party_id ? l.party_id : "",
+      })),
     };
     try {
       if (editing) {
@@ -110,10 +141,12 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
         </p>
       )}
 
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[760px] text-sm">
         <thead className="text-left text-xs text-muted-foreground">
           <tr>
             <th className="pb-1 font-medium">Account</th>
+            <th className="pb-1 font-medium">Party</th>
             <th className="pb-1 text-right font-medium">Debit</th>
             <th className="pb-1 text-right font-medium">Credit</th>
             <th className="pb-1 font-medium">Memo</th>
@@ -124,7 +157,7 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
           {lines.map((l, i) => (
             <tr key={i}>
               <td className="py-1 pr-2">
-                <select aria-label={`Line ${i + 1} account`} value={l.account_code} onChange={(e) => update(i, { account_code: e.target.value })} className={`${selectClass} w-full`}>
+                <select aria-label={`Line ${i + 1} account`} value={l.account_code} onChange={(e) => chooseAccount(i, e.target.value)} className={`${selectClass} w-full`}>
                   <option value="">Choose an account</option>
                   {accounts.map((a) => (
                     <option key={a.account_id} value={a.code}>
@@ -132,6 +165,36 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
                     </option>
                   ))}
                 </select>
+              </td>
+              <td className="py-1 pr-2 align-top">
+                <div className="flex min-w-56 gap-1.5">
+                  <select
+                    aria-label={`Line ${i + 1} party type`}
+                    value={l.party_type}
+                    onChange={(e) => update(i, { party_type: e.target.value as PartyType | "", party_id: "", party_name: "" })}
+                    className={`${selectClass} w-28`}
+                  >
+                    <option value="">No party</option>
+                    <option value="customer">Customer</option>
+                    <option value="supplier">Supplier</option>
+                  </select>
+                  {l.party_type && (
+                    <div className="min-w-0 flex-1">
+                      <PartyPicker
+                        type={l.party_type}
+                        value={l.party_id}
+                        initialLabel={l.party_name}
+                        ariaLabel={`Line ${i + 1} party`}
+                        onChange={(id, name) => update(i, { party_id: id, party_name: name })}
+                      />
+                    </div>
+                  )}
+                </div>
+                {l.account_code && partyProblem(l) && (
+                  <p className="mt-0.5 text-xs text-destructive" data-testid="jv-party-error">
+                    {partyProblem(l)}
+                  </p>
+                )}
               </td>
               <td className="py-1 pr-2">
                 <Input aria-label={`Line ${i + 1} debit`} className="tabular w-28 text-right" type="number" min={0} step="0.01" value={l.debit} onChange={(e) => update(i, { debit: e.target.value, credit: e.target.value ? "" : l.credit })} />
@@ -159,6 +222,7 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
                 <Plus /> Add line
               </Button>
             </td>
+            <td />
             <td className="tabular pt-2 text-right">{rupees(dr / 100)}</td>
             <td className="tabular pt-2 text-right">{rupees(cr / 100)}</td>
             <td className={`pt-2 text-sm ${balanced ? "text-pay" : "text-muted-foreground"}`} colSpan={2} data-testid="jv-balance">
@@ -167,6 +231,7 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
           </tr>
         </tfoot>
       </table>
+      </div>
 
       {error && (
         <p className="text-sm text-destructive" role="alert">

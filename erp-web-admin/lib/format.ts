@@ -15,6 +15,19 @@ export function qty(q: string | number): string {
   return String(Number(q));
 }
 
+/** Today (or `offsetDays` from it) as YYYY-MM-DD in the browser's own time zone, not UTC. */
+export function localDate(offsetDays = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Debit/credit side of one ledger line, e.g. "Dr ₹1,200.00". */
+export function drCr(debit: string, credit: string): string {
+  return Number(debit) > 0 ? `Dr ${rupees(debit)}` : `Cr ${rupees(credit)}`;
+}
+
 export function dateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);

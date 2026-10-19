@@ -50,15 +50,72 @@ class _ShiftChip extends StatelessWidget {
   }
 }
 
-enum _MenuAction { attendance, heldOrders, salesHistory, productSearch, productLookup, syncNow, syncQueue, printer, signOut }
+/// The cashier's check-in state at a glance; tapping opens the attendance
+/// screen to check in or out. Shown as a warning until they check in.
+class _AttendanceChip extends StatelessWidget {
+  final VoidCallback onTap;
+  final bool compact;
+
+  const _AttendanceChip({required this.onTap, required this.compact});
+
+  @override
+  Widget build(BuildContext context) {
+    final session = context.watch<AppSession>();
+    final theme = Theme.of(context);
+    final me = session.attendance;
+    final offline = session.offlineMode;
+    final checkedIn = me?.checkedIn ?? false;
+    final warn = me != null && !checkedIn && me.allowPos;
+    final since = checkedIn ? (me!.openSince ?? me.open!.clockIn) : null;
+    final label = me == null
+        ? 'Check in'
+        : checkedIn
+            ? (since == null ? 'Checked in' : 'In · ${TimeOfDay.fromDateTime(since).format(context)}')
+            : 'Check in';
+    final fg = offline
+        ? theme.disabledColor
+        : checkedIn
+            ? theme.pos.pay
+            : warn
+                ? theme.pos.warn
+                : theme.colorScheme.onSurfaceVariant;
+    return Semantics(
+      button: true,
+      label: checkedIn ? '$label. Open attendance to check out.' : 'Not checked in. Open attendance to check in.',
+      child: InkWell(
+        key: const Key('attendance-chip'),
+        borderRadius: BorderRadius.circular(999),
+        onTap: offline ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: offline ? null : (checkedIn ? theme.pos.paySoft : (warn ? theme.pos.warnSoft : null)),
+            border: Border.all(color: offline ? theme.colorScheme.outline : (checkedIn ? theme.pos.pay : (warn ? theme.pos.warn : theme.colorScheme.outline))),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(checkedIn ? Icons.how_to_reg : Icons.badge_outlined, size: 16, color: fg),
+            if (!compact) ...[
+              const SizedBox(width: 6),
+              Text(label, style: TextStyle(color: fg, fontWeight: FontWeight.w600, fontSize: 13)),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+enum _MenuAction { heldOrders, salesHistory, tillReports, productSearch, productLookup, syncNow, syncQueue, printer, signOut }
 
 class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
   final bool busy;
   final VoidCallback onSync;
   final VoidCallback onShift;
+  final VoidCallback onAttendance;
   final ValueChanged<_MenuAction> onMenu;
 
-  const _StatusBar({required this.busy, required this.onSync, required this.onShift, required this.onMenu});
+  const _StatusBar({required this.busy, required this.onSync, required this.onShift, required this.onAttendance, required this.onMenu});
 
   @override
   Size get preferredSize => const Size.fromHeight(56);
@@ -89,14 +146,17 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: theme.colorScheme.outline))),
           child: Row(
             children: [
-              Container(
-                width: 32,
-                height: 32,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(color: theme.colorScheme.primary, borderRadius: BorderRadius.circular(8)),
-                child: Text('ADR', style: TextStyle(color: theme.colorScheme.onPrimary, fontSize: 11, fontWeight: FontWeight.w700)),
-              ),
-              const SizedBox(width: 10),
+              // On a phone the badge gives its room to the terminal name.
+              if (!compact) ...[
+                Container(
+                  width: 32,
+                  height: 32,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(color: theme.colorScheme.primary, borderRadius: BorderRadius.circular(8)),
+                  child: Text('ADR', style: TextStyle(color: theme.colorScheme.onPrimary, fontSize: 11, fontWeight: FontWeight.w700)),
+                ),
+                const SizedBox(width: 10),
+              ],
               Expanded(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -128,6 +188,8 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              _AttendanceChip(onTap: onAttendance, compact: compact),
+              const SizedBox(width: 8),
               _ShiftChip(onTap: onShift, compact: compact),
               const SizedBox(width: 8),
               if (!compact)
@@ -141,11 +203,6 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                 onSelected: onMenu,
                 itemBuilder: (_) => [
                   PopupMenuItem(
-                    value: _MenuAction.attendance,
-                    enabled: !offline,
-                    child: const ListTile(leading: Icon(Icons.badge_outlined), title: Text('Attendance · check in / out')),
-                  ),
-                  PopupMenuItem(
                     value: _MenuAction.heldOrders,
                     enabled: !offline,
                     child: const ListTile(leading: Icon(Icons.pause_circle_outline), title: Text('Held orders'), trailing: _KeyHint('F9')),
@@ -153,6 +210,11 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                   const PopupMenuItem(
                     value: _MenuAction.salesHistory,
                     child: ListTile(leading: Icon(Icons.receipt_long_outlined), title: Text('Sales history & returns'), trailing: _KeyHint('F6')),
+                  ),
+                  PopupMenuItem(
+                    value: _MenuAction.tillReports,
+                    enabled: !offline,
+                    child: const ListTile(leading: Icon(Icons.summarize_outlined), title: Text('X / Z reports')),
                   ),
                   PopupMenuItem(
                     value: _MenuAction.productSearch,

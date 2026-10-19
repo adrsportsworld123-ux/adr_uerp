@@ -96,7 +96,7 @@ test("Phase 14: journal vouchers post, reverse, and go through maker-checker app
       const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "CSV" }).click()]);
       expect(download.suggestedFilename()).toMatch(/^journal-\d{8}\.csv$/);
       const csv = readFileSync((await download.path())!, "utf8");
-      expect(csv.split("\n")[0]).toBe("entry_number,entry_date,source_type,description,branch,account_code,account_name,debit,credit,party_type,party_id");
+      expect(csv.split("\n")[0]).toBe("entry_number,entry_date,source_type,description,branch,account_code,account_name,debit,credit,party_type,party_id,party_name");
       expect(csv).toContain(`${tag} rent accrual`);
     });
 

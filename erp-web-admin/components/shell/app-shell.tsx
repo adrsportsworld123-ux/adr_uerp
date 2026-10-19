@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -157,6 +157,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { has } = usePermissions();
   const lockedFeature = active?.item.feature != null && !has(active.item.feature) ? active.item.feature : null;
 
+  // After a client-side navigation that leaves nothing focused (the
+  // focused element went with the old page), put focus back at the top, so
+  // the skip link is the next Tab stop on every page, as on a full load.
+  // Otherwise the browser resumes from wherever the old page's focus was
+  // (a chart, a dialog's portal), possibly past the end of the new page.
+  const top = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const a = document.activeElement;
+    if (!a || a === document.body || !a.isConnected) top.current?.focus({ preventScroll: true });
+  }, [pathname]);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -171,7 +182,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const roleLabel = roles.length > 0 ? roles.join(", ") : "Signed in";
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div ref={top} tabIndex={-1} className="flex min-h-0 flex-1 outline-none">
       {/* First tab stop on every page: jump past ~75 sidebar links. */}
       <a
         href="#main-content"
@@ -179,7 +190,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       >
         Skip to main content
       </a>
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 border-r bg-sidebar p-3 lg:block">
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 border-r bg-sidebar p-3 lg:block print:hidden">
         <Sidebar onOpenPalette={() => setPaletteOpen(true)} />
       </aside>
 
@@ -201,7 +212,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-card/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-card/80 md:px-6">
+        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-card/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-card/80 md:px-6 print:hidden">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}

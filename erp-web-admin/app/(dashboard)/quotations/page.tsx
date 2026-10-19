@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   draft: "outline",
@@ -253,8 +254,9 @@ export default function QuotationsPage() {
                   <TableCell><Badge variant={STATUS_VARIANT[q.status] ?? "outline"}>{q.status}</Badge></TableCell>
                   <TableCell>{q.valid_until}</TableCell>
                   <TableCell>₹{q.grand_total}</TableCell>
-                  <TableCell>
+                  <TableCell className="flex items-center gap-1">
                     <Button size="sm" variant="outline" onClick={() => openQuotation(q.quotation_id)}>View</Button>
+                    <DownloadPdfButton path={`/api/v1/quotations/${q.quotation_id}/pdf`} label={`Download ${q.quote_number}`} size="icon-sm" />
                   </TableCell>
                 </TableRow>
               ))}
@@ -271,8 +273,15 @@ export default function QuotationsPage() {
       {selected && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">{selected.quote_number}</CardTitle>
-            <Badge variant={STATUS_VARIANT[selected.status] ?? "outline"}>{selected.status}</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle className="text-base">{selected.quote_number}</CardTitle>
+              <Badge variant={STATUS_VARIANT[selected.status] ?? "outline"}>{selected.status}</Badge>
+            </div>
+            {/* The A4 quotation for the customer, under the branch letterhead; a draft prints with a DRAFT stamp. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <DownloadPdfButton path={`/api/v1/quotations/${selected.quotation_id}/pdf`} label={selected.status === "draft" ? "Draft PDF" : "Download PDF"} />
+              <PrintPdfButton path={`/api/v1/quotations/${selected.quotation_id}/pdf`} />
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             {selected.status === "draft" ? (

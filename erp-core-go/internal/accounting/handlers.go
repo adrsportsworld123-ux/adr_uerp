@@ -120,6 +120,9 @@ type manualJournalLine struct {
 	AccountCode string  `json:"account_code"`
 	Debit       float64 `json:"debit"`
 	Credit      float64 `json:"credit"`
+	PartyType   string  `json:"party_type"`
+	PartyID     string  `json:"party_id"`
+	Memo        string  `json:"memo"`
 }
 
 type manualJournalRequest struct {
@@ -146,7 +149,8 @@ func (h *Handler) CreateManualJournalEntry(w http.ResponseWriter, r *http.Reques
 	}
 	in := voucherInput{BranchID: req.BranchID, Description: req.Description}
 	for _, l := range req.Lines {
-		in.Lines = append(in.Lines, voucherLineInput{AccountCode: l.AccountCode, Debit: l.Debit, Credit: l.Credit})
+		in.Lines = append(in.Lines, voucherLineInput{AccountCode: l.AccountCode, Debit: l.Debit, Credit: l.Credit,
+			PartyType: l.PartyType, PartyID: l.PartyID, Memo: l.Memo})
 	}
 	if err := in.validate(); err != nil {
 		writeVoucherError(w, err)
@@ -176,37 +180,71 @@ func (h *Handler) CreateManualJournalEntry(w http.ResponseWriter, r *http.Reques
 // ---------------------------------------------------------------------
 
 type ledgerLine struct {
-	EntryDate   string `json:"entry_date"`
-	Description string `json:"description"`
-	SourceType  string `json:"source_type"`
-	Debit       string `json:"debit"`
-	Credit      string `json:"credit"`
+	EntryID        string `json:"entry_id"`
+	EntryNumber    string `json:"entry_number"`
+	EntryDate      string `json:"entry_date"`
+	Description    string `json:"description"`
+	SourceType     string `json:"source_type"`
+	AccountCode    string `json:"account_code"`
+	AccountName    string `json:"account_name"`
+	Debit          string `json:"debit"`
+	Credit         string `json:"credit"`
+	RunningBalance string `json:"running_balance"`
 }
 
-// PartyLedger: GET /accounting/party-ledger?party_type=customer|supplier&party_id=
-// Receivables (customer) or payables (supplier) tracking per FRD §8.
+// PartyLedger: GET /accounting/party-ledger?party_type=customer|supplier&party_id=&from=&to=
+// Receivables (customer) or payables (supplier) tracking per FRD §8: every
+// posted line naming the party, oldest first, with a running balance
+// (debit − credit). from/to (YYYY-MM-DD, optional) narrow the lines; what
+// came before from is the opening balance.
 func (h *Handler) PartyLedger(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
 		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
 		return
 	}
-	partyType := r.URL.Query().Get("party_type")
-	partyID := r.URL.Query().Get("party_id")
+	q := r.URL.Query()
+	partyType := q.Get("party_type")
+	partyID := q.Get("party_id")
+	from, to := q.Get("from"), q.Get("to")
 	if (partyType != "customer" && partyType != "supplier") || partyID == "" {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "party_type (customer|supplier) and party_id are required")
 		return
 	}
+	for _, d := range []string{from, to} {
+		if _, err := time.Parse("2006-01-02", d); d != "" && err != nil {
+			httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "from and to must be YYYY-MM-DD")
+			return
+		}
+	}
 
 	lines := []ledgerLine{}
-	var balance float64
+	var opening, balance, totalDr, totalCr float64
+	var partyName *string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT CASE $1 WHEN 'customer' THEN (SELECT name FROM customers WHERE id::text = $2)
+			ELSE (SELECT name FROM suppliers WHERE id::text = $2) END`, partyType, partyID).Scan(&partyName); err != nil {
+			return err
+		}
+		if from != "" {
+			if err := tx.QueryRow(ctx, `
+				SELECT COALESCE(sum(jl.debit - jl.credit), 0)
+				FROM journal_lines jl JOIN journal_entries je ON je.id = jl.journal_entry_id
+				WHERE jl.party_type = $1 AND jl.party_id::text = $2 AND je.status = 'posted' AND je.entry_date < $3::date`,
+				partyType, partyID, from).Scan(&opening); err != nil {
+				return err
+			}
+		}
+		balance = opening
 		rows, err := tx.Query(ctx, `
-			SELECT je.entry_date::text, COALESCE(je.description,''), je.source_type, jl.debit::text, jl.credit::text, jl.debit, jl.credit
+			SELECT je.id, je.entry_number, je.entry_date::text, COALESCE(je.description,''), je.source_type, a.code, a.name,
+			       jl.debit::text, jl.credit::text, jl.debit, jl.credit
 			FROM journal_lines jl
 			JOIN journal_entries je ON je.id = jl.journal_entry_id
-			WHERE jl.party_type = $1 AND jl.party_id = $2
-			ORDER BY je.entry_date, je.created_at`, partyType, partyID)
+			JOIN chart_of_accounts a ON a.id = jl.account_id
+			WHERE jl.party_type = $1 AND jl.party_id::text = $2 AND je.status = 'posted'
+			  AND ($3 = '' OR je.entry_date >= $3::date) AND ($4 = '' OR je.entry_date <= $4::date)
+			ORDER BY je.entry_date, je.created_at`, partyType, partyID, from, to)
 		if err != nil {
 			return err
 		}
@@ -214,10 +252,14 @@ func (h *Handler) PartyLedger(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var l ledgerLine
 			var debit, credit float64
-			if err := rows.Scan(&l.EntryDate, &l.Description, &l.SourceType, &l.Debit, &l.Credit, &debit, &credit); err != nil {
+			if err := rows.Scan(&l.EntryID, &l.EntryNumber, &l.EntryDate, &l.Description, &l.SourceType, &l.AccountCode, &l.AccountName,
+				&l.Debit, &l.Credit, &debit, &credit); err != nil {
 				return err
 			}
 			balance += debit - credit
+			totalDr += debit
+			totalCr += credit
+			l.RunningBalance = formatMoney(balance)
 			lines = append(lines, l)
 		}
 		return rows.Err()
@@ -227,7 +269,8 @@ func (h *Handler) PartyLedger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"party_type": partyType, "party_id": partyID,
+		"party_type": partyType, "party_id": partyID, "party_name": partyName,
+		"opening_balance": formatMoney(opening), "total_debit": formatMoney(totalDr), "total_credit": formatMoney(totalCr),
 		"lines": lines, "balance": formatMoney(balance),
 	})
 }
@@ -251,6 +294,8 @@ type dayBookEntry struct {
 	EntryNumber string             `json:"entry_number"`
 	SourceType  string             `json:"source_type"`
 	Description string             `json:"description"`
+	TotalDebit  string             `json:"total_debit"`
+	TotalCredit string             `json:"total_credit"`
 	Lines       []dayBookEntryLine `json:"lines"`
 }
 
@@ -262,7 +307,9 @@ type dayBookEntryLine struct {
 }
 
 // DayBook: GET /accounting/day-book?branch_id=&date=YYYY-MM-DD — every
-// journal entry posted for a branch on a date, per FRD §8/Reports.
+// journal entry posted for a branch on a date, per FRD §8/Reports, with
+// each entry's and the day's debit and credit totals (summed in SQL, so
+// the client never adds money up itself).
 func (h *Handler) DayBook(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -281,19 +328,29 @@ func (h *Handler) DayBook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entries := []dayBookEntry{}
+	var totalDebit, totalCredit string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(SUM(jl.debit), 0)::numeric(14,2)::text, COALESCE(SUM(jl.credit), 0)::numeric(14,2)::text
+			FROM journal_lines jl JOIN journal_entries je ON je.id = jl.journal_entry_id
+			WHERE je.branch_id = $1 AND je.entry_date = $2::date AND je.status = 'posted'`, branchID, date).Scan(&totalDebit, &totalCredit); err != nil {
+			return err
+		}
 		entryRows, err := tx.Query(ctx, `
-			SELECT id, entry_number, source_type, COALESCE(description,'')
-			FROM journal_entries WHERE branch_id = $1 AND entry_date = $2::date AND status = 'posted'
-			ORDER BY created_at`, branchID, date)
+			SELECT je.id, je.entry_number, je.source_type, COALESCE(je.description,''),
+			       COALESCE(SUM(jl.debit), 0)::numeric(14,2)::text, COALESCE(SUM(jl.credit), 0)::numeric(14,2)::text
+			FROM journal_entries je LEFT JOIN journal_lines jl ON jl.journal_entry_id = je.id
+			WHERE je.branch_id = $1 AND je.entry_date = $2::date AND je.status = 'posted'
+			GROUP BY je.id
+			ORDER BY je.created_at`, branchID, date)
 		if err != nil {
 			return err
 		}
-		type entryRow struct{ id, number, sourceType, description string }
+		type entryRow struct{ id, number, sourceType, description, debit, credit string }
 		var entryRowsList []entryRow
 		for entryRows.Next() {
 			var e entryRow
-			if err := entryRows.Scan(&e.id, &e.number, &e.sourceType, &e.description); err != nil {
+			if err := entryRows.Scan(&e.id, &e.number, &e.sourceType, &e.description, &e.debit, &e.credit); err != nil {
 				entryRows.Close()
 				return err
 			}
@@ -325,7 +382,7 @@ func (h *Handler) DayBook(w http.ResponseWriter, r *http.Request) {
 			if err := lineRows.Err(); err != nil {
 				return err
 			}
-			entries = append(entries, dayBookEntry{EntryNumber: e.number, SourceType: e.sourceType, Description: e.description, Lines: lines})
+			entries = append(entries, dayBookEntry{EntryNumber: e.number, SourceType: e.sourceType, Description: e.description, TotalDebit: e.debit, TotalCredit: e.credit, Lines: lines})
 		}
 		return nil
 	})
@@ -333,11 +390,14 @@ func (h *Handler) DayBook(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not build day book")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"branch_id": branchID, "date": date, "entries": entries})
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"branch_id": branchID, "date": date, "entries": entries, "total_debit": totalDebit, "total_credit": totalCredit,
+	})
 }
 
 // CashBook: GET /accounting/cash-book?branch_id=&date=YYYY-MM-DD — journal
-// lines against the Cash/Bank/clearing accounts only, for a branch/date.
+// lines against the Cash/Bank/clearing accounts only, for a branch/date,
+// with the day's money in (debit), money out (credit) and net, summed in SQL.
 func (h *Handler) CashBook(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -357,9 +417,22 @@ func (h *Handler) CashBook(w http.ResponseWriter, r *http.Request) {
 
 	lines := []ledgerLine{}
 	var netMovement float64
+	var totalDebit, totalCredit, net string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(SUM(jl.debit), 0)::numeric(14,2)::text, COALESCE(SUM(jl.credit), 0)::numeric(14,2)::text,
+			       COALESCE(SUM(jl.debit - jl.credit), 0)::numeric(14,2)::text
+			FROM journal_lines jl
+			JOIN journal_entries je ON je.id = jl.journal_entry_id
+			JOIN chart_of_accounts coa ON coa.id = jl.account_id
+			WHERE je.branch_id = $1 AND je.entry_date = $2::date AND je.status = 'posted'
+			  AND coa.code IN ($3, $4, $5, $6)`, branchID, date, AccountCash, AccountBank, AccountCardClearing, AccountUPIClearing).
+			Scan(&totalDebit, &totalCredit, &net); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
-			SELECT je.entry_date::text, COALESCE(je.description,''), je.source_type, jl.debit::text, jl.credit::text, jl.debit, jl.credit
+			SELECT je.id, je.entry_number, je.entry_date::text, COALESCE(je.description,''), je.source_type, coa.code, coa.name,
+			       jl.debit::text, jl.credit::text, jl.debit, jl.credit
 			FROM journal_lines jl
 			JOIN journal_entries je ON je.id = jl.journal_entry_id
 			JOIN chart_of_accounts coa ON coa.id = jl.account_id
@@ -373,10 +446,12 @@ func (h *Handler) CashBook(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var l ledgerLine
 			var debit, credit float64
-			if err := rows.Scan(&l.EntryDate, &l.Description, &l.SourceType, &l.Debit, &l.Credit, &debit, &credit); err != nil {
+			if err := rows.Scan(&l.EntryID, &l.EntryNumber, &l.EntryDate, &l.Description, &l.SourceType, &l.AccountCode, &l.AccountName,
+				&l.Debit, &l.Credit, &debit, &credit); err != nil {
 				return err
 			}
 			netMovement += debit - credit
+			l.RunningBalance = formatMoney(netMovement)
 			lines = append(lines, l)
 		}
 		return rows.Err()
@@ -386,7 +461,7 @@ func (h *Handler) CashBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"branch_id": branchID, "date": date, "lines": lines, "net_movement": formatMoney(netMovement),
+		"branch_id": branchID, "date": date, "lines": lines, "net_movement": net, "total_debit": totalDebit, "total_credit": totalCredit,
 	})
 }
 

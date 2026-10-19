@@ -40,6 +40,7 @@ test("audit log lists real entries, chain verifies, and a POS User is denied", a
     await page.waitForURL("/dashboard");
 
     await page.goto("/audit-logs");
+    await page.getByRole("tab", { name: "Record changes" }).click(); // the page opens on Activity
     await page.fill("#entityType", "stock_levels");
     await expect(page.getByText(`E2E audit log seed undo ${unique}`)).toBeVisible();
   });

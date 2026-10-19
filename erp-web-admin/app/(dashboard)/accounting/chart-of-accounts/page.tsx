@@ -7,16 +7,17 @@
 // account can't be used in a new journal voucher; an account with postings
 // can't be deleted (deactivate it instead) and keeps its code and type.
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Account } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Modal } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/data/page-header";
+import { FilterBar, Panel, selectClass } from "@/components/data/panel";
 import { StatusChip } from "@/components/data/status-chip";
 import { EditDialog, EditField } from "@/components/data/edit-dialog";
 import { MasterRowActions } from "@/components/data/master-actions";
@@ -35,6 +36,7 @@ export default function ChartOfAccountsPage() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [editing, setEditing] = useState<Account | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -60,6 +62,7 @@ export default function ChartOfAccountsPage() {
       toast.success("Account created");
       setCode("");
       setName("");
+      setAdding(false);
       load();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Could not create account");
@@ -77,26 +80,34 @@ export default function ChartOfAccountsPage() {
   const grouped = TYPES.map((t) => ({ type: t, items: shown.filter((a) => a.account_type === t) }));
 
   return (
-    <div className="flex max-w-4xl flex-col gap-6">
+    <div className="flex max-w-5xl flex-col gap-5">
       <PageHeader
         title="Chart of Accounts"
         description="Inactive accounts can't be used in new journal vouchers; their history is untouched. System accounts are posted to automatically and can only be renamed."
+        actions={
+          <Button onClick={() => setAdding(true)}>
+            <Plus /> New account
+          </Button>
+        }
       />
-      <div className="flex flex-wrap gap-2">
+      <FilterBar>
         <Input aria-label="Search accounts" placeholder="Search code or name" value={q} onChange={(e) => setQ(e.target.value)} className="w-64" />
-        <select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-lg border bg-card px-2 text-sm">
+        <select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)} className={selectClass}>
           <option value="all">All statuses</option>
           <option value="active">Active</option>
           <option value="inactive">Inactive</option>
         </select>
-      </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      </FilterBar>
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
 
       {grouped.map(
         (g) =>
           g.items.length > 0 && (
-            <div key={g.type}>
-              <h2 className="mb-2 text-sm font-semibold uppercase text-muted-foreground">{g.type}</h2>
+            <Panel key={g.type} title={<span className="capitalize">{g.type}</span>}>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -135,48 +146,54 @@ export default function ChartOfAccountsPage() {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </Panel>
           )
       )}
-      {shown.length === 0 && !error && <p className="text-sm text-muted-foreground">No accounts match these filters.</p>}
+      {shown.length === 0 && !error && (
+        <Panel>
+          <p className="text-sm text-muted-foreground">No accounts match these filters.</p>
+        </Panel>
+      )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Add a custom account</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="grid grid-cols-3 gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="code">Code *</Label>
-                <Input id="code" required value={code} onChange={(e) => setCode(e.target.value)} placeholder="5010" />
-              </div>
-              <div className="col-span-2 flex flex-col gap-2">
-                <Label htmlFor="name">Name *</Label>
-                <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Rent Expense" />
-              </div>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label>Type *</Label>
-              <Select value={accountType} onValueChange={(v) => setAccountType(v ?? "expense")}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TYPES.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button type="submit" disabled={submitting}>
-              {submitting ? "Creating..." : "Add account"}
+      <Modal
+        open={adding}
+        onOpenChange={setAdding}
+        title="New account"
+        description="A custom account for your own postings, used in journal vouchers."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setAdding(false)}>
+              Cancel
             </Button>
-          </form>
-        </CardContent>
-      </Card>
+            <Button type="submit" form="account-form" disabled={submitting}>
+              {submitting ? "Adding…" : "Add account"}
+            </Button>
+          </>
+        }
+      >
+        <form id="account-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="grid grid-cols-3 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="code">Code *</Label>
+              <Input id="code" required value={code} onChange={(e) => setCode(e.target.value)} placeholder="5010" />
+            </div>
+            <div className="col-span-2 flex flex-col gap-2">
+              <Label htmlFor="name">Name *</Label>
+              <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Rent Expense" />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="account-type">Type *</Label>
+            <select id="account-type" value={accountType} onChange={(e) => setAccountType(e.target.value)} className={`${selectClass} capitalize`}>
+              {TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+        </form>
+      </Modal>
 
       {editing && (
         <EditDialog

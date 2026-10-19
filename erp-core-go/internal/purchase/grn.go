@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,21 +15,28 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/softdelete"
 )
 
 var errGRNNotEditable = errors.New("grn is not editable")
 
 type grnResponse struct {
-	GRNID         string        `json:"grn_id"`
-	GRNNumber     string        `json:"grn_number"`
-	Status        string        `json:"status"`
-	SupplierID    string        `json:"supplier_id"`
-	BranchID      string        `json:"branch_id"`
-	FreightAmount string        `json:"freight_amount"`
-	OtherCharges  string        `json:"other_charges"`
-	Subtotal      string        `json:"subtotal"`
-	GrandTotal    string        `json:"grand_total"`
-	Lines         []grnLineResp `json:"lines"`
+	GRNID         string `json:"grn_id"`
+	GRNNumber     string `json:"grn_number"`
+	Status        string `json:"status"`
+	SupplierID    string `json:"supplier_id"`
+	BranchID      string `json:"branch_id"`
+	FreightAmount string `json:"freight_amount"`
+	OtherCharges  string `json:"other_charges"`
+	Subtotal      string `json:"subtotal"`
+	GrandTotal    string `json:"grand_total"`
+	// The purchase order this GRN receives against; nil for a direct GRN.
+	PurchaseOrderID *string `json:"purchase_order_id"`
+	PONumber        string  `json:"po_number"`
+	// The purchase bill (invoice) entered for it, once there is one.
+	BillID     *string       `json:"bill_id"`
+	BillNumber *string       `json:"bill_number"`
+	Lines      []grnLineResp `json:"lines"`
 }
 
 type grnLineResp struct {
@@ -42,6 +50,7 @@ type grnLineResp struct {
 	LineTotal      string  `json:"line_total"`
 	BatchNo        string  `json:"batch_no"`
 	ExpiryDate     *string `json:"expiry_date"`
+	POLineID       *string `json:"po_line_id"`
 }
 
 // ---------------------------------------------------------------------
@@ -108,6 +117,9 @@ type addGRNLineRequest struct {
 	UnitCost   float64 `json:"unit_cost"`
 	BatchNo    string  `json:"batch_no"`    // Phase 8 (Grocery/FMCG) — required if the variant has track_batch = true
 	ExpiryDate string  `json:"expiry_date"` // "YYYY-MM-DD", optional even for a batch-tracked variant (not everything expires)
+	// POLineID: on a GRN against a purchase order, the PO line received.
+	// Optional; omitted = the PO's line for this variant.
+	POLineID string `json:"po_line_id"`
 }
 
 func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
@@ -131,11 +143,32 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 	var resp grnResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var status string
-		if err := tx.QueryRow(ctx, `SELECT status FROM goods_receipt_notes WHERE id = $1`, grnID).Scan(&status); err != nil {
+		var poID *string
+		if err := tx.QueryRow(ctx, `SELECT status, purchase_order_id::text FROM goods_receipt_notes WHERE id = $1`, grnID).Scan(&status, &poID); err != nil {
 			return err
 		}
 		if status != "draft" {
 			return errGRNNotEditable
+		}
+		if poID != nil {
+			// Against a PO: only its items, never past what is pending.
+			lineID := req.POLineID
+			if lineID == "" {
+				err := tx.QueryRow(ctx, `
+					SELECT id::text FROM purchase_order_lines WHERE po_id = $1 AND variant_id::text = $2
+					ORDER BY (quantity > received_qty) DESC, created_at LIMIT 1`, *poID, req.VariantID).Scan(&lineID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					return errPOLineMismatch
+				} else if err != nil {
+					return err
+				}
+			}
+			if err := insertPOReceiptLine(ctx, tx, *poID, grnID, receivePOLine{
+				POLineID: lineID, Quantity: req.Quantity, UnitCost: &req.UnitCost, BatchNo: req.BatchNo, ExpiryDate: req.ExpiryDate,
+			}); err != nil {
+				return err
+			}
+			return recalcGRNTotals(ctx, tx, grnID, &resp)
 		}
 
 		var trackBatch bool
@@ -162,6 +195,8 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this GRN is no longer a draft")
 	case errors.Is(err, errBatchRequired):
 		httpx.Error(w, http.StatusBadRequest, "BATCH_REQUIRED", errBatchRequired.Error())
+	case isPOError(err):
+		respondPO(w, err, 0, nil, "add GRN line")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "GRN not found")
 	case err != nil:
@@ -183,6 +218,10 @@ type grnSummary struct {
 	BranchID   string `json:"branch_id"`
 	GrandTotal string `json:"grand_total"`
 	CreatedAt  string `json:"created_at"`
+	// The purchase order received against; nil for a direct GRN.
+	PurchaseOrderID *string `json:"purchase_order_id"`
+	PONumber        string  `json:"po_number"`
+	Billed          bool    `json:"billed"`
 }
 
 func (h *Handler) ListGRNs(w http.ResponseWriter, r *http.Request) {
@@ -193,21 +232,27 @@ func (h *Handler) ListGRNs(w http.ResponseWriter, r *http.Request) {
 	}
 	status := r.URL.Query().Get("status")
 	supplierID := r.URL.Query().Get("supplier_id")
+	poID := r.URL.Query().Get("purchase_order_id")
 
 	grns := []grnSummary{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, grn_number, status, supplier_id, branch_id, grand_total::text, created_at::text
-			FROM goods_receipt_notes
-			WHERE ($1 = '' OR status = $1) AND ($2 = '' OR supplier_id::text = $2)
-			ORDER BY created_at DESC`, status, supplierID)
+			SELECT g.id, g.grn_number, g.status, g.supplier_id, g.branch_id, g.grand_total::text, g.created_at::text,
+			       g.purchase_order_id::text, COALESCE(po.po_number, ''),
+			       EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.grn_id = g.id)
+			FROM goods_receipt_notes g
+			LEFT JOIN purchase_orders po ON po.id = g.purchase_order_id
+			WHERE ($1 = '' OR g.status = $1) AND ($2 = '' OR g.supplier_id::text = $2)
+			  AND ($3 = '' OR g.purchase_order_id::text = $3)
+			ORDER BY g.created_at DESC`, status, supplierID, poID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var g grnSummary
-			if err := rows.Scan(&g.GRNID, &g.GRNNumber, &g.Status, &g.SupplierID, &g.BranchID, &g.GrandTotal, &g.CreatedAt); err != nil {
+			if err := rows.Scan(&g.GRNID, &g.GRNNumber, &g.Status, &g.SupplierID, &g.BranchID, &g.GrandTotal, &g.CreatedAt,
+				&g.PurchaseOrderID, &g.PONumber, &g.Billed); err != nil {
 				return err
 			}
 			grns = append(grns, g)
@@ -283,6 +328,8 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errGRNNotEditable):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this GRN is already completed, cancelled, or has no lines")
+	case isPOError(err):
+		respondPO(w, err, 0, nil, "complete GRN")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "GRN not found")
 	case err != nil:
@@ -298,11 +345,12 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 // CompleteGRN and the invoice importer (import.go).
 func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receivedOn *string) error {
 	var branchID, status string
+	var poID *string
 	var freight, otherCharges, subtotal float64
 	if err := tx.QueryRow(ctx, `
-		SELECT branch_id, status, freight_amount, other_charges, subtotal
+		SELECT branch_id, status, freight_amount, other_charges, subtotal, purchase_order_id::text
 		FROM goods_receipt_notes WHERE id = $1`, grnID,
-	).Scan(&branchID, &status, &freight, &otherCharges, &subtotal); err != nil {
+	).Scan(&branchID, &status, &freight, &otherCharges, &subtotal, &poID); err != nil {
 		return err
 	}
 	if status != "draft" {
@@ -337,6 +385,13 @@ func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receive
 	}
 	if len(lines) == 0 {
 		return errGRNNotEditable
+	}
+	// Against a purchase order: count the receipt on the PO first, so an
+	// over-receipt is refused before any stock moves.
+	if poID != nil {
+		if err := receivePOTx(ctx, tx, grnID, *poID); err != nil {
+			return err
+		}
 	}
 
 	landedCharges := freight + otherCharges
@@ -414,30 +469,32 @@ func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receive
 }
 
 func recalcGRNTotals(ctx context.Context, tx pgx.Tx, grnID string, resp *grnResponse) error {
-	row := tx.QueryRow(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE goods_receipt_notes SET
 		  subtotal = (SELECT COALESCE(SUM(line_total),0) FROM goods_receipt_lines WHERE grn_id = $1),
 		  grand_total = (SELECT COALESCE(SUM(line_total),0) FROM goods_receipt_lines WHERE grn_id = $1) + freight_amount + other_charges
-		WHERE id = $1
-		RETURNING id, grn_number, status, supplier_id, branch_id, freight_amount::text, other_charges::text, subtotal::text, grand_total::text`, grnID)
-	if err := row.Scan(&resp.GRNID, &resp.GRNNumber, &resp.Status, &resp.SupplierID, &resp.BranchID,
-		&resp.FreightAmount, &resp.OtherCharges, &resp.Subtotal, &resp.GrandTotal); err != nil {
-		return err
-	}
-	lines, err := loadGRNLines(ctx, tx, grnID)
+		WHERE id = $1`, grnID)
 	if err != nil {
 		return err
 	}
-	resp.Lines = lines
-	return nil
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return loadGRN(ctx, tx, grnID, resp)
 }
 
 func loadGRN(ctx context.Context, tx pgx.Tx, grnID string, resp *grnResponse) error {
 	row := tx.QueryRow(ctx, `
-		SELECT id, grn_number, status, supplier_id, branch_id, freight_amount::text, other_charges::text, subtotal::text, grand_total::text
-		FROM goods_receipt_notes WHERE id = $1`, grnID)
+		SELECT g.id, g.grn_number, g.status, g.supplier_id, g.branch_id, g.freight_amount::text, g.other_charges::text,
+		       g.subtotal::text, g.grand_total::text, g.purchase_order_id::text, COALESCE(po.po_number, ''),
+		       pb.id::text, pb.bill_number
+		FROM goods_receipt_notes g
+		LEFT JOIN purchase_orders po ON po.id = g.purchase_order_id
+		LEFT JOIN LATERAL (SELECT id, bill_number FROM purchase_bills WHERE grn_id = g.id ORDER BY created_at LIMIT 1) pb ON true
+		WHERE g.id = $1`, grnID)
 	if err := row.Scan(&resp.GRNID, &resp.GRNNumber, &resp.Status, &resp.SupplierID, &resp.BranchID,
-		&resp.FreightAmount, &resp.OtherCharges, &resp.Subtotal, &resp.GrandTotal); err != nil {
+		&resp.FreightAmount, &resp.OtherCharges, &resp.Subtotal, &resp.GrandTotal, &resp.PurchaseOrderID, &resp.PONumber,
+		&resp.BillID, &resp.BillNumber); err != nil {
 		return err
 	}
 	lines, err := loadGRNLines(ctx, tx, grnID)
@@ -452,7 +509,7 @@ func loadGRNLines(ctx context.Context, tx pgx.Tx, grnID string) ([]grnLineResp, 
 	rows, err := tx.Query(ctx, `
 		SELECT gl.id, gl.variant_id, pv.sku, p.name, gl.quantity::text, gl.unit_cost::text,
 		       COALESCE(gl.landed_unit_cost::text, ''), gl.line_total::text,
-		       COALESCE(gl.batch_no,''), gl.expiry_date::text
+		       COALESCE(gl.batch_no,''), gl.expiry_date::text, gl.po_line_id::text
 		FROM goods_receipt_lines gl
 		JOIN product_variants pv ON pv.id = gl.variant_id
 		JOIN products p ON p.id = pv.product_id
@@ -467,10 +524,74 @@ func loadGRNLines(ctx context.Context, tx pgx.Tx, grnID string) ([]grnLineResp, 
 	for rows.Next() {
 		var l grnLineResp
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity, &l.UnitCost, &l.LandedUnitCost, &l.LineTotal,
-			&l.BatchNo, &l.ExpiryDate); err != nil {
+			&l.BatchNo, &l.ExpiryDate, &l.POLineID); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)
 	}
 	return lines, rows.Err()
+}
+
+// ---------------------------------------------------------------------
+// DELETE /purchase/grn/{id}?reason= — a draft GRN entered by mistake.
+// A draft has moved nothing (stock, cost and a PO's received quantities
+// change only at completion), so removing it is safe; its PO's pending
+// quantity is free again at once. A completed GRN is corrected with a
+// purchase return instead. Soft delete with its lines (migrations/058),
+// restorable from the recycle bin.
+// ---------------------------------------------------------------------
+
+var (
+	errGRNNotDeletable = errors.New("only a draft grn can be deleted")
+	errGRNHasReturn    = errors.New("a purchase return refers to this grn")
+)
+
+func (h *Handler) DeleteGRN(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	grnID := chi.URLParam(r, "id")
+	reason := strings.TrimSpace(r.URL.Query().Get("reason"))
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var status string
+		var poID *string
+		if err := tx.QueryRow(ctx, `SELECT status, purchase_order_id::text FROM goods_receipt_notes WHERE id::text = $1 FOR UPDATE`, grnID).
+			Scan(&status, &poID); err != nil {
+			return err
+		}
+		// Serialize with a completion or another receipt against the same PO.
+		if poID != nil {
+			if _, err := lockPO(ctx, tx, *poID); err != nil {
+				return err
+			}
+		}
+		if status != "draft" {
+			return errGRNNotDeletable
+		}
+		var referenced bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM purchase_returns WHERE grn_id::text = $1)`, grnID).Scan(&referenced); err != nil {
+			return err
+		}
+		if referenced {
+			return errGRNHasReturn
+		}
+		if err := softdelete.DeleteChildren(ctx, tx, "goods_receipt_lines", "grn_id", grnID, claims.UserID); err != nil {
+			return err
+		}
+		return softdelete.Delete(ctx, tx, "goods_receipt_notes", grnID, claims.UserID, reason)
+	})
+	switch {
+	case errors.Is(err, errGRNNotDeletable):
+		httpx.Error(w, http.StatusConflict, "GRN_NOT_DELETABLE", "only a draft GRN can be deleted; correct a completed one with a purchase return")
+	case errors.Is(err, errGRNHasReturn):
+		httpx.Error(w, http.StatusConflict, "GRN_HAS_RETURN", "a purchase return refers to this GRN")
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "GRN not found")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not delete GRN")
+	default:
+		httpx.JSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	}
 }

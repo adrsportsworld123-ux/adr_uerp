@@ -28,6 +28,8 @@ export type Entitlements = {
 type PermissionsState = {
   loaded: boolean;
   permissions: string[];
+  /** The signed-in user's own branch, the natural default for a branch picker. */
+  homeBranchId: string | null;
   can: (code: string) => boolean;
   entitlements: Entitlements | null;
   has: (feature: string) => boolean;
@@ -37,6 +39,7 @@ type PermissionsState = {
 const PermissionsContext = createContext<PermissionsState>({
   loaded: false,
   permissions: [],
+  homeBranchId: null,
   can: () => true,
   entitlements: null,
   has: () => true,
@@ -45,7 +48,11 @@ const PermissionsContext = createContext<PermissionsState>({
 
 export function PermissionsProvider({ children }: { children: ReactNode }) {
   const { userId } = useAuth();
-  const [state, setState] = useState<{ loaded: boolean; permissions: string[] }>({ loaded: false, permissions: [] });
+  const [state, setState] = useState<{ loaded: boolean; permissions: string[]; homeBranchId: string | null }>({
+    loaded: false,
+    permissions: [],
+    homeBranchId: null,
+  });
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [entTick, setEntTick] = useState(0);
 
@@ -66,12 +73,12 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     if (!userId) return;
     let cancelled = false;
     api
-      .get<{ permissions: string[] }>("/api/v1/me/permissions")
-      .then((d) => !cancelled && setState({ loaded: true, permissions: d.permissions }))
+      .get<{ permissions: string[]; branch_id?: string }>("/api/v1/me/permissions")
+      .then((d) => !cancelled && setState({ loaded: true, permissions: d.permissions, homeBranchId: d.branch_id || null }))
       // An older backend without this endpoint: fall back to "unknown",
       // which leaves buttons enabled and the server's 403 as the answer —
       // exactly how every screen behaved before.
-      .catch(() => !cancelled && setState({ loaded: false, permissions: [] }));
+      .catch(() => !cancelled && setState({ loaded: false, permissions: [], homeBranchId: null }));
     return () => {
       cancelled = true;
     };

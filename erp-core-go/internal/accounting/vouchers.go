@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -176,8 +177,20 @@ type voucherLine struct {
 	Credit      string  `json:"credit"`
 	PartyType   *string `json:"party_type"`
 	PartyID     *string `json:"party_id"`
+	PartyName   *string `json:"party_name"`
 	Memo        *string `json:"memo"`
 }
+
+// partyNameSQL names a line's party (alias l: party_type, party_id). A
+// party deleted since is hidden by its table's policy, so it reads null.
+const partyNameSQL = `CASE l.party_type
+	WHEN 'customer' THEN (SELECT c.name FROM customers c WHERE c.id = l.party_id)
+	WHEN 'supplier' THEN (SELECT s.name FROM suppliers s WHERE s.id = l.party_id) END`
+
+// partyAccounts: the control accounts whose balance is the sum of the
+// parties' balances (the party ledger). A line on one must name its party,
+// or the party ledger stops agreeing with the account.
+var partyAccounts = map[string]string{AccountReceivable: "customer", AccountPayable: "supplier"}
 
 type voucher struct {
 	VoucherID      string        `json:"voucher_id"`
@@ -233,7 +246,7 @@ func loadVoucher(ctx context.Context, tx pgx.Tx, id string, lock bool) (voucher,
 		return v, err
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT l.line_no, a.code, a.name, l.debit::text, l.credit::text, l.party_type, l.party_id::text, l.memo
+		SELECT l.line_no, a.code, a.name, l.debit::text, l.credit::text, l.party_type, l.party_id::text, `+partyNameSQL+`, l.memo
 		FROM journal_voucher_lines l JOIN chart_of_accounts a ON a.id = l.account_id
 		WHERE l.voucher_id::text = $1 ORDER BY l.line_no`, id)
 	if err != nil {
@@ -243,7 +256,7 @@ func loadVoucher(ctx context.Context, tx pgx.Tx, id string, lock bool) (voucher,
 	v.Lines = []voucherLine{}
 	for rows.Next() {
 		var l voucherLine
-		if err := rows.Scan(&l.LineNo, &l.AccountCode, &l.AccountName, &l.Debit, &l.Credit, &l.PartyType, &l.PartyID, &l.Memo); err != nil {
+		if err := rows.Scan(&l.LineNo, &l.AccountCode, &l.AccountName, &l.Debit, &l.Credit, &l.PartyType, &l.PartyID, &l.PartyName, &l.Memo); err != nil {
 			return v, err
 		}
 		v.Lines = append(v.Lines, l)
@@ -270,8 +283,22 @@ func (in *voucherInput) validate() error {
 		if strings.TrimSpace(l.AccountCode) == "" || d < 0 || c < 0 || (d == 0) == (c == 0) {
 			return fmt.Errorf("%w: line %d needs an account and exactly one of debit or credit, above zero", errVoucherInvalid, i+1)
 		}
+		in.Lines[i].AccountCode = strings.TrimSpace(l.AccountCode)
+		in.Lines[i].PartyType = strings.TrimSpace(l.PartyType)
+		in.Lines[i].PartyID = strings.TrimSpace(l.PartyID)
+		l = in.Lines[i]
 		if l.PartyType != "" && l.PartyType != "customer" && l.PartyType != "supplier" {
 			return fmt.Errorf("%w: line %d party_type must be customer or supplier", errVoucherInvalid, i+1)
+		}
+		if (l.PartyType == "") != (l.PartyID == "") {
+			return fmt.Errorf("%w: line %d needs both a party type and a party, or neither", errVoucherInvalid, i+1)
+		}
+		if l.PartyID != "" && !uuidRe.MatchString(l.PartyID) {
+			return fmt.Errorf("%w: line %d party_id is not a valid id", errVoucherInvalid, i+1)
+		}
+		if want, ok := partyAccounts[l.AccountCode]; ok && l.PartyType != want {
+			return fmt.Errorf("%w: line %d is on a %s control account: choose the %s it belongs to", errVoucherInvalid, i+1,
+				map[string]string{"customer": "receivables", "supplier": "payables"}[want], want)
 		}
 		dr += d
 		cr += c
@@ -284,6 +311,8 @@ func (in *voucherInput) validate() error {
 
 func paise(v float64) int64 { return int64(math.Round(v * 100)) }
 
+var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 func writeVoucherLines(ctx context.Context, tx pgx.Tx, voucherID string, lines []voucherLineInput) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM journal_voucher_lines WHERE voucher_id::text = $1`, voucherID); err != nil {
 		return err
@@ -295,6 +324,16 @@ func writeVoucherLines(ctx context.Context, tx pgx.Tx, voucherID string, lines [
 			return fmt.Errorf("%w: %s", errUnknownAccount, l.AccountCode)
 		} else if err != nil {
 			return err
+		}
+		if l.PartyID != "" {
+			var found bool
+			if err := tx.QueryRow(ctx, `SELECT CASE $1 WHEN 'customer' THEN EXISTS (SELECT 1 FROM customers WHERE id::text = $2)
+				ELSE EXISTS (SELECT 1 FROM suppliers WHERE id::text = $2) END`, l.PartyType, l.PartyID).Scan(&found); err != nil {
+				return err
+			}
+			if !found {
+				return fmt.Errorf("%w: line %d: no such %s", errVoucherInvalid, i+1, l.PartyType)
+			}
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO journal_voucher_lines (voucher_id, line_no, account_id, debit, credit, party_type, party_id, memo)
@@ -781,6 +820,7 @@ type ledgerEntry struct {
 		Credit      string  `json:"credit"`
 		PartyType   *string `json:"party_type"`
 		PartyID     *string `json:"party_id"`
+		PartyName   *string `json:"party_name"`
 	} `json:"lines,omitempty"`
 }
 
@@ -794,7 +834,8 @@ const ledgerFilter = `
 	  AND ($1 = '' OR je.source_type = $1)
 	  AND ($2 = '' OR je.entry_number ILIKE '%' || $2 || '%' OR je.description ILIKE '%' || $2 || '%')
 	  AND ($3 = '' OR je.entry_date >= $3::date) AND ($4 = '' OR je.entry_date <= $4::date)
-	  AND ($5 = '' OR je.branch_id::text = $5)`
+	  AND ($5 = '' OR je.branch_id::text = $5)
+	  AND ($6 = '' OR EXISTS (SELECT 1 FROM journal_lines pl WHERE pl.journal_entry_id = je.id AND pl.party_id::text = $6))`
 
 // ListJournalEntries: GET /accounting/journal-entries?source_type=&q=&from=&to=&branch_id=&page=&limit=&format=csv
 // Paged (default 25), newest first. format=csv returns every matching
@@ -814,27 +855,28 @@ func (h *Handler) ListJournalEntries(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	args := []any{q.Get("source_type"), strings.TrimSpace(q.Get("q")), q.Get("from"), q.Get("to"), q.Get("branch_id")}
+	args := []any{q.Get("source_type"), strings.TrimSpace(q.Get("q")), q.Get("from"), q.Get("to"), q.Get("branch_id"), q.Get("party_id")}
 
 	if q.Get("format") == "csv" {
 		var buf strings.Builder
 		cw := csv.NewWriter(&buf)
-		_ = cw.Write([]string{"entry_number", "entry_date", "source_type", "description", "branch", "account_code", "account_name", "debit", "credit", "party_type", "party_id"})
+		_ = cw.Write([]string{"entry_number", "entry_date", "source_type", "description", "branch", "account_code", "account_name", "debit", "credit", "party_type", "party_id", "party_name"})
 		err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 			rows, err := tx.Query(ctx, `
 				SELECT je.entry_number, je.entry_date::text, je.source_type, COALESCE(je.description, ''), COALESCE(b.name, ''),
-				       a.code, a.name, jl.debit::text, jl.credit::text, COALESCE(jl.party_type, ''), COALESCE(jl.party_id::text, '')
+				       a.code, a.name, l.debit::text, l.credit::text, COALESCE(l.party_type, ''), COALESCE(l.party_id::text, ''),
+				       COALESCE(`+partyNameSQL+`, '')
 				`+ledgerFrom+`
-				JOIN journal_lines jl ON jl.journal_entry_id = je.id
-				JOIN chart_of_accounts a ON a.id = jl.account_id`+ledgerFilter+`
-				ORDER BY je.entry_date, je.created_at, je.id, jl.debit DESC LIMIT 50000`, args...)
+				JOIN journal_lines l ON l.journal_entry_id = je.id
+				JOIN chart_of_accounts a ON a.id = l.account_id`+ledgerFilter+`
+				ORDER BY je.entry_date, je.created_at, je.id, l.debit DESC LIMIT 50000`, args...)
 			if err != nil {
 				return err
 			}
 			defer rows.Close()
 			for rows.Next() {
-				rec := make([]string, 11)
-				ptrs := make([]any, 11)
+				rec := make([]string, 12)
+				ptrs := make([]any, 12)
 				for i := range rec {
 					ptrs[i] = &rec[i]
 				}
@@ -868,7 +910,7 @@ func (h *Handler) ListJournalEntries(w http.ResponseWriter, r *http.Request) {
 		rows, err := tx.Query(ctx, `
 			SELECT je.id, je.entry_number, je.entry_date::text, je.source_type, je.source_id::text, COALESCE(je.description, ''), b.name,
 			       COALESCE((SELECT sum(debit) FROM journal_lines jl WHERE jl.journal_entry_id = je.id), 0)::text, u.name
-			`+ledgerFrom+ledgerFilter+` ORDER BY `+p.OrderBy+`, je.id LIMIT $6 OFFSET $7`, append(args, p.Limit, p.Offset)...)
+			`+ledgerFrom+ledgerFilter+` ORDER BY `+p.OrderBy+`, je.id LIMIT $7 OFFSET $8`, append(args, p.Limit, p.Offset)...)
 		if err != nil {
 			return err
 		}
@@ -910,9 +952,9 @@ func (h *Handler) GetJournalEntry(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		rows, err := tx.Query(ctx, `
-			SELECT a.code, a.name, jl.debit::text, jl.credit::text, jl.party_type, jl.party_id::text
-			FROM journal_lines jl JOIN chart_of_accounts a ON a.id = jl.account_id
-			WHERE jl.journal_entry_id::text = $1 ORDER BY jl.debit DESC, a.code`, e.EntryID)
+			SELECT a.code, a.name, l.debit::text, l.credit::text, l.party_type, l.party_id::text, `+partyNameSQL+`
+			FROM journal_lines l JOIN chart_of_accounts a ON a.id = l.account_id
+			WHERE l.journal_entry_id::text = $1 ORDER BY l.debit DESC, a.code`, e.EntryID)
 		if err != nil {
 			return err
 		}
@@ -925,8 +967,9 @@ func (h *Handler) GetJournalEntry(w http.ResponseWriter, r *http.Request) {
 				Credit      string  `json:"credit"`
 				PartyType   *string `json:"party_type"`
 				PartyID     *string `json:"party_id"`
+				PartyName   *string `json:"party_name"`
 			}
-			if err := rows.Scan(&l.AccountCode, &l.AccountName, &l.Debit, &l.Credit, &l.PartyType, &l.PartyID); err != nil {
+			if err := rows.Scan(&l.AccountCode, &l.AccountName, &l.Debit, &l.Credit, &l.PartyType, &l.PartyID, &l.PartyName); err != nil {
 				return err
 			}
 			e.Lines = append(e.Lines, l)

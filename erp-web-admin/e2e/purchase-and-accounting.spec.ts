@@ -95,8 +95,12 @@ test("supplier → GRN → bill → payment → day book, end to end", async ({ 
     // .last(): the day book accumulates every entry ever posted today
     // across repeated runs of this spec against the same dev database —
     // the most recently posted entry is this run's.
-    await expect(page.getByText("purchase_bill").last()).toBeVisible();
-    await expect(page.getByText("bill_payment").last()).toBeVisible();
+    await expect(page.getByText("Purchase bill", { exact: true }).last()).toBeVisible();
+    await expect(page.getByText("Bill payment", { exact: true }).last()).toBeVisible();
+    // The day's totals are summed by the server and always balance.
+    const debit = await page.getByTestId("day-total-debit").textContent();
+    expect(debit).not.toBe("₹0.00");
+    await expect(page.getByTestId("day-total-credit")).toHaveText(debit!);
   });
 
   await test.step("logout", async () => {

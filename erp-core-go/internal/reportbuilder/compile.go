@@ -21,7 +21,11 @@ type Spec struct {
 	Sort     []Sort   `json:"sort"`
 	DateFrom string   `json:"date_from,omitempty"` // YYYY-MM-DD, inclusive
 	DateTo   string   `json:"date_to,omitempty"`
-	Limit    int      `json:"limit,omitempty"`
+	// Period: a range relative to the day it runs ("this_month",
+	// "last_week" ... see Periods), used when DateFrom and DateTo are both
+	// empty, so a saved report always covers the current month, week etc.
+	Period string `json:"period,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
 }
 
 type Column struct {
@@ -143,6 +147,13 @@ func Compile(spec Spec, horizon time.Time, rowCap int) (Compiled, error) {
 	}
 
 	where := []string{"(" + ds.where + ")"}
+	if ds.HasDateRange && spec.DateFrom == "" && spec.DateTo == "" && spec.Period != "" {
+		from, to, ok := ResolvePeriod(spec.Period, time.Now())
+		if !ok {
+			return Compiled{}, invalid("unknown period %q", spec.Period)
+		}
+		spec.DateFrom, spec.DateTo = from, to
+	}
 	if ds.HasDateRange {
 		from, err1 := parseDate(spec.DateFrom)
 		to, err2 := parseDate(spec.DateTo)
@@ -155,7 +166,7 @@ func Compile(spec Spec, horizon time.Time, rowCap int) (Compiled, error) {
 		if to.Sub(from) > MaxDateSpanDays*24*time.Hour {
 			return Compiled{}, invalid("a report covers at most %d days", MaxDateSpanDays)
 		}
-		if !horizon.IsZero() && from.Before(time.Date(horizon.Year(), horizon.Month(), horizon.Day(), 0, 0, 0, 0, time.UTC)) {
+		if !ds.Statutory && !horizon.IsZero() && from.Before(time.Date(horizon.Year(), horizon.Month(), horizon.Day(), 0, 0, 0, 0, time.UTC)) {
 			return Compiled{}, &RetentionError{Earliest: horizon}
 		}
 		where = append(where, fmt.Sprintf("%s BETWEEN %s::date AND %s::date", ds.date, arg(spec.DateFrom), arg(spec.DateTo)))

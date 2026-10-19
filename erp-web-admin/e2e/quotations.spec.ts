@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 // End-to-end coverage for Phase 7's B2B quotations (erp-core-go's
 // phased_roadmap.md; internal/quotations). Seeds a real product and B2B
@@ -9,7 +10,7 @@ import { test, expect } from "@playwright/test";
 // phase's own Definition of Done ("the same catalog and stock serve both
 // a walk-in retail customer and a B2B wholesale order without
 // double-entry") verified for real, not just asserted.
-const API_BASE = "http://localhost:8080/api/v1";
+const API_BASE = process.env.E2E_API_URL ?? "http://localhost:8080/api/v1";
 const BRANCH_ID = "22222222-2222-2222-2222-222222222222";
 
 test("B2B quotation: draft -> send -> accept -> convert -> a real, correctly-priced, checkoutable order", async ({ page, request }) => {
@@ -114,6 +115,12 @@ test("B2B quotation: draft -> send -> accept -> convert -> a real, correctly-pri
   await test.step("send and accept through the UI", async () => {
     await page.getByRole("button", { name: "Send" }).click();
     await expect(page.getByRole("button", { name: "Accept" })).toBeVisible();
+
+    // The sent quote downloads as the customer's A4 PDF (no DRAFT stamp).
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download PDF", exact: true }).click()]);
+    expect(dl.suggestedFilename()).toMatch(/^quotation-Q-.+\.pdf$/);
+    expect(readFileSync((await dl.path())!).subarray(0, 5).toString()).toBe("%PDF-");
+
     await page.getByRole("button", { name: "Accept" }).click();
     await expect(page.getByRole("button", { name: "Convert to order" })).toBeVisible();
   });

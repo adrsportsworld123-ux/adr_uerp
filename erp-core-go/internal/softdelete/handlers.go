@@ -23,6 +23,8 @@ type binEntity struct {
 	Table    string
 	Label    string    // SQL over alias t: what the bin shows for a row
 	Children [2]string // table, foreign key: rows deleted along with it (DeleteChildren)
+	// RestoreCheck, when set, runs before a restore; a *Refusal answers 409.
+	RestoreCheck func(ctx context.Context, tx pgx.Tx, id string) error
 }
 
 var binEntities = map[string]binEntity{
@@ -46,12 +48,35 @@ var binEntities = map[string]binEntity{
 	"account":          {Table: "chart_of_accounts", Label: "t.code || ' ' || t.name"},
 	"shift":            {Table: "shifts", Label: "t.name"},
 	"attribute":        {Table: "attributes", Label: "t.name"},
+	// Purchase drafts deleted by mistake (migrations/058).
+	"purchase_order": {Table: "purchase_orders", Label: "t.po_number", Children: [2]string{"purchase_order_lines", "po_id"}},
+	"grn": {Table: "goods_receipt_notes", Label: "t.grn_number", Children: [2]string{"goods_receipt_lines", "grn_id"},
+		RestoreCheck: grnPOLive},
+}
+
+// grnPOLive: a GRN received against a purchase order comes back only
+// while that PO is live; restore the PO first.
+func grnPOLive(ctx context.Context, tx pgx.Tx, id string) error {
+	var poDeleted bool
+	err := db.IncludeDeleted(ctx, tx, func() error {
+		return tx.QueryRow(ctx, `
+			SELECT COALESCE(po.deleted_at IS NOT NULL, false)
+			FROM goods_receipt_notes g LEFT JOIN purchase_orders po ON po.id = g.purchase_order_id
+			WHERE g.id::text = $1`, id).Scan(&poDeleted)
+	})
+	if err != nil {
+		return err
+	}
+	if poDeleted {
+		return &Refusal{Code: "RESTORE_CONFLICT", Message: "this GRN's purchase order is deleted; restore the purchase order first"}
+	}
+	return nil
 }
 
 // binOrder fixes the listing order of the "all entities" view.
 var binOrder = []string{"category", "brand", "tax_slab", "attribute_value", "price_list", "price_rule",
 	"scheduled_change", "promotion", "coupon", "role", "report_template", "quotation", "journal_voucher",
-	"customer", "supplier", "branch", "employee", "account", "shift", "attribute"}
+	"customer", "supplier", "branch", "employee", "account", "shift", "attribute", "purchase_order", "grn"}
 
 type Handler struct {
 	DB *db.DB
@@ -140,6 +165,11 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if e.RestoreCheck != nil {
+			if err := e.RestoreCheck(ctx, tx, id); err != nil {
+				return err
+			}
+		}
 		if e.Children[0] != "" {
 			if err := restoreChildren(ctx, tx, e.Table, id, e.Children[0], e.Children[1]); err != nil {
 				return err
@@ -147,7 +177,10 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return Restore(ctx, tx, e.Table, id, claims.UserID)
 	})
+	var refusal *Refusal
 	switch {
+	case errors.As(err, &refusal):
+		httpx.Error(w, http.StatusConflict, refusal.Code, refusal.Message)
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "no deleted record with this id")
 	case errors.Is(err, ErrConflict):

@@ -13,41 +13,38 @@
 // customer field already has in this app.
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { Branch, CashReconciliation, CashReconciliationSummary } from "@/lib/types";
+import { localDate, rupees } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/data/page-header";
+import { Field, Panel } from "@/components/data/panel";
+import { BranchSelect, useMyBranches } from "@/components/data/branch-select";
+import { StatusChip } from "@/components/data/status-chip";
 
 const DENOMINATIONS = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-function daysAgo(n: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
-
 export default function CashReconciliationPage() {
+  const { branches, defaultBranchId } = useMyBranches();
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
-      <h1 className="text-2xl font-semibold">Cash Reconciliation</h1>
-      <NewCountSection />
-      <HistorySection />
+    <div className="flex max-w-5xl flex-col gap-5">
+      <PageHeader
+        title="Cash Reconciliation"
+        description="Count a branch's cash for a day against what the system expects. A difference needs a reason and a manager's approval, and posts an adjustment."
+      />
+      <NewCountSection branches={branches} defaultBranchId={defaultBranchId} />
+      <HistorySection branches={branches} defaultBranchId={defaultBranchId} />
     </div>
   );
 }
 
-function NewCountSection() {
-  const [branchId, setBranchId] = useState(SEED_BRANCH_ID);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [date, setDate] = useState(today());
+function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; defaultBranchId: string }) {
+  const [picked, setPicked] = useState("");
+  const branchId = picked || defaultBranchId;
+  const [date, setDate] = useState(localDate());
   const [openingFloat, setOpeningFloat] = useState("0");
   const [cashSales, setCashSales] = useState<string | null>(null);
   const [counts, setCounts] = useState<Record<number, string>>({});
@@ -58,14 +55,8 @@ function NewCountSection() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CashReconciliation | null>(null);
 
-  useEffect(() => {
-    api
-      .get<{ branches: Branch[] }>("/api/v1/branches?scope=mine")
-      .then((d) => setBranches(d.branches))
-      .catch(() => {});
-  }, []);
-
   const loadCashSales = useCallback(() => {
+    if (!branchId) return;
     api
       .get<{ cash_total: string }>(`/api/v1/reports/eod-cash?branch_id=${branchId}&date=${date}`)
       .then((d) => setCashSales(d.cash_total))
@@ -109,120 +100,85 @@ function NewCountSection() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">New count</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={submit} className="flex flex-col gap-4">
-          <div className="flex gap-4 flex-wrap items-end">
-            <div className="flex flex-col gap-2 w-48">
-              <Label>Branch</Label>
-              <Select
-                value={branchId}
-                onValueChange={(v) => setBranchId(v ?? SEED_BRANCH_ID)}
-                items={Object.fromEntries(branches.map((b) => [b.branch_id, b.name]))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {branches.map((b) => (
-                    <SelectItem key={b.branch_id} value={b.branch_id}>
-                      {b.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+    <Panel title="New count">
+      <form onSubmit={submit} className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Branch" htmlFor="count-branch">
+            <BranchSelect id="count-branch" branches={branches} value={branchId} onChange={setPicked} />
+          </Field>
+          <Field label="Date" htmlFor="date">
+            <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-40" />
+          </Field>
+          <Field label="Opening float (₹)" htmlFor="openingFloat" className="w-40">
+            <Input id="openingFloat" type="number" min="0" step="0.01" value={openingFloat} onChange={(e) => setOpeningFloat(e.target.value)} />
+          </Field>
+        </div>
+
+        <p className="text-sm text-muted-foreground">
+          System cash sales for this date: <span className="tabular">{cashSales !== null ? rupees(cashSales) : "—"}</span>. System expected
+          (opening + sales): <span className="tabular">{rupees(systemExpected)}</span>
+        </p>
+
+        <div className="grid grid-cols-5 gap-3">
+          {DENOMINATIONS.map((d) => (
+            <div key={d} className="flex flex-col gap-1">
+              <Label className="text-xs">₹{d}</Label>
+              <Input type="number" min="0" step="1" className="h-8" value={counts[d] ?? ""} onChange={(e) => setCounts({ ...counts, [d]: e.target.value })} />
             </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="date">Date</Label>
-              <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-40" />
-            </div>
-            <div className="flex flex-col gap-2 w-40">
-              <Label htmlFor="openingFloat">Opening float (₹)</Label>
-              <Input id="openingFloat" type="number" min="0" step="0.01" value={openingFloat} onChange={(e) => setOpeningFloat(e.target.value)} />
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4 border-t pt-3 text-sm">
+          <span>
+            Counted total: <span className="tabular font-semibold">{rupees(countedTotal)}</span>
+          </span>
+          <span className={`tabular ${variance === 0 ? "text-pay" : "font-semibold text-destructive"}`}>
+            Variance: {rupees(Math.abs(variance))} {variance > 0 ? "(overage)" : variance < 0 ? "(shortage)" : ""}
+          </span>
+        </div>
+
+        {needsApproval && (
+          <div className="flex flex-col gap-3 rounded-lg border bg-warn-soft p-3">
+            <p className="text-xs text-warn">A non-zero variance needs a reason and a Branch Manager or Merchant Admin&apos;s PIN before this can be closed.</p>
+            <Field label="Reason" htmlFor="reason">
+              <Input id="reason" required value={reason} onChange={(e) => setReason(e.target.value)} />
+            </Field>
+            <div className="flex flex-wrap gap-3">
+              <Field label="Approver user ID" htmlFor="authorizedBy">
+                <Input id="authorizedBy" required value={authorizedBy} onChange={(e) => setAuthorizedBy(e.target.value)} className="w-64" />
+              </Field>
+              <Field label="Approver PIN" htmlFor="authorizedPin">
+                <Input id="authorizedPin" type="password" required value={authorizedPin} onChange={(e) => setAuthorizedPin(e.target.value)} className="w-32" />
+              </Field>
             </div>
           </div>
+        )}
 
-          <p className="text-xs text-muted-foreground">
-            System cash sales for this date: {cashSales !== null ? `₹${cashSales}` : "—"}. System expected (opening + sales): ₹
-            {systemExpected.toFixed(2)}
-          </p>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <Button type="submit" disabled={busy || !branchId} className="w-fit">
+          {busy ? "Submitting…" : "Submit reconciliation"}
+        </Button>
 
-          <div className="grid grid-cols-5 gap-3">
-            {DENOMINATIONS.map((d) => (
-              <div key={d} className="flex flex-col gap-1">
-                <Label className="text-xs">₹{d}</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="1"
-                  className="h-8"
-                  value={counts[d] ?? ""}
-                  onChange={(e) => setCounts({ ...counts, [d]: e.target.value })}
-                />
-              </div>
-            ))}
+        {result && (
+          <div className="border-t pt-3 text-sm">
+            <StatusChip status="reconciled" tone={Number(result.variance) === 0 ? "ok" : "warn"} label={`${result.recon_date}: variance ${rupees(result.variance)}`} />
           </div>
-
-          <div className="flex items-center gap-4 border-t pt-3 text-sm">
-            <span>
-              Counted total: <span className="font-semibold">₹{countedTotal.toFixed(2)}</span>
-            </span>
-            <span className={variance === 0 ? "text-pay" : "text-destructive font-semibold"}>
-              Variance: ₹{variance.toFixed(2)} {variance > 0 ? "(overage)" : variance < 0 ? "(shortage)" : ""}
-            </span>
-          </div>
-
-          {needsApproval && (
-            <div className="flex flex-col gap-3 border rounded-lg p-3 bg-warn-soft">
-              <p className="text-xs text-warn">
-                A non-zero variance needs a reason and a Branch Manager or Merchant Admin&apos;s PIN before this can be closed.
-              </p>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="reason">Reason</Label>
-                <Input id="reason" required value={reason} onChange={(e) => setReason(e.target.value)} />
-              </div>
-              <div className="flex gap-3">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="authorizedBy">Approver user ID</Label>
-                  <Input id="authorizedBy" required value={authorizedBy} onChange={(e) => setAuthorizedBy(e.target.value)} className="w-64" />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="authorizedPin">Approver PIN</Label>
-                  <Input id="authorizedPin" type="password" required value={authorizedPin} onChange={(e) => setAuthorizedPin(e.target.value)} className="w-32" />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button type="submit" disabled={busy} className="w-fit">
-            {busy ? "Submitting..." : "Submit reconciliation"}
-          </Button>
-
-          {result && (
-            <div className="text-sm border-t pt-3">
-              <Badge variant={Number(result.variance) === 0 ? "default" : "secondary"}>
-                {result.recon_date}: variance ₹{result.variance}
-              </Badge>
-            </div>
-          )}
-        </form>
-      </CardContent>
-    </Card>
+        )}
+      </form>
+    </Panel>
   );
 }
 
-function HistorySection() {
-  const [branchId, setBranchId] = useState(SEED_BRANCH_ID);
-  const [start, setStart] = useState(daysAgo(30));
-  const [end, setEnd] = useState(today());
+function HistorySection({ branches, defaultBranchId }: { branches: Branch[]; defaultBranchId: string }) {
+  const [picked, setPicked] = useState("");
+  const branchId = picked || defaultBranchId;
+  const [start, setStart] = useState(localDate(-30));
+  const [end, setEnd] = useState(localDate());
   const [history, setHistory] = useState<CashReconciliationSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
+    if (!branchId) return;
     api
       .get<{ history: CashReconciliationSummary[] }>(`/api/v1/cash-reconciliation/history?branch_id=${branchId}&start=${start}&end=${end}`)
       .then((d) => {
@@ -234,62 +190,54 @@ function HistorySection() {
   useEffect(load, [load]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">History</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Label htmlFor="histBranch" className="text-sm">
-            Branch ID
-          </Label>
-          <Input id="histBranch" value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-64 font-mono text-xs" />
-          <Label htmlFor="histStart" className="text-sm">
-            From
-          </Label>
+    <Panel title="History">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Branch" htmlFor="histBranch">
+          <BranchSelect id="histBranch" branches={branches} value={branchId} onChange={setPicked} />
+        </Field>
+        <Field label="From" htmlFor="histStart">
           <Input id="histStart" type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-40" />
-          <Label htmlFor="histEnd" className="text-sm">
-            To
-          </Label>
+        </Field>
+        <Field label="To" htmlFor="histEnd">
           <Input id="histEnd" type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-40" />
-        </div>
+        </Field>
+      </div>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>Drawer</TableHead>
-              <TableHead>Opening</TableHead>
-              <TableHead>Expected</TableHead>
-              <TableHead>Counted</TableHead>
-              <TableHead>Variance</TableHead>
-              <TableHead>Approved</TableHead>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Date</TableHead>
+            <TableHead>Drawer</TableHead>
+            <TableHead className="text-right">Opening</TableHead>
+            <TableHead className="text-right">Expected</TableHead>
+            <TableHead className="text-right">Counted</TableHead>
+            <TableHead className="text-right">Variance</TableHead>
+            <TableHead>Approved</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {history.map((h) => (
+            <TableRow key={h.pos_shift_id ?? h.recon_date}>
+              <TableCell className="text-xs">{h.recon_date}</TableCell>
+              <TableCell className="text-xs">{h.pos_shift_id ? `${h.terminal_name} · shift ${h.shift_number}` : "Whole branch"}</TableCell>
+              <TableCell className="tabular text-right">{rupees(h.opening_float)}</TableCell>
+              <TableCell className="tabular text-right">{rupees(h.system_expected)}</TableCell>
+              <TableCell className="tabular text-right">{rupees(h.counted_total)}</TableCell>
+              <TableCell className={`tabular text-right ${Number(h.variance) !== 0 ? "text-destructive" : ""}`}>{rupees(h.variance)}</TableCell>
+              <TableCell>{h.authorized ? <StatusChip status="approved" tone="ok" label="Approved" /> : <span className="text-muted-foreground">—</span>}</TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {history.map((h) => (
-              <TableRow key={h.pos_shift_id ?? h.recon_date}>
-                <TableCell className="text-xs">{h.recon_date}</TableCell>
-                <TableCell className="text-xs">{h.pos_shift_id ? `${h.terminal_name} · shift ${h.shift_number}` : "Whole branch"}</TableCell>
-                <TableCell>₹{h.opening_float}</TableCell>
-                <TableCell>₹{h.system_expected}</TableCell>
-                <TableCell>₹{h.counted_total}</TableCell>
-                <TableCell className={Number(h.variance) !== 0 ? "text-destructive" : ""}>₹{h.variance}</TableCell>
-                <TableCell>{h.authorized ? <Badge variant="default">Yes</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
-              </TableRow>
-            ))}
-            {history.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">
-                  No reconciliations in range
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+          ))}
+          {history.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                No reconciliations in range
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </Panel>
   );
 }

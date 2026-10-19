@@ -11,6 +11,7 @@ import { api, ApiError } from "@/lib/api-client";
 import { LedgerEntry } from "@/lib/types";
 import { SOURCE_LABEL, rupees } from "@/lib/format";
 import { PageHeader } from "@/components/data/page-header";
+import { PartyCell } from "@/components/accounting/party-cell";
 
 // Where each source document lives in this app (null: no page of its own).
 function sourceHref(e: LedgerEntry): string | null {
@@ -71,7 +72,9 @@ export default function JournalEntryPage() {
                 <td className="py-1.5">
                   {l.account_code} · {l.account_name}
                 </td>
-                <td className="py-1.5 text-muted-foreground">{l.party_type ?? ""}</td>
+                <td className="py-1.5">
+                  <PartyCell type={l.party_type} id={l.party_id} name={l.party_name} />
+                </td>
                 <td className="tabular py-1.5 text-right">{Number(l.debit) ? rupees(l.debit) : ""}</td>
                 <td className="tabular py-1.5 text-right">{Number(l.credit) ? rupees(l.credit) : ""}</td>
               </tr>

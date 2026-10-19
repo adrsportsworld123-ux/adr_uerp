@@ -27,6 +27,8 @@ export function SearchSelect({
   ariaLabel,
   disabled,
   className = "",
+  onQueryChange,
+  selectedLabel,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -39,6 +41,10 @@ export function SearchSelect({
   ariaLabel?: string;
   disabled?: boolean;
   className?: string;
+  /** Told what's typed, for a caller that searches the server and feeds back options (PartyPicker). */
+  onQueryChange?: (query: string) => void;
+  /** Shown for a value that isn't among the options (yet). */
+  selectedLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -78,7 +84,7 @@ export function SearchSelect({
         disabled={disabled}
         className={`flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-lg border bg-card px-3 text-left text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:opacity-50 ${className}`}
       >
-        <span className={`truncate ${selected ? "" : "text-muted-foreground"}`}>{selected ? selected.label : value ? "…" : placeholder}</span>
+        <span className={`truncate ${selected ? "" : "text-muted-foreground"}`}>{selected ? selected.label : value ? (selectedLabel ?? "…") : placeholder}</span>
         <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       </Popover.Trigger>
       <Popover.Portal>
@@ -92,6 +98,7 @@ export function SearchSelect({
                 onChange={(e) => {
                   setQuery(e.target.value);
                   setActive(0);
+                  onQueryChange?.(e.target.value);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "ArrowDown") {

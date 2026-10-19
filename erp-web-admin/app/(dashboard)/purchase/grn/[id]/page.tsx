@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { GRN } from "@/lib/types";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ProductPicker } from "@/components/data/product-picker";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
+import { DeleteDocumentButton } from "@/components/purchase/delete-document-dialog";
 
 interface BarcodeLookup {
   product_id: string;
@@ -24,6 +26,7 @@ interface BarcodeLookup {
 
 export default function GRNDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [grn, setGrn] = useState<GRN | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,7 +114,14 @@ export default function GRNDetailPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">{grn.grn_number}</h1>
-          <Badge variant={isDraft ? "outline" : "default"}>{grn.status}</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={isDraft ? "outline" : "default"}>{grn.status}</Badge>
+            {grn.purchase_order_id && (
+              <Link href={`/purchase/orders/${grn.purchase_order_id}`} className="text-sm text-muted-foreground underline-offset-2 hover:underline" data-testid="grn-po-link">
+                Against {grn.po_number}
+              </Link>
+            )}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {grn.lines.length > 0 && (
@@ -120,11 +130,35 @@ export default function GRNDetailPage() {
               <PrintPdfButton path={`/api/v1/purchase/grn/${grn.grn_id}/pdf`} />
             </>
           )}
+          {isDraft && (
+            <DeleteDocumentButton
+              path={`/api/v1/purchase/grn/${grn.grn_id}`}
+              what="GRN"
+              number={grn.grn_number}
+              disabled={busy}
+              note={
+                grn.purchase_order_id
+                  ? `Nothing has been received yet, so stock is unchanged and ${grn.po_number}'s pending quantity is free again. You can restore it from the Recycle Bin.`
+                  : "Nothing has been received yet, so stock is unchanged. You can restore it from the Recycle Bin."
+              }
+              onDeleted={() => router.push(grn.purchase_order_id ? `/purchase/orders/${grn.purchase_order_id}` : "/purchase/grn")}
+            />
+          )}
           {isDraft && grn.lines.length > 0 && (
             <Button onClick={handleComplete} disabled={busy}>
               Complete GRN
             </Button>
           )}
+          {grn.status === "completed" &&
+            (grn.bill_id ? (
+              <Link href={`/purchase/bills/${grn.bill_id}`} className={buttonVariants({ variant: "outline" })}>
+                Bill {grn.bill_number}
+              </Link>
+            ) : (
+              <Link href={`/purchase/bills/new?grn_id=${grn.grn_id}`} className={buttonVariants({ variant: "outline" })}>
+                Enter purchase bill
+              </Link>
+            ))}
         </div>
       </div>
 
@@ -193,6 +227,11 @@ export default function GRNDetailPage() {
             <CardTitle className="text-base">Add a line</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
+            {grn.purchase_order_id && (
+              <p className="text-xs text-muted-foreground">
+                This GRN receives {grn.po_number}: only items on that PO can be added, up to what is still pending.
+              </p>
+            )}
             <form onSubmit={handleLookup} className="flex gap-2 items-end">
               <div className="flex flex-col gap-2 flex-1">
                 <Label htmlFor="barcode">Scan or enter barcode</Label>
