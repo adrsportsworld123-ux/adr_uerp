@@ -521,6 +521,11 @@ export interface Promotion {
   apply_on: "selling_price" | "mrp";
   // Worked out by the API now: running, scheduled, expired or inactive.
   state: "running" | "scheduled" | "expired" | "inactive";
+  // A whole-order promotion's optional filters (erp-core-go migrations/069):
+  // a line must match every list that isn't empty; all empty = every item.
+  scope_categories?: { id: string; name: string }[];
+  scope_brands?: { id: string; name: string }[];
+  scope_products?: { id: string; name: string }[];
 }
 
 export interface Coupon {

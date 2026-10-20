@@ -195,3 +195,55 @@ func TestEvaluatePromotionOnMRP(t *testing.T) {
 		t.Error("min_value on MRP: below the spend threshold must not apply")
 	}
 }
+
+// A whole-order promotion limited by category, brand and product
+// (migrations/069): a line must match every filter that is set; none set
+// is the whole order.
+func TestMatchLinesOrderScope(t *testing.T) {
+	lines := []cartLine{
+		{lineID: "yonex-grip", productID: "p1", categoryID: "grips", brandID: "yonex", qty: 2, unitPrice: 180},
+		{lineID: "gp-grip", productID: "p2", categoryID: "grips", brandID: "gp", qty: 1, unitPrice: 150},
+		{lineID: "yonex-bat", productID: "p3", categoryID: "bats", brandID: "yonex", qty: 1, unitPrice: 3000},
+		{lineID: "nobrand", productID: "p4", categoryID: "grips", qty: 1, unitPrice: 100},
+	}
+	ids := func(p promotionDef) string {
+		s := ""
+		for _, l := range matchLines(p, lines) {
+			s += l.lineID + " "
+		}
+		return s
+	}
+	base := promotionDef{applicationLevel: "order"}
+	cases := []struct {
+		name string
+		p    promotionDef
+		want string
+	}{
+		{"no filters: whole order", base, "yonex-grip gp-grip yonex-bat nobrand "},
+		{"category (with its subtree)", promotionDef{applicationLevel: "order", scopeCategories: map[string]bool{"badminton": true, "grips": true}}, "yonex-grip gp-grip nobrand "},
+		{"brand", promotionDef{applicationLevel: "order", scopeBrands: map[string]bool{"yonex": true}}, "yonex-grip yonex-bat "},
+		{"category AND brand", promotionDef{applicationLevel: "order", scopeCategories: map[string]bool{"grips": true}, scopeBrands: map[string]bool{"yonex": true, "gp": true}}, "yonex-grip gp-grip "},
+		{"products", promotionDef{applicationLevel: "order", scopeProducts: map[string]bool{"p3": true, "p4": true}}, "yonex-bat nobrand "},
+		{"product outside the brand", promotionDef{applicationLevel: "order", scopeBrands: map[string]bool{"gp": true}, scopeProducts: map[string]bool{"p1": true}}, ""},
+	}
+	for _, c := range cases {
+		if got := ids(c.p); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	// A scoped order promotion's minimum purchase is measured on its items.
+	min := promotionDef{id: "yonex500", promoType: "min_value", applicationLevel: "order", stacking: "exclusive",
+		scopeBrands: map[string]bool{"yonex": true}, config: promoConfig{MinPurchaseAmount: 500, DiscountPct: 10}}
+	plan := planPromotions([]promotionDef{min}, lines, 3610)
+	if len(plan) != 1 || math.Abs(plan[0].amount-336) > 0.001 || len(plan[0].lineIDs) != 2 {
+		t.Errorf("YONEX ₹500+ → 10%% of the ₹3,360 YONEX items: %+v", plan)
+	}
+	min.config.MinPurchaseAmount = 4000 // the cart is ₹3,610 but YONEX only ₹3,360
+	if plan := planPromotions([]promotionDef{min}, lines, 3610); len(plan) != 0 {
+		t.Errorf("threshold must use the YONEX items, not the whole cart: %+v", plan)
+	}
+	// It is more specific than the plain whole-order one, less than a category one.
+	if !moreSpecific(min, base) || moreSpecific(min, cricket30) {
+		t.Error("specificity: category > scoped order > order")
+	}
+}

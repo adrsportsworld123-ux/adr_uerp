@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -47,6 +48,18 @@ type promotionResponse struct {
 	// scheduled (active, starts later), expired (its end date has passed),
 	// or inactive (switched off).
 	State string `json:"state"`
+	// A whole-order promotion's optional filters (migrations/069): the
+	// categories (with their sub-categories), brands and products it is
+	// limited to. A line must match every list that isn't empty; all empty
+	// = the whole order.
+	ScopeCategories []scopeRef `json:"scope_categories"`
+	ScopeBrands     []scopeRef `json:"scope_brands"`
+	ScopeProducts   []scopeRef `json:"scope_products"`
+}
+
+type scopeRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // promotionStateSQL is State in SQL (alias pr), shared by the list's
@@ -64,20 +77,27 @@ const promotionColumns = `
 	(SELECT name FROM products WHERE id = pr.product_id),
 	(SELECT name FROM categories WHERE id = pr.category_id),
 	(SELECT count(DISTINCT sales_order_id) FROM sales_order_discounts WHERE promotion_id = pr.id)::int,
-	pr.apply_on, ` + promotionStateSQL + `
+	pr.apply_on, ` + promotionStateSQL + `,
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name) ORDER BY c.name), '[]') FROM categories c WHERE c.id = ANY(pr.scope_category_ids)),
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', b.id, 'name', b.name) ORDER BY b.name), '[]') FROM brands b WHERE b.id = ANY(pr.scope_brand_ids)),
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name) ORDER BY p.name), '[]') FROM products p WHERE p.id = ANY(pr.scope_product_ids))
 `
 
 func scanPromotion(row pgx.Row) (promotionResponse, error) {
 	var p promotionResponse
-	var rawConfig []byte
+	var rawConfig, cats, brands, prods []byte
 	err := row.Scan(&p.PromotionID, &p.Name, &p.PromoType, &p.ApplicationLevel, &p.ProductID, &p.CategoryID,
 		&p.TargetSegment, &rawConfig, &p.Stacking, &p.StartsAt, &p.EndsAt,
 		&p.DaysOfWeek, &p.TimeStart, &p.TimeEnd, &p.Active, &p.ProductName, &p.CategoryName, &p.TimesUsed,
-		&p.ApplyOn, &p.State)
+		&p.ApplyOn, &p.State, &cats, &brands, &prods)
 	if err != nil {
 		return p, err
 	}
 	_ = json.Unmarshal(rawConfig, &p.Config)
+	p.ScopeCategories, p.ScopeBrands, p.ScopeProducts = []scopeRef{}, []scopeRef{}, []scopeRef{}
+	_ = json.Unmarshal(cats, &p.ScopeCategories)
+	_ = json.Unmarshal(brands, &p.ScopeBrands)
+	_ = json.Unmarshal(prods, &p.ScopeProducts)
 	return p, nil
 }
 
@@ -102,6 +122,50 @@ type createPromotionRequest struct {
 	TimeStart        string      `json:"time_start"`
 	TimeEnd          string      `json:"time_end"`
 	ApplyOn          string      `json:"apply_on"` // "selling_price" (default) | "mrp"
+	// Whole-order filters (migrations/069), each optional; ignored (and
+	// cleared) for a product or category promotion.
+	ScopeCategoryIDs []string `json:"scope_category_ids"`
+	ScopeBrandIDs    []string `json:"scope_brand_ids"`
+	ScopeProductIDs  []string `json:"scope_product_ids"`
+}
+
+const maxScopeIDs = 500
+
+var uuidRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// cleanIDs trims, drops blanks and duplicates, keeping the order given.
+func cleanIDs(ids []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// checkScope: every id in a whole-order promotion's filters is one of this
+// merchant's categories, brands or products ("" = all good).
+func checkScope(ctx context.Context, tx pgx.Tx, req *createPromotionRequest) (string, error) {
+	for _, s := range []struct {
+		table, what string
+		ids         []string
+	}{{"categories", "categories", req.ScopeCategoryIDs}, {"brands", "brands", req.ScopeBrandIDs}, {"products", "products", req.ScopeProductIDs}} {
+		if len(s.ids) == 0 {
+			continue
+		}
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+pgx.Identifier{s.table}.Sanitize()+` WHERE id::text = ANY($1)`, s.ids).Scan(&n); err != nil {
+			return "", err
+		}
+		if n != len(s.ids) {
+			return "one of the chosen " + s.what + " doesn't exist", nil
+		}
+	}
+	return "", nil
 }
 
 // validatePromotion applies defaults and returns a client-facing message,
@@ -123,6 +187,20 @@ func validatePromotion(req *createPromotionRequest) string {
 	}
 	if req.ApplicationLevel != "category" {
 		req.CategoryID = ""
+	}
+	req.ScopeCategoryIDs, req.ScopeBrandIDs, req.ScopeProductIDs = cleanIDs(req.ScopeCategoryIDs), cleanIDs(req.ScopeBrandIDs), cleanIDs(req.ScopeProductIDs)
+	if req.ApplicationLevel != "order" {
+		req.ScopeCategoryIDs, req.ScopeBrandIDs, req.ScopeProductIDs = []string{}, []string{}, []string{}
+	}
+	for _, ids := range [][]string{req.ScopeCategoryIDs, req.ScopeBrandIDs, req.ScopeProductIDs} {
+		if len(ids) > maxScopeIDs {
+			return "choose at most 500 categories, brands or products each"
+		}
+		for _, id := range ids {
+			if !uuidRE.MatchString(id) {
+				return "scope ids must be UUIDs"
+			}
+		}
 	}
 	switch {
 	case req.Name == "":
@@ -199,22 +277,32 @@ func (h *Handler) CreatePromotion(w http.ResponseWriter, r *http.Request) {
 		daysOfWeek = req.DaysOfWeek
 	}
 
-	var promotionID string
+	var promotionID, invalid string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		if invalid, err = checkScope(ctx, tx, &req); err != nil || invalid != "" {
+			return err
+		}
 		return tx.QueryRow(ctx, `
 			INSERT INTO promotions
 				(id, merchant_id, name, promo_type, application_level, product_id, category_id,
-				 target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on)
+				 target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on,
+				 scope_category_ids, scope_brand_ids, scope_product_ids)
 			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3,
 			        NULLIF($4,'')::uuid, NULLIF($5,'')::uuid, NULLIF($6,''), $7, $8,
 			        NULLIF($9,'')::timestamptz, NULLIF($10,'')::timestamptz, $11,
-			        NULLIF($12,'')::time, NULLIF($13,'')::time, $14)
+			        NULLIF($12,'')::time, NULLIF($13,'')::time, $14, $15::text[]::uuid[], $16::text[]::uuid[], $17::text[]::uuid[])
 			RETURNING id`,
 			req.Name, req.PromoType, req.ApplicationLevel, req.ProductID, req.CategoryID,
 			req.TargetSegment, marshalConfig(req.Config), req.Stacking, req.StartsAt, req.EndsAt,
 			daysOfWeek, req.TimeStart, req.TimeEnd, req.ApplyOn,
+			req.ScopeCategoryIDs, req.ScopeBrandIDs, req.ScopeProductIDs,
 		).Scan(&promotionID)
 	})
+	if invalid != "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", invalid)
+		return
+	}
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create promotion")
 		return
@@ -306,6 +394,9 @@ type updatePromotionRequest struct {
 	TimeEnd          *string      `json:"time_end"`
 	Active           *bool        `json:"active"`
 	ApplyOn          *string      `json:"apply_on"`
+	ScopeCategoryIDs *[]string    `json:"scope_category_ids"`
+	ScopeBrandIDs    *[]string    `json:"scope_brand_ids"`
+	ScopeProductIDs  *[]string    `json:"scope_product_ids"`
 }
 
 var errPromotionInvalid = errors.New("invalid promotion")
@@ -338,6 +429,19 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 			TimeStart: derefOr(cur.TimeStart, ""), TimeEnd: derefOr(cur.TimeEnd, ""),
 			ApplyOn: cur.ApplyOn,
 		}
+		// Kept as stored, including an id whose row has gone (it no longer
+		// matches anything; the list never widens by itself).
+		if err := tx.QueryRow(ctx, `SELECT scope_category_ids::text[], scope_brand_ids::text[], scope_product_ids::text[] FROM promotions WHERE id = $1`, promotionID).
+			Scan(&m.ScopeCategoryIDs, &m.ScopeBrandIDs, &m.ScopeProductIDs); err != nil {
+			return err
+		}
+		for _, f := range []struct{ dst, src *[]string }{
+			{&m.ScopeCategoryIDs, req.ScopeCategoryIDs}, {&m.ScopeBrandIDs, req.ScopeBrandIDs}, {&m.ScopeProductIDs, req.ScopeProductIDs},
+		} {
+			if f.src != nil {
+				*f.dst = *f.src
+			}
+		}
 		for _, d := range cur.DaysOfWeek {
 			m.DaysOfWeek = append(m.DaysOfWeek, int(d))
 		}
@@ -360,6 +464,24 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 		if invalid = validatePromotion(&m); invalid != "" {
 			return errPromotionInvalid
 		}
+		// Only ids being added must exist; ones already stored may have gone.
+		if req.ScopeCategoryIDs != nil || req.ScopeBrandIDs != nil || req.ScopeProductIDs != nil {
+			check := createPromotionRequest{}
+			if req.ScopeCategoryIDs != nil {
+				check.ScopeCategoryIDs = added(m.ScopeCategoryIDs, cur.ScopeCategories)
+			}
+			if req.ScopeBrandIDs != nil {
+				check.ScopeBrandIDs = added(m.ScopeBrandIDs, cur.ScopeBrands)
+			}
+			if req.ScopeProductIDs != nil {
+				check.ScopeProductIDs = added(m.ScopeProductIDs, cur.ScopeProducts)
+			}
+			if invalid, err = checkScope(ctx, tx, &check); err != nil {
+				return err
+			} else if invalid != "" {
+				return errPromotionInvalid
+			}
+		}
 		days := ([]int)(nil)
 		if len(m.DaysOfWeek) > 0 {
 			days = m.DaysOfWeek
@@ -371,11 +493,12 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 				config = $7, stacking = $8,
 				starts_at = NULLIF($9,'')::timestamptz, ends_at = NULLIF($10,'')::timestamptz,
 				days_of_week = $11, time_start = NULLIF($12,'')::time, time_end = NULLIF($13,'')::time,
-				active = COALESCE($14, active), apply_on = $16
+				active = COALESCE($14, active), apply_on = $16,
+				scope_category_ids = $17::text[]::uuid[], scope_brand_ids = $18::text[]::uuid[], scope_product_ids = $19::text[]::uuid[]
 			WHERE id = $15`,
 			m.Name, m.PromoType, m.ApplicationLevel, m.ProductID, m.CategoryID, m.TargetSegment,
 			marshalConfig(m.Config), m.Stacking, m.StartsAt, m.EndsAt, days, m.TimeStart, m.TimeEnd,
-			req.Active, promotionID, m.ApplyOn)
+			req.Active, promotionID, m.ApplyOn, m.ScopeCategoryIDs, m.ScopeBrandIDs, m.ScopeProductIDs)
 		return err
 	})
 
@@ -411,9 +534,11 @@ func (h *Handler) DuplicatePromotion(w http.ResponseWriter, r *http.Request) {
 		return tx.QueryRow(ctx, `
 			INSERT INTO promotions
 				(id, merchant_id, name, promo_type, application_level, product_id, category_id,
-				 target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on, active)
+				 target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on, active,
+				 scope_category_ids, scope_brand_ids, scope_product_ids)
 			SELECT gen_random_uuid(), merchant_id, left('Copy of ' || name, 200), promo_type, application_level, product_id, category_id,
-			       target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on, false
+			       target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on, false,
+			       scope_category_ids, scope_brand_ids, scope_product_ids
 			FROM promotions WHERE id::text = $1
 			RETURNING id`, chi.URLParam(r, "id")).Scan(&newID)
 	})
@@ -495,6 +620,21 @@ func rfc3339(s *string) string {
 		}
 	}
 	return *s
+}
+
+// added: the ids in next that aren't among the stored refs.
+func added(next []string, stored []scopeRef) []string {
+	have := map[string]bool{}
+	for _, r := range stored {
+		have[r.ID] = true
+	}
+	var out []string
+	for _, id := range next {
+		if !have[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func derefOr(s *string, fallback string) string {

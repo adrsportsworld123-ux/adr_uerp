@@ -2578,6 +2578,35 @@ Verified:
 - A rehearsal of 9.csv against a copy of the live PO: ₹3,750.00 with −₹0.08 round-off, 3 restocked, 2 created, the PO partially received.
 - `e2e/po-invoice-import.spec.ts` and `purchase-orders.spec.ts`.
 
+### 3.75 Whole-order promotions limited by category, brand and product (2026-10-20)
+
+Migration 069; `internal/promotions/crud.go`, `apply.go`.
+
+**Not changed by default.** Every existing promotion has empty lists and still applies to the whole order. Product and category promotions ignore the new fields.
+
+- **Storage.** `promotions.scope_category_ids`, `scope_brand_ids` and `scope_product_ids` are UUID arrays, default empty.
+- **API fields.**
+  - `POST /promotions` and `PATCH /promotions/{id}` take `scope_category_ids`, `scope_brand_ids` and `scope_product_ids`. They are used only for `application_level: order` and cleared for any other level.
+  - Ids are trimmed and de-duplicated, at most 500 per list. Every new id must be one of the merchant's own (400 otherwise).
+  - In a PATCH, an absent list is kept, and `[]` clears it.
+  - The response carries `scope_categories`, `scope_brands` and `scope_products` as `[{id, name}]`. Copy keeps them.
+- **Matching.** A line qualifies when it matches every list that isn't empty:
+  - categories, each with its sub-categories (`db.CategorySubtree`);
+  - and brands (`products.brand_id`);
+  - and products.
+
+  So Badminton + YONEX is YONEX's badminton items, and a product outside the chosen brand matches nothing.
+- **Minimum purchase.** For a filtered whole-order promotion, the minimum purchase (and a `min_value` percentage) is measured on the items it covers, not the whole cart. "₹1,000 on YONEX" means YONEX items.
+- **Tie-break.** On the same discount, a filtered whole-order promotion beats a plain one and loses to a category or product promotion.
+- **Deleted references.** A category, brand or product deleted later stays in the list and no longer matches anything. The promotion never widens to "all" by itself.
+- **Web.** The promotion dialog's "Whole order" has "Limit to (optional)", with chip multi-selects for categories, brands and products (`components/data/multi-pick.tsx`). Empty shows as "All categories", "All brands" or "All products". The list's scope column names the filters.
+
+Verified:
+- `promoscope_flow.py`, 25 checks. Brand only; category (parent reaches the sub-category) AND brand; several brands; products only; all cleared = whole order; minimum purchase on the filtered items; the tie-break; validation; PATCH keeps or clears; Copy.
+- All the earlier API scripts on one fresh database (465 checks, plus the PO/GRN delete script).
+- `TestMatchLinesOrderScope`.
+- `e2e/promotion-order-scope.spec.ts` and `promotions.spec.ts`.
+
 ## 4. What Phase 0 concretely delivers against this design
 
 1. Run `migrations/001_schema.sql` against your local Postgres (already verified to execute cleanly, RLS included).

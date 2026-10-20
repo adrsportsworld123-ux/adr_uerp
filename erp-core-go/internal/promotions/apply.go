@@ -22,6 +22,7 @@ type cartLine struct {
 	lineID           string
 	productID        string
 	categoryID       string // "" if the product has no category
+	brandID          string // "" if the product has no brand
 	qty, unitPrice   float64
 	existingDiscount float64
 	// mrp is the variant's MRP (never below the selling price here), for
@@ -296,6 +297,7 @@ func planPromotions(promos []promotionDef, lines []cartLine, subtotal float64) [
 		type candidate struct {
 			p     promotionDef
 			share map[string]float64
+			base  float64 // the subtotal its threshold is measured on
 		}
 		var cands []candidate
 		for _, p := range promos {
@@ -306,11 +308,11 @@ func planPromotions(promos []promotionDef, lines []cartLine, subtotal float64) [
 			if len(matched) == 0 {
 				continue
 			}
-			amount, ok := evaluatePromotion(p, matched, subtotal)
+			amount, ok := evaluatePromotion(p, matched, orderBase(p, matched, subtotal))
 			if !ok {
 				continue
 			}
-			cands = append(cands, candidate{p: p, share: lineShares(matched, amount)})
+			cands = append(cands, candidate{p: p, share: lineShares(matched, amount), base: orderBase(p, matched, subtotal)})
 		}
 
 		won := map[string][]string{}
@@ -360,7 +362,7 @@ func planPromotions(promos []promotionDef, lines []cartLine, subtotal float64) [
 					sub = append(sub, l)
 				}
 			}
-			amount, ok := evaluatePromotion(c.p, sub, subtotal)
+			amount, ok := evaluatePromotion(c.p, sub, c.base)
 			if !ok {
 				dropped[c.p.id] = true
 				redo = true
@@ -381,6 +383,22 @@ func planPromotions(promos []promotionDef, lines []cartLine, subtotal float64) [
 	}
 }
 
+// orderBase: the subtotal a promotion's minimum purchase (and an order
+// percentage) is measured on. The whole cart, except for a whole-order
+// promotion limited by category, brand or product (migrations/069): then
+// it is what the customer spends on the items it covers, so "₹1,000 on
+// YONEX" means YONEX items.
+func orderBase(p promotionDef, matched []cartLine, subtotal float64) float64 {
+	if !p.scoped() {
+		return subtotal
+	}
+	var v float64
+	for _, l := range matched {
+		v += l.qty * l.unitPrice
+	}
+	return v
+}
+
 // lineShares spreads a promotion's amount over its matched lines pro rata
 // to each line's remaining value.
 func lineShares(matched []cartLine, amount float64) map[string]float64 {
@@ -398,14 +416,17 @@ func lineShares(matched []cartLine, amount float64) map[string]float64 {
 }
 
 // moreSpecific: a product promotion beats a category one, a narrower
-// category (fewer categories in its subtree) a wider one, and either
-// beats an order-wide one.
+// category (fewer categories in its subtree) a wider one, either beats a
+// whole-order promotion limited by category, brand or product, and that
+// beats one on the whole order.
 func moreSpecific(a, b promotionDef) bool {
 	rank := func(p promotionDef) int {
-		switch p.applicationLevel {
-		case "product":
+		switch {
+		case p.applicationLevel == "product":
+			return 4
+		case p.applicationLevel == "category":
 			return 3
-		case "category":
+		case p.scoped():
 			return 2
 		}
 		return 1
@@ -423,7 +444,7 @@ var errOrderNotEditable = errors.New("order is not editable")
 
 func loadCartLines(ctx context.Context, tx pgx.Tx, orderID string) ([]cartLine, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT sol.id, p.id, COALESCE(p.category_id::text,''), sol.quantity, sol.unit_price, sol.discount_amount,
+		SELECT sol.id, p.id, COALESCE(p.category_id::text,''), COALESCE(p.brand_id::text,''), sol.quantity, sol.unit_price, sol.discount_amount,
 		       GREATEST(COALESCE(pv.mrp, 0), sol.unit_price)
 		FROM sales_order_lines sol
 		JOIN sales_orders so ON so.id = sol.sales_order_id
@@ -437,7 +458,7 @@ func loadCartLines(ctx context.Context, tx pgx.Tx, orderID string) ([]cartLine, 
 	var lines []cartLine
 	for rows.Next() {
 		var l cartLine
-		if err := rows.Scan(&l.lineID, &l.productID, &l.categoryID, &l.qty, &l.unitPrice, &l.existingDiscount, &l.mrp); err != nil {
+		if err := rows.Scan(&l.lineID, &l.productID, &l.categoryID, &l.brandID, &l.qty, &l.unitPrice, &l.existingDiscount, &l.mrp); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)
@@ -456,12 +477,33 @@ type promotionDef struct {
 	// them — the same "this category and its subcategories" meaning the
 	// product search and pricing filters use (db.CategorySubtree).
 	categoryTree map[string]bool
+	// A whole-order promotion's filters (migrations/069), nil = not
+	// limited that way: scopeCategories holds the chosen categories and
+	// every category beneath them.
+	scopeCategories, scopeBrands, scopeProducts map[string]bool
+}
+
+// scoped: a whole-order promotion limited by category, brand or product.
+func (p promotionDef) scoped() bool {
+	return p.applicationLevel == "order" && (p.scopeCategories != nil || p.scopeBrands != nil || p.scopeProducts != nil)
+}
+
+func setOf(ids []string) map[string]bool {
+	if len(ids) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
 }
 
 func loadEligiblePromotionDefs(ctx context.Context, tx pgx.Tx) ([]promotionDef, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, promo_type, application_level, COALESCE(product_id::text,''), COALESCE(category_id::text,''),
-		       COALESCE(target_segment,''), config, stacking, apply_on
+		       COALESCE(target_segment,''), config, stacking, apply_on,
+		       scope_category_ids::text[], scope_brand_ids::text[], scope_product_ids::text[]
 		FROM promotions
 		WHERE active
 		  AND (starts_at IS NULL OR starts_at <= now())
@@ -473,20 +515,41 @@ func loadEligiblePromotionDefs(ctx context.Context, tx pgx.Tx) ([]promotionDef, 
 	}
 	defer rows.Close()
 	var defs []promotionDef
+	scopeCats := map[int][]string{}
 	for rows.Next() {
 		var d promotionDef
 		var rawConfig []byte
+		var cats, brands, prods []string
 		if err := rows.Scan(&d.id, &d.promoType, &d.applicationLevel, &d.productID, &d.categoryID,
-			&d.targetSegment, &rawConfig, &d.stacking, &d.applyOn); err != nil {
+			&d.targetSegment, &rawConfig, &d.stacking, &d.applyOn, &cats, &brands, &prods); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(rawConfig, &d.config)
+		if d.applicationLevel == "order" {
+			d.scopeBrands, d.scopeProducts = setOf(brands), setOf(prods)
+			if len(cats) > 0 {
+				scopeCats[len(defs)] = cats
+			}
+		}
 		defs = append(defs, d)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	rows.Close()
+	for i, cats := range scopeCats {
+		defs[i].scopeCategories = map[string]bool{}
+		for _, c := range cats {
+			ids, err := db.CategorySubtree(ctx, tx, c)
+			if err != nil {
+				return nil, err
+			}
+			defs[i].scopeCategories[c] = true
+			for _, id := range ids {
+				defs[i].scopeCategories[id] = true
+			}
+		}
+	}
 	for i := range defs {
 		if defs[i].applicationLevel != "category" || defs[i].categoryID == "" {
 			continue
@@ -506,7 +569,20 @@ func loadEligiblePromotionDefs(ctx context.Context, tx pgx.Tx) ([]promotionDef, 
 func matchLines(p promotionDef, lines []cartLine) []cartLine {
 	switch p.applicationLevel {
 	case "order":
-		return lines
+		if !p.scoped() {
+			return lines
+		}
+		// Every filter that is set must match: categories (with their
+		// sub-categories) AND brands AND products.
+		var out []cartLine
+		for _, l := range lines {
+			if (p.scopeCategories == nil || p.scopeCategories[l.categoryID]) &&
+				(p.scopeBrands == nil || p.scopeBrands[l.brandID]) &&
+				(p.scopeProducts == nil || p.scopeProducts[l.productID]) {
+				out = append(out, l)
+			}
+		}
+		return out
 	case "product":
 		var out []cartLine
 		for _, l := range lines {

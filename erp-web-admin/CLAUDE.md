@@ -79,6 +79,8 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 
 **Invoice import against a PO (2026-10-20, erp-core-go §3.74).** Purchase → Import Invoice takes "Against purchase order" (`?po=`; the PO page's "Import invoice"). Lines are compared with the PO: on it, over, or not on it. "Accept the differences" receives them as invoiced, and "Close the PO short" closes the rest with a reason. A name that only nearly matches an ordered item is a suggestion ("· on the PO"), never automatic. The PO page shows "+N extra" and "Received but not ordered". The sidebar also has an "Import invoice" link, so tests click the PO page's by its `href`. Tests: `e2e/po-invoice-import.spec.ts`.
 
+**Promotion filters (2026-10-20, erp-core-go §3.75).** A "Whole order" promotion has optional "Limit to" filters: categories, brands and products, each a multi-select of chips (`components/data/multi-pick.tsx`). An item must match every filled list; all empty means every item. A spec that creates an active promotion must switch it off in `finally`, or other specs' carts pick it up. Tests: `e2e/promotion-order-scope.spec.ts`.
+
 **Reporting round (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60–§3.63):** the sales dashboard (`/dashboard`, recharts; widgets per role under `/dashboard/settings`), X & Z reports (`/reports/x-z`), the Report Library (`/reports/library`) and Saved Reports (`/reports/saved`). `e2e/reports-round10.spec.ts` covers them. The app shell puts focus back at the top after a navigation that left nothing focused (recharts' focusable charts otherwise sent the next Tab past the end of the new page).
 
 ## Working conventions to keep

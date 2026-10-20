@@ -24,6 +24,7 @@ import { StatusChip } from "@/components/data/status-chip";
 import { DeleteWithDependencies } from "@/components/data/dependency-dialog";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { SearchSelect, categoryOption } from "@/components/data/search-select";
+import { MultiPick, MultiProductPick, PickedRef } from "@/components/data/multi-pick";
 import { DaysOfWeekPicker, describeWhen, fromLocalInput, toLocalInput } from "@/components/pricing/schedule-fields";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -192,7 +193,13 @@ function offerSummary(p: Promotion): string {
 function scopeSummary(p: Promotion): string {
   if (p.application_level === "product") return p.product_name ?? "One product";
   if (p.application_level === "category") return `Category: ${p.category_name ?? "—"}`;
-  return "Whole order";
+  const names = (refs?: { name: string }[]) => (refs ?? []).map((r) => r.name).join(", ");
+  const parts = [
+    p.scope_categories?.length ? `categories: ${names(p.scope_categories)}` : "",
+    p.scope_brands?.length ? `brands: ${names(p.scope_brands)}` : "",
+    p.scope_products?.length ? `products: ${names(p.scope_products)}` : "",
+  ].filter(Boolean);
+  return parts.length ? `Whole order — ${parts.join("; ")}` : "Whole order";
 }
 
 function PromotionsSection() {
@@ -361,6 +368,11 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
   );
   const [categoryId, setCategoryId] = useState(p?.category_id ?? "");
   const [categories, setCategories] = useState<Category[]>([]);
+  // Whole order: optional filters, each several choices; none = all.
+  const [scopeCategories, setScopeCategories] = useState<PickedRef[]>(p?.scope_categories ?? []);
+  const [scopeBrands, setScopeBrands] = useState<PickedRef[]>(p?.scope_brands ?? []);
+  const [scopeProducts, setScopeProducts] = useState<PickedRef[]>(p?.scope_products ?? []);
+  const [brands, setBrands] = useState<{ brand_id: string; name: string }[]>([]);
   const [targetSegment, setTargetSegment] = useState<string>(p?.target_segment ?? "");
   const [stacking, setStacking] = useState<"exclusive" | "stackable">(p?.stacking ?? "exclusive");
   const [applyOn, setApplyOn] = useState<"selling_price" | "mrp">(p?.apply_on ?? "selling_price");
@@ -390,7 +402,12 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
       .get<{ categories: Category[] }>("/api/v1/categories?status=active&sort=path")
       .then((d) => setCategories(d.categories))
       .catch(() => setCategories([]));
+    api
+      .get<{ brands: { brand_id: string; name: string }[] }>("/api/v1/brands?status=active")
+      .then((d) => setBrands(d.brands))
+      .catch(() => setBrands([]));
   }, []);
+  const brandOptions = useMemo(() => brands.map((b) => ({ value: b.brand_id, label: b.name })), [brands]);
   const categoryOptions = useMemo(() => {
     const opts = categories.map(categoryOption);
     // An edited promotion keeps showing a category that has since been deactivated.
@@ -439,6 +456,9 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
       application_level: applicationLevel,
       product_id: applicationLevel === "product" ? (product?.productId ?? "") : "",
       category_id: applicationLevel === "category" ? categoryId : "",
+      scope_category_ids: applicationLevel === "order" ? scopeCategories.map((x) => x.id) : [],
+      scope_brand_ids: applicationLevel === "order" ? scopeBrands.map((x) => x.id) : [],
+      scope_product_ids: applicationLevel === "order" ? scopeProducts.map((x) => x.id) : [],
       target_segment: targetSegment,
       config: buildConfig(),
       stacking,
@@ -536,6 +556,51 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
               <SearchSelect id="promoCategory" ariaLabel="Category" value={categoryId} onChange={setCategoryId} options={categoryOptions} placeholder="Search a category" />
               <p className="text-xs text-muted-foreground">Includes its sub-categories.</p>
             </div>
+          )}
+          {applicationLevel === "order" && (
+            <fieldset className="flex flex-col gap-3 rounded-lg border p-3 sm:col-span-3" data-testid="promo-order-scope">
+              <legend className="px-1 text-sm font-medium">Limit to (optional)</legend>
+              <p className="text-xs text-muted-foreground">
+                Leave all three empty for every item in the order. Choose any combination to narrow it: an item must match every list you fill in (for
+                example Badminton + YONEX is YONEX&apos;s badminton items). A minimum purchase then counts only these items.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="promoScopeCategories" className="text-sm font-medium">
+                    Categories
+                  </label>
+                  <MultiPick
+                    id="promoScopeCategories"
+                    what="categories"
+                    options={categoryOptions}
+                    value={scopeCategories}
+                    onChange={setScopeCategories}
+                    placeholder="Add a category"
+                    emptyText="All categories (sub-categories included)"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="promoScopeBrands" className="text-sm font-medium">
+                    Brands
+                  </label>
+                  <MultiPick
+                    id="promoScopeBrands"
+                    what="brands"
+                    options={brandOptions}
+                    value={scopeBrands}
+                    onChange={setScopeBrands}
+                    placeholder="Add a brand"
+                    emptyText="All brands"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="promoScopeProducts" className="text-sm font-medium">
+                    Products
+                  </label>
+                  <MultiProductPick id="promoScopeProducts" value={scopeProducts} onChange={setScopeProducts} emptyText="All products" />
+                </div>
+              </div>
+            </fieldset>
           )}
           <div className="flex flex-col gap-2">
             <Label>Customer segment</Label>
