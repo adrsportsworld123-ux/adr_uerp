@@ -43,6 +43,19 @@ type poLineResp struct {
 	ReceivedQty string `json:"received_qty"`
 	PendingQty  string `json:"pending_qty"`
 	TrackBatch  bool   `json:"track_batch"`
+	// ExcessQty: received beyond the ordered quantity on a GRN whose
+	// differences were accepted (§3.74); "0" otherwise.
+	ExcessQty string `json:"excess_qty"`
+}
+
+// poUnplanned: an item received on a GRN against the PO that isn't on the
+// PO (§3.74), totalled over the PO's completed GRNs.
+type poUnplanned struct {
+	VariantID   string `json:"variant_id"`
+	SKU         string `json:"sku"`
+	ProductName string `json:"product_name"`
+	Quantity    string `json:"quantity"`
+	LineTotal   string `json:"line_total"`
 }
 
 type poGRN struct {
@@ -70,6 +83,8 @@ type poResponse struct {
 	CreatedAt    string       `json:"created_at"`
 	Lines        []poLineResp `json:"lines"`
 	GRNs         []poGRN      `json:"grns"`
+	// Unplanned: items received against the PO that weren't ordered.
+	Unplanned []poUnplanned `json:"unplanned"`
 }
 
 type poSummary struct {
@@ -331,7 +346,7 @@ func loadPO(ctx context.Context, tx pgx.Tx, poID string, resp *poResponse) error
 
 	rows, err := tx.Query(ctx, `
 		SELECT l.id, l.variant_id, pv.sku, p.name, l.quantity::text, l.unit_cost::text, l.line_total::text,
-		       l.received_qty::text, (l.quantity - l.received_qty)::text, pv.track_batch
+		       l.received_qty::text, (l.quantity - l.received_qty)::text, pv.track_batch, l.excess_qty::text
 		FROM purchase_order_lines l
 		JOIN product_variants pv ON pv.id = l.variant_id
 		JOIN products p ON p.id = pv.product_id
@@ -344,7 +359,7 @@ func loadPO(ctx context.Context, tx pgx.Tx, poID string, resp *poResponse) error
 	for rows.Next() {
 		var l poLineResp
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity, &l.UnitCost, &l.LineTotal,
-			&l.ReceivedQty, &l.PendingQty, &l.TrackBatch); err != nil {
+			&l.ReceivedQty, &l.PendingQty, &l.TrackBatch, &l.ExcessQty); err != nil {
 			rows.Close()
 			return err
 		}
@@ -366,14 +381,40 @@ func loadPO(ctx context.Context, tx pgx.Tx, poID string, resp *poResponse) error
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	resp.GRNs = []poGRN{}
 	for rows.Next() {
 		var g poGRN
 		if err := rows.Scan(&g.GRNID, &g.GRNNumber, &g.Status, &g.GrandTotal, &g.CreatedAt, &g.BillID, &g.BillNumber); err != nil {
+			rows.Close()
 			return err
 		}
 		resp.GRNs = append(resp.GRNs, g)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	rows, err = tx.Query(ctx, `
+		SELECT gl.variant_id, pv.sku, p.name, SUM(gl.quantity)::text, SUM(gl.line_total)::text
+		FROM goods_receipt_lines gl
+		JOIN goods_receipt_notes g ON g.id = gl.grn_id
+		JOIN product_variants pv ON pv.id = gl.variant_id
+		JOIN products p ON p.id = pv.product_id
+		WHERE g.purchase_order_id = $1 AND g.status = 'completed' AND gl.po_line_id IS NULL
+		GROUP BY gl.variant_id, pv.sku, p.name
+		ORDER BY p.name`, resp.POID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	resp.Unplanned = []poUnplanned{}
+	for rows.Next() {
+		var u poUnplanned
+		if err := rows.Scan(&u.VariantID, &u.SKU, &u.ProductName, &u.Quantity, &u.LineTotal); err != nil {
+			return err
+		}
+		resp.Unplanned = append(resp.Unplanned, u)
 	}
 	return rows.Err()
 }
@@ -692,6 +733,13 @@ func receivePOTx(ctx context.Context, tx pgx.Tx, grnID, poID string) error {
 	if status != "open" && status != "partially_received" {
 		return errPONotReceivable
 	}
+	var varianceAccepted bool
+	if err := tx.QueryRow(ctx, `SELECT po_variance_accepted FROM goods_receipt_notes WHERE id = $1`, grnID).Scan(&varianceAccepted); err != nil {
+		return err
+	}
+	if varianceAccepted {
+		return receivePOWithVarianceTx(ctx, tx, grnID, poID)
+	}
 	var unlinked, over bool
 	if err := tx.QueryRow(ctx, `
 		WITH r AS (
@@ -716,7 +764,43 @@ func receivePOTx(ctx context.Context, tx pgx.Tx, grnID, poID string) error {
 		WHERE pol.id = r.po_line_id`, grnID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `
+	return updatePOStatus(ctx, tx, poID)
+}
+
+// receivePOWithVarianceTx: the same for a GRN whose differences from the
+// PO were accepted (po_variance_accepted, the invoice import, §3.74). A
+// line with no PO line is an unplanned item: it is stock, not a receipt on
+// the PO. A PO line receives up to its ordered quantity and the rest is
+// recorded as excess_qty. A line pointing at another PO's line is still
+// refused.
+func receivePOWithVarianceTx(ctx context.Context, tx pgx.Tx, grnID, poID string) error {
+	var foreign bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM goods_receipt_lines gl
+		               LEFT JOIN purchase_order_lines pol ON pol.id = gl.po_line_id AND pol.po_id::text = $2
+		               WHERE gl.grn_id = $1 AND gl.po_line_id IS NOT NULL AND pol.id IS NULL)`, grnID, poID,
+	).Scan(&foreign); err != nil {
+		return err
+	}
+	if foreign {
+		return errPOLineMismatch
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE purchase_order_lines pol SET
+		  received_qty = LEAST(pol.quantity, pol.received_qty + r.qty),
+		  excess_qty = pol.excess_qty + GREATEST(0, pol.received_qty + r.qty - pol.quantity)
+		FROM (SELECT po_line_id, SUM(quantity) AS qty FROM goods_receipt_lines
+		      WHERE grn_id = $1 AND po_line_id IS NOT NULL GROUP BY po_line_id) r
+		WHERE pol.id = r.po_line_id`, grnID); err != nil {
+		return err
+	}
+	return updatePOStatus(ctx, tx, poID)
+}
+
+// updatePOStatus: partially_received while anything is pending, else
+// completed.
+func updatePOStatus(ctx context.Context, tx pgx.Tx, poID string) error {
+	_, err := tx.Exec(ctx, `
 		UPDATE purchase_orders SET
 		  status = CASE WHEN EXISTS (SELECT 1 FROM purchase_order_lines WHERE po_id = $1 AND received_qty < quantity)
 		                THEN 'partially_received' ELSE 'completed' END,

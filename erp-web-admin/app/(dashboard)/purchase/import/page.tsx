@@ -6,17 +6,24 @@
 // a new one, and that the lines add up to the printed total — then import.
 // One click books the GRN (stock in, on the invoice date) and the bill
 // (payable, GST input) together, or nothing at all.
-import { useEffect, useMemo, useState } from "react";
+//
+// Against a purchase order (?po= from the PO page, or the picker;
+// erp-core-go §3.74) each line is compared with the PO: on the order, over
+// what is pending, or not on it at all. Differences are received as
+// invoiced once "Accept the differences" is ticked, and what is still
+// pending can be closed short in the same step.
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Download, FileUp, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { Branch, Supplier } from "@/lib/types";
+import { Branch, PurchaseOrderSummary, Supplier } from "@/lib/types";
 import { rupees } from "@/lib/format";
 import { saveBlob } from "@/components/data/document-actions";
 import { PageHeader } from "@/components/data/page-header";
 import { SearchSelect } from "@/components/data/search-select";
-import { StatusChip } from "@/components/data/status-chip";
+import { PO_TONE, StatusChip } from "@/components/data/status-chip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import { currencySymbol } from "@/lib/currency";
-type Suggestion = { variant_id: string; name: string; sku: string; mrp: string; score: number };
+type Suggestion = { variant_id: string; name: string; sku: string; mrp: string; score: number; on_po?: boolean };
 type PreviewLine = {
   row: number;
   item_name: string;
@@ -43,10 +50,38 @@ type PreviewLine = {
   suggestions: Suggestion[];
   warnings: string[];
   errors: string[];
+  po_status?: "on_po" | "over" | "unplanned";
+  po_ordered?: string;
+  po_pending?: string;
+};
+type POLine = {
+  po_line_id: string;
+  variant_id: string;
+  product_name: string;
+  sku: string;
+  ordered: string;
+  received: string;
+  pending: string;
+  invoiced: string;
+  excess: string;
+  pending_after: string;
+  status: "full" | "short" | "over" | "not_delivered" | "done";
+};
+type POPreview = {
+  po_id: string;
+  po_number: string;
+  status: string;
+  lines: POLine[];
+  unplanned: number;
+  over: number;
+  short: number;
+  variances: boolean;
+  close_short: boolean;
 };
 type Preview = {
   supplier: string;
   branch: string;
+  purchase_order?: POPreview;
   lines: PreviewLine[];
   new_brands: string[];
   errors: string[];
@@ -74,11 +109,40 @@ type Result = {
   stock_added: number;
   products_created: number;
   brands_created: string[] | null;
+  po_number?: string;
+  po_status?: string;
 };
 
 const today = () => new Date().toLocaleDateString("en-CA");
 
+const LINE_PO: Record<string, { label: string; tone: "ok" | "warn" | "info" }> = {
+  on_po: { label: "On the PO", tone: "ok" },
+  over: { label: "Over the PO", tone: "warn" },
+  unplanned: { label: "Not on the PO", tone: "info" },
+};
+const PO_LINE_STATUS: Record<POLine["status"], { label: string; tone: "ok" | "warn" | "bad" | "muted" | "info" }> = {
+  full: { label: "Received in full", tone: "ok" },
+  short: { label: "Short", tone: "warn" },
+  over: { label: "Over", tone: "warn" },
+  not_delivered: { label: "Not delivered", tone: "bad" },
+  done: { label: "Nothing pending", tone: "muted" },
+};
+
 export default function ImportInvoicePage() {
+  return (
+    <Suspense>
+      <ImportInvoice />
+    </Suspense>
+  );
+}
+
+function ImportInvoice() {
+  const initialPo = useSearchParams().get("po") ?? "";
+  const [poId, setPoId] = useState(initialPo);
+  const [orders, setOrders] = useState<PurchaseOrderSummary[]>([]);
+  const [acceptVariances, setAcceptVariances] = useState(false);
+  const [closeShort, setCloseShort] = useState(false);
+  const [closeReason, setCloseReason] = useState("");
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [supplierId, setSupplierId] = useState("");
@@ -105,7 +169,24 @@ export default function ImportInvoicePage() {
         if (d.branches.length === 1) setBranchId(d.branches[0].branch_id);
       })
       .catch(() => {});
+    api
+      .get<{ purchase_orders: PurchaseOrderSummary[] }>("/api/v1/purchase/orders?status=pending&limit=200")
+      .then((d) => {
+        setOrders(d.purchase_orders);
+        const linked = d.purchase_orders.find((o) => o.po_id === initialPo);
+        if (linked) pickPO(linked);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, for the ?po= link
   }, []);
+
+  // A PO brings its supplier and branch with it.
+  const po = orders.find((o) => o.po_id === poId);
+  function pickPO(o: PurchaseOrderSummary | undefined) {
+    if (!o) return;
+    setSupplierId(o.supplier_id);
+    setBranchId(o.branch_id);
+  }
 
   const body = useMemo(
     () => ({
@@ -119,12 +200,17 @@ export default function ImportInvoicePage() {
       invoice_total: total.trim() === "" ? undefined : Number(total),
       csv,
       matches,
+      purchase_order_id: poId || undefined,
+      accept_variances: poId ? acceptVariances : undefined,
+      close_short: poId ? closeShort : undefined,
+      close_reason: poId && closeShort ? closeReason.trim() : undefined,
     }),
-    [supplierId, branchId, invoiceNumber, invoiceDate, dueDate, freight, other, total, csv, matches]
+    [supplierId, branchId, invoiceNumber, invoiceDate, dueDate, freight, other, total, csv, matches, poId, acceptVariances, closeShort, closeReason]
   );
 
-  // A preview is only shown while the inputs it was made from are unchanged.
-  const inputKey = JSON.stringify([supplierId, branchId, invoiceNumber, invoiceDate, dueDate, freight, other, total, csv]);
+  // A preview is only shown while the inputs it was made from are unchanged
+  // (the PO's accept / close choices re-run it instead, see below).
+  const inputKey = JSON.stringify([supplierId, branchId, invoiceNumber, invoiceDate, dueDate, freight, other, total, csv, poId]);
   const [previewKey, setPreviewKey] = useState("");
 
   async function template(sample: boolean) {
@@ -164,6 +250,29 @@ export default function ImportInvoicePage() {
     }
   }
 
+  // Ticking a PO choice previews again with it, so "ready" follows.
+  async function poChoice(next: { accept?: boolean; close?: boolean }) {
+    if (next.accept !== undefined) setAcceptVariances(next.accept);
+    if (next.close !== undefined) setCloseShort(next.close);
+    if (!preview) return;
+    setBusy("preview");
+    try {
+      setPreview(
+        await api.post<Preview>("/api/v1/purchase/imports/preview", {
+          ...body,
+          accept_variances: next.accept ?? acceptVariances,
+          close_short: next.close ?? closeShort,
+          close_reason: (next.close ?? closeShort) ? closeReason.trim() : undefined,
+        })
+      );
+      setPreviewKey(inputKey);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not read the invoice");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function choose(row: number, value: string) {
     const next = { ...matches };
     if (value) next[String(row)] = value;
@@ -179,6 +288,7 @@ export default function ImportInvoicePage() {
       setResult(r);
       setPreview(null);
       toast.success(`Invoice ${invoiceNumber} imported — ${r.stock_added} restocked, ${r.products_created} new product(s)`);
+      if (r.po_number) setOrders((os) => os.filter((o) => o.po_id !== poId || r.po_status === "partially_received"));
     } catch (e) {
       const details = e instanceof ApiError ? (e.details as { preview?: Preview } | undefined) : undefined;
       if (details?.preview) {
@@ -191,9 +301,10 @@ export default function ImportInvoicePage() {
     }
   }
 
-  const canPreview = supplierId && branchId && invoiceNumber.trim() && invoiceDate && csv;
+  const canPreview = (poId || (supplierId && branchId)) && invoiceNumber.trim() && invoiceDate && csv;
   const shown = preview && previewKey === inputKey ? preview : null;
   const s = shown?.summary;
+  const sp = shown?.purchase_order;
 
   return (
     <div className="space-y-6">
@@ -229,6 +340,15 @@ export default function ImportInvoicePage() {
             <Link className="text-primary hover:underline" href={`/purchase/bills/${result.bill_id}`}>
               Purchase bill {result.bill_number}
             </Link>
+            {result.po_number && (
+              <>
+                <span aria-hidden>·</span>
+                <Link className="text-primary hover:underline" href={`/purchase/orders/${poId}`}>
+                  Purchase order {result.po_number}
+                </Link>
+                {result.po_status && <StatusChip status={result.po_status} tone={PO_TONE[result.po_status as keyof typeof PO_TONE]} />}
+              </>
+            )}
           </CardContent>
         </Card>
       )}
@@ -239,6 +359,26 @@ export default function ImportInvoicePage() {
           <CardDescription>As printed on the supplier&apos;s invoice. The total is checked against the lines; a difference under {currencySymbol()}1 is booked as round-off.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <Label htmlFor="imp-po">Against purchase order</Label>
+            <SearchSelect
+              id="imp-po"
+              value={poId}
+              onChange={(v) => {
+                setPoId(v);
+                pickPO(orders.find((o) => o.po_id === v));
+                setAcceptVariances(false);
+                setCloseShort(false);
+                setMatches({});
+              }}
+              noneLabel="None — a direct purchase"
+              placeholder="None — a direct purchase"
+              options={[
+                ...orders.map((o) => ({ value: o.po_id, label: `${o.po_number} · ${o.supplier_name}`, hint: `${o.received_qty} of ${o.ordered_qty} received` })),
+                ...(poId && !po ? [{ value: poId, label: "The purchase order from the link" }] : []),
+              ]}
+            />
+          </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="imp-supplier">Supplier *</Label>
             <SearchSelect id="imp-supplier" value={supplierId} onChange={setSupplierId} placeholder="Choose a supplier" options={suppliers.map((x) => ({ value: x.supplier_id, label: x.name, hint: x.gstin }))} />
@@ -337,6 +477,89 @@ export default function ImportInvoicePage() {
             )}
           </Card>
 
+          {sp && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Against {sp.po_number}</CardTitle>
+                <CardDescription>
+                  What was ordered and what this invoice brings.
+                  {sp.unplanned > 0 && ` ${sp.unplanned} item(s) aren't on the order.`}
+                  {sp.over > 0 && ` ${sp.over} line(s) are more than is pending.`}
+                  {sp.short > 0 && ` ${sp.short} item(s) will still be pending.`}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-sm" data-testid="import-po-lines">
+                    <thead className="text-left text-xs text-muted-foreground">
+                      <tr>
+                        <th className="pb-1 font-medium">Ordered item</th>
+                        <th className="pb-1 text-right font-medium">Ordered</th>
+                        <th className="pb-1 text-right font-medium">Pending</th>
+                        <th className="pb-1 text-right font-medium">On this invoice</th>
+                        <th className="pb-1 text-right font-medium">Pending after</th>
+                        <th className="pb-1 pl-4 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sp.lines.map((l) => (
+                        <tr key={l.po_line_id} className="border-t">
+                          <td className="py-1.5">
+                            {l.product_name} <span className="text-xs text-muted-foreground">({l.sku})</span>
+                          </td>
+                          <td className="tabular py-1.5 text-right">{l.ordered}</td>
+                          <td className="tabular py-1.5 text-right">{l.pending}</td>
+                          <td className="tabular py-1.5 text-right">
+                            {l.invoiced}
+                            {Number(l.excess) > 0 && <span className="block text-xs text-warn">+{l.excess} extra</span>}
+                          </td>
+                          <td className="tabular py-1.5 text-right">{l.pending_after}</td>
+                          <td className="py-1.5 pl-4">
+                            <StatusChip status="" tone={PO_LINE_STATUS[l.status].tone} label={PO_LINE_STATUS[l.status].label} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {(sp.variances || acceptVariances) && (
+                  <label className="flex items-start gap-2 text-sm">
+                    <input type="checkbox" className="mt-1" checked={acceptVariances} disabled={busy != null} onChange={(e) => poChoice({ accept: e.target.checked })} />
+                    <span>
+                      <span className="font-medium">Accept the differences</span>
+                      <span className="block text-muted-foreground">
+                        Receive what was invoiced: items not on the order go into stock (new ones are created), and quantity over the order is recorded as extra on
+                        the PO line.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {(sp.short > 0 || closeShort) && (
+                  <div className="space-y-2">
+                    <label className="flex items-start gap-2 text-sm">
+                      <input type="checkbox" className="mt-1" checked={closeShort} disabled={busy != null} onChange={(e) => poChoice({ close: e.target.checked })} />
+                      <span>
+                        <span className="font-medium">Close the PO short</span>
+                        <span className="block text-muted-foreground">Nothing more is coming for the pending items. Leave unticked to keep them pending for a later delivery.</span>
+                      </span>
+                    </label>
+                    {closeShort && (
+                      <div className="flex flex-col gap-1.5 sm:max-w-md">
+                        <Label htmlFor="imp-close-reason">Why it is closed short *</Label>
+                        <div className="flex gap-2">
+                          <Input id="imp-close-reason" value={closeReason} onChange={(e) => setCloseReason(e.target.value)} placeholder="e.g. item discontinued by the supplier" />
+                          <Button variant="outline" disabled={busy != null || !closeReason.trim()} onClick={() => poChoice({ close: true })}>
+                            Apply
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardContent className="pt-6">
               <Table>
@@ -348,6 +571,7 @@ export default function ImportInvoicePage() {
                     <TableHead className="text-right">Rate</TableHead>
                     <TableHead className="text-right">GST</TableHead>
                     <TableHead>What happens</TableHead>
+                    {sp && <TableHead>Purchase order</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -398,18 +622,29 @@ export default function ImportInvoicePage() {
                             value={matches[String(l.row)] ?? ""}
                             onChange={(e) => choose(l.row, e.target.value)}
                           >
-                            <option value="">{l.action === "create" ? "Create as a new product" : "Automatic match"}</option>
+                            <option value="">{l.action === "create" && matches[String(l.row)] !== "new" ? "Create as a new product" : "Automatic match"}</option>
                             {l.suggestions.map((sg) => (
                               <option key={sg.variant_id} value={sg.variant_id}>
-                                Same as {sg.name} (MRP {sg.mrp})
+                                Same as {sg.name} (MRP {sg.mrp}){sg.on_po ? " · on the PO" : ""}
                               </option>
                             ))}
                             {matches[String(l.row)] && matches[String(l.row)] !== "new" && !l.suggestions.some((sg) => sg.variant_id === matches[String(l.row)]) && (
                               <option value={matches[String(l.row)]}>{l.product_name}</option>
                             )}
+                            {(l.action === "add_stock" || matches[String(l.row)] === "new") && <option value="new">Create as a new product</option>}
                           </select>
                         )}
                       </TableCell>
+                      {sp && (
+                        <TableCell className="whitespace-normal text-xs">
+                          {l.po_status && <StatusChip status="" tone={LINE_PO[l.po_status].tone} label={LINE_PO[l.po_status].label} />}
+                          {l.po_ordered && (
+                            <span className="mt-1 block text-muted-foreground">
+                              ordered {l.po_ordered}, pending {l.po_pending}
+                            </span>
+                          )}
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>
@@ -436,6 +671,11 @@ export default function ImportInvoicePage() {
           <p>
             Put the printed <b>line_total</b> in too: the preview flags any line where quantity × rate + GST doesn&apos;t match it. An invoice can only be
             imported once per supplier.
+          </p>
+          <p>
+            Against a purchase order, each line is matched to the ordered item for its product. A name that only nearly matches an ordered item is
+            suggested first (&quot;on the PO&quot;): pick it if it is the same item. Less than ordered stays pending unless you close the PO short; more than
+            ordered and items not on the order need &quot;Accept the differences&quot;.
           </p>
         </CardContent>
       </Card>

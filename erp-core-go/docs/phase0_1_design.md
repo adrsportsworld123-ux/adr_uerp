@@ -2538,6 +2538,46 @@ Verified:
 - `e2e/merchant-banking-loans.spec.ts`, plus `promotions`, `users-open-price`, `phase16-subscriptions` and `bank-reconciliation`.
 - An axe sweep of the new screens in both themes.
 
+### 3.74 Purchase invoice import against a purchase order, with variances (2026-10-20)
+
+Migration 068; `internal/purchase/import.go`, `orders.go`.
+
+**Not changed by default:**
+- An import without `purchase_order_id` works as before.
+- "Receive goods" on a PO (`POST /purchase/orders/{id}/grn`, `POST /purchase/grn/{id}/lines`) still refuses other items (`PO_LINE_MISMATCH`) and more than is pending (`PO_OVER_RECEIPT`).
+- An import against a PO that matches the order makes an ordinary PO GRN.
+
+**What it does:**
+- `POST /purchase/imports/preview|commit` take:
+  - `purchase_order_id`: the PO's id or number. Supplier and branch default to the PO's; a different supplier or branch is refused, and so is a PO that isn't open or partially received.
+  - `accept_variances`: needed when the invoice differs from the PO.
+  - `close_short` with `close_reason`: closes the PO short in the same step.
+- Each line goes to the PO line for its product: the first with something still pending, otherwise the last one, which makes it an over-receipt.
+- `po_status` per line is one of:
+  - `on_po`
+  - `over`, with a warning giving how much is over and what was ordered and pending
+  - `unplanned`: not on the PO. An existing product is restocked and a new one is created, as in any import.
+  - A rate that differs from a PO cost above 0 is a warning.
+- **Names that only nearly match.** A name that nearly matches an ordered item is never taken automatically. While testing, "TOWEL GRIP" would otherwise have gone onto a PO's "GRIP". The ordered items it resembles (50%+ of the words) are suggested first, marked `on_po`; the user picks one (`matches`), or keeps it as a new item.
+- **The `purchase_order` summary.** For each PO line it gives ordered, received, pending (net of other open draft GRNs), invoiced, excess and pending after, with a status: `full`, `short`, `over`, `not_delivered` or `done`. It also counts `unplanned`, `over` and `short`.
+- **When it can be booked.** If anything is unplanned or over, the preview isn't `ready` until `accept_variances` is set. Closing short needs a reason and no other draft GRN open against the PO.
+- **Commit.**
+  - Locks the PO, creates a GRN with `purchase_order_id` and `po_line_id` on each line, completes it, and books the bill.
+  - `po_variance_accepted` is set only when there were differences. Completing such a GRN (`receivePOWithVarianceTx`) adds up to the ordered quantity to `received_qty` and the rest to `purchase_order_lines.excess_qty`. Lines with no PO line are stock only. A line pointing at another PO's line is still refused.
+  - The PO becomes `partially_received` or `completed`, or `closed` with `close_short`.
+  - The result adds `po_number` and `po_status`. The audit entry records the PO, the accepted differences and any short-close reason.
+- `GET /purchase/orders/{id}` adds `excess_qty` per line and `unplanned`: items received against it that weren't ordered, totalled over its completed GRNs.
+- Fixed while testing (pre-existing): the import read `categories.path` without `COALESCE`, so a category with no path (the seed data's) made every import fail with a 500.
+- **Web:**
+  - The import page has "Against purchase order" (`?po=` from the PO page's "Import invoice"), an ordered-vs-invoiced table, "Accept the differences", "Close the PO short" with a reason, and a Purchase order column on the lines.
+  - The PO page shows "+N extra" and "Received but not ordered".
+
+Verified:
+- `poimport_flow.py`: 49 checks, modelled on invoice SC/SL/26-27/5027 against a 5-line PO. Insole full, GP 18 picked from the suggestions, two new items, AC102EX 2 over, GP 20 and ETEC not delivered, then a second invoice that closes the PO short. The PO's own Receive goods rules are unchanged.
+- Run on one fresh database with the earlier regression scripts: tax, follow-ups, users, localization, PO, PO/GRN delete and round 9, 440 checks in all.
+- A rehearsal of 9.csv against a copy of the live PO: ₹3,750.00 with −₹0.08 round-off, 3 restocked, 2 created, the PO partially received.
+- `e2e/po-invoice-import.spec.ts` and `purchase-orders.spec.ts`.
+
 ## 4. What Phase 0 concretely delivers against this design
 
 1. Run `migrations/001_schema.sql` against your local Postgres (already verified to execute cleanly, RLS included).

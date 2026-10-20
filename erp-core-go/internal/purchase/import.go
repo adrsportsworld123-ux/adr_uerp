@@ -16,6 +16,22 @@ package purchase
 // trusts nothing from the client but the user's match choices, refuses
 // anything the preview would flag as an error, and books everything or
 // nothing. The supplier invoice number can only be imported once.
+//
+// Against a purchase order (purchase_order_id, §3.74) the GRN and bill are
+// the PO's, and each line is matched to the PO line for its product. A
+// name that only nearly matches is never taken automatically ("GRIP" and
+// "TOWEL GRIP" are different items): the ordered items it resembles are
+// suggested first, marked on_po. A delivery that differs from the PO is
+// received as it is:
+//
+//   - less than ordered leaves the rest pending, or close_short closes the
+//     PO short with a reason;
+//   - more than pending, and items not on the PO at all (existing products
+//     restocked, new ones created), need accept_variances: the GRN is then
+//     marked po_variance_accepted, the PO line takes what was pending and
+//     the rest is recorded as its excess_qty.
+//
+// Without a purchase order the import is unchanged.
 
 import (
 	"bytes"
@@ -78,6 +94,12 @@ type importRequest struct {
 	// preview): a variant_id to receive into, or "new" to create a product
 	// even though a similar one exists.
 	Matches map[string]string `json:"matches"`
+	// PurchaseOrder: the PO's id or number (§3.74). Empty = a direct
+	// import, as before. Supplier and branch default to the PO's.
+	PurchaseOrder   string `json:"purchase_order_id"`
+	AcceptVariances bool   `json:"accept_variances"` // receive items not on the PO and more than pending
+	CloseShort      bool   `json:"close_short"`      // close the PO short if something is still pending after this invoice
+	CloseReason     string `json:"close_reason"`
 }
 
 type suggestion struct {
@@ -86,6 +108,7 @@ type suggestion struct {
 	SKU       string `json:"sku"`
 	MRP       string `json:"mrp"`
 	Score     int    `json:"score"` // 0-100 word overlap
+	OnPO      bool   `json:"on_po,omitempty"`
 }
 
 type newProduct struct {
@@ -105,27 +128,64 @@ type newProduct struct {
 }
 
 type importLine struct {
-	Row          int          `json:"row"`
-	ItemName     string       `json:"item_name"`
-	Quantity     string       `json:"quantity"`
-	UnitCost     string       `json:"unit_cost"`
-	GSTRate      string       `json:"gst_rate"`
-	LineCost     string       `json:"line_cost"`
-	LineTax      string       `json:"line_tax"`
-	Action       string       `json:"action"` // add_stock | create
-	MatchedBy    string       `json:"matched_by,omitempty"`
-	VariantID    string       `json:"variant_id,omitempty"`
-	ProductName  string       `json:"product_name,omitempty"`
-	SKU          string       `json:"sku,omitempty"`
-	CurrentMRP   string       `json:"current_mrp,omitempty"`
-	OnHand       string       `json:"on_hand,omitempty"` // at the receiving branch, before this invoice
-	NewProduct   *newProduct  `json:"new_product,omitempty"`
-	Suggestions  []suggestion `json:"suggestions"`
-	Warnings     []string     `json:"warnings"`
-	Errors       []string     `json:"errors"`
+	Row         int          `json:"row"`
+	ItemName    string       `json:"item_name"`
+	Quantity    string       `json:"quantity"`
+	UnitCost    string       `json:"unit_cost"`
+	GSTRate     string       `json:"gst_rate"`
+	LineCost    string       `json:"line_cost"`
+	LineTax     string       `json:"line_tax"`
+	Action      string       `json:"action"` // add_stock | create
+	MatchedBy   string       `json:"matched_by,omitempty"`
+	VariantID   string       `json:"variant_id,omitempty"`
+	ProductName string       `json:"product_name,omitempty"`
+	SKU         string       `json:"sku,omitempty"`
+	CurrentMRP  string       `json:"current_mrp,omitempty"`
+	OnHand      string       `json:"on_hand,omitempty"` // at the receiving branch, before this invoice
+	NewProduct  *newProduct  `json:"new_product,omitempty"`
+	Suggestions []suggestion `json:"suggestions"`
+	Warnings    []string     `json:"warnings"`
+	Errors      []string     `json:"errors"`
+	// Against a PO: po_status is on_po (within what is pending), over
+	// (beyond it) or unplanned (not on the PO); po_line_id the PO line it
+	// receives.
+	POLineID     string `json:"po_line_id,omitempty"`
+	POStatus     string `json:"po_status,omitempty"`
+	POOrdered    string `json:"po_ordered,omitempty"`
+	POPending    string `json:"po_pending,omitempty"`
 	qty, cost    float64
 	tax          float64
 	batch, expry string
+}
+
+// poImportLine: one PO line and what this invoice does to it.
+type poImportLine struct {
+	LineID       string `json:"po_line_id"`
+	VariantID    string `json:"variant_id"`
+	ProductName  string `json:"product_name"`
+	SKU          string `json:"sku"`
+	UnitCost     string `json:"unit_cost"`
+	Ordered      string `json:"ordered"`
+	Received     string `json:"received"` // before this invoice
+	Pending      string `json:"pending"`  // before this invoice, net of other open draft GRNs
+	Invoiced     string `json:"invoiced"`
+	Excess       string `json:"excess"`
+	PendingAfter string `json:"pending_after"`
+	Status       string `json:"status"` // full | short | over | not_delivered | done (nothing was pending)
+
+	ordered, received, drafts, pending, invoiced, unitCost float64
+}
+
+type poImportPreview struct {
+	POID       string          `json:"po_id"`
+	PONumber   string          `json:"po_number"`
+	Status     string          `json:"status"`
+	Lines      []*poImportLine `json:"lines"`
+	Unplanned  int             `json:"unplanned"` // invoice lines not on the PO
+	Over       int             `json:"over"`      // invoice lines beyond what is pending
+	Short      int             `json:"short"`     // PO lines still pending after this invoice
+	Variances  bool            `json:"variances"` // unplanned or over: needs accept_variances
+	CloseShort bool            `json:"close_short"`
 }
 
 type importSummary struct {
@@ -152,9 +212,12 @@ type importPreview struct {
 	NewBrands     []string      `json:"new_brands"`
 	Errors        []string      `json:"errors"` // invoice-level
 	Ready         bool          `json:"ready"`  // no errors anywhere: commit will go through
+	// PO: the purchase order received against, when one was given.
+	PO *poImportPreview `json:"purchase_order,omitempty"`
 
 	roundOff, subtotal, tax float64
 	billDate                *string
+	supplierID, branchID    string
 }
 
 // ---------------------------------------------------------------------
@@ -264,6 +327,7 @@ type knownVariant struct {
 
 type catalogue struct {
 	variants   []*knownVariant
+	byID       map[string]*knownVariant
 	byBarcode  map[string]*knownVariant
 	bySKU      map[string][]*knownVariant
 	byName     map[string][]*knownVariant
@@ -315,23 +379,23 @@ func loadCatalogue(ctx context.Context, tx pgx.Tx, branchID string) (*catalogue,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	byID := map[string]*knownVariant{}
+	c.byID = map[string]*knownVariant{}
 	for _, v := range c.variants {
-		byID[v.id] = v
+		c.byID[v.id] = v
 	}
 	if err := eachRow(ctx, tx, `SELECT variant_id::text, code FROM barcodes`, func(r pgx.Rows) error {
 		var vid, code string
 		if err := r.Scan(&vid, &code); err != nil {
 			return err
 		}
-		if v := byID[vid]; v != nil {
+		if v := c.byID[vid]; v != nil {
 			c.byBarcode[strings.TrimSpace(code)] = v
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	if err := eachRow(ctx, tx, `SELECT id::text, name, path FROM categories WHERE status = 'active'`, func(r pgx.Rows) error {
+	if err := eachRow(ctx, tx, `SELECT id::text, name, COALESCE(path, '/' || name) FROM categories WHERE status = 'active'`, func(r pgx.Rows) error {
 		var id, name, path string
 		if err := r.Scan(&id, &name, &path); err != nil {
 			return err
@@ -397,17 +461,7 @@ func (c *catalogue) suggest(item string) []suggestion {
 	}
 	var all []scored
 	for _, v := range c.variants {
-		inter := 0
-		for k := range w {
-			if v.words[k] {
-				inter++
-			}
-		}
-		union := len(w) + len(v.words) - inter
-		if inter == 0 || union == 0 {
-			continue
-		}
-		if s := inter * 100 / union; s >= 50 {
+		if s := overlap(w, v.words); s >= 50 {
 			all = append(all, scored{v, s})
 		}
 	}
@@ -420,6 +474,104 @@ func (c *catalogue) suggest(item string) []suggestion {
 	return out
 }
 
+// overlap: the share of words two names have in common, 0-100.
+func overlap(a, b map[string]bool) int {
+	inter := 0
+	for k := range a {
+		if b[k] {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if inter == 0 || union == 0 {
+		return 0
+	}
+	return inter * 100 / union
+}
+
+// loadImportPO reads the purchase order an import receives against, under
+// its row lock (so pending can't change between this and the GRN's
+// completion in the same transaction), with each line's pending quantity
+// net of other open draft GRNs.
+func loadImportPO(ctx context.Context, tx pgx.Tx, ref string) (po *poImportPreview, supplierID, branchID string, err error) {
+	po = &poImportPreview{Lines: []*poImportLine{}}
+	if err = tx.QueryRow(ctx, `
+		SELECT id::text, po_number, status, supplier_id::text, branch_id::text FROM purchase_orders
+		WHERE id::text = $1 OR po_number = $1 ORDER BY (id::text = $1) DESC LIMIT 1 FOR UPDATE`, strings.TrimSpace(ref),
+	).Scan(&po.POID, &po.PONumber, &po.Status, &supplierID, &branchID); err != nil {
+		return nil, "", "", err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT l.id::text, l.variant_id::text, p.name, pv.sku, l.unit_cost::float8, l.quantity::float8, l.received_qty::float8,
+		       COALESCE((SELECT SUM(gl.quantity) FROM goods_receipt_lines gl JOIN goods_receipt_notes g ON g.id = gl.grn_id
+		                 WHERE gl.po_line_id = l.id AND g.status = 'draft'), 0)::float8
+		FROM purchase_order_lines l
+		JOIN product_variants pv ON pv.id = l.variant_id
+		JOIN products p ON p.id = pv.product_id
+		WHERE l.po_id::text = $1
+		ORDER BY l.created_at, l.id`, po.POID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		l := &poImportLine{}
+		if err := rows.Scan(&l.LineID, &l.VariantID, &l.ProductName, &l.SKU, &l.unitCost, &l.ordered, &l.received, &l.drafts); err != nil {
+			return nil, "", "", err
+		}
+		l.pending = math.Max(0, l.ordered-l.received-l.drafts)
+		po.Lines = append(po.Lines, l)
+	}
+	return po, supplierID, branchID, rows.Err()
+}
+
+// poLineFor: the PO line an invoice line for this variant receives: the
+// first with something still pending after the invoice's earlier lines,
+// else the last one (an over-receipt). nil = not on the PO.
+func (po *poImportPreview) poLineFor(variantID string) *poImportLine {
+	var last *poImportLine
+	for _, l := range po.Lines {
+		if l.VariantID != variantID {
+			continue
+		}
+		if l.pending-l.invoiced > 0 {
+			return l
+		}
+		last = l
+	}
+	return last
+}
+
+// suggestFirst: the ordered items an unmatched line resembles (half its
+// words or more), ahead of the catalogue's other suggestions and marked
+// on_po. Still only suggestions: the user picks.
+func (po *poImportPreview) suggestFirst(item string, others []suggestion, cat *catalogue) []suggestion {
+	w := words(item)
+	var first []suggestion
+	seen := map[string]bool{}
+	for _, pl := range po.Lines {
+		v := cat.byID[pl.VariantID]
+		if v == nil || seen[v.id] {
+			continue
+		}
+		if s := overlap(w, v.words); s >= 50 {
+			seen[v.id] = true
+			first = append(first, suggestion{VariantID: v.id, Name: strings.TrimSpace(v.name + " " + v.combo), SKU: v.sku, MRP: money(v.mrp), Score: s, OnPO: true})
+		}
+	}
+	sort.SliceStable(first, func(i, j int) bool { return first[i].Score > first[j].Score })
+	out := first
+	for _, s := range others {
+		if !seen[s.VariantID] && len(out) < 3+len(first) {
+			out = append(out, s)
+		}
+	}
+	if out == nil {
+		out = []suggestion{}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------
 // Resolution — shared by preview and commit
 // ---------------------------------------------------------------------
@@ -427,6 +579,32 @@ func (c *catalogue) suggest(item string) []suggestion {
 func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPreview, error) {
 	p := &importPreview{InvoiceNumber: strings.TrimSpace(req.InvoiceNumber), InvoiceDate: req.InvoiceDate, Lines: []*importLine{}, Errors: []string{}, NewBrands: []string{}}
 	fail := func(msg string) { p.Errors = append(p.Errors, msg) }
+
+	if strings.TrimSpace(req.PurchaseOrder) != "" {
+		po, poSupplier, poBranch, err := loadImportPO(ctx, tx, req.PurchaseOrder)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			fail("purchase order " + strings.TrimSpace(req.PurchaseOrder) + " was not found")
+		case err != nil:
+			return nil, err
+		default:
+			p.PO = po
+			if req.SupplierID == "" {
+				req.SupplierID = poSupplier
+			} else if req.SupplierID != poSupplier {
+				fail("purchase order " + po.PONumber + " is with a different supplier")
+			}
+			if req.BranchID == "" {
+				req.BranchID = poBranch
+			} else if req.BranchID != poBranch {
+				fail("purchase order " + po.PONumber + " is for a different branch — receive it at the branch it was raised for")
+			}
+			if po.Status != "open" && po.Status != "partially_received" {
+				fail(fmt.Sprintf("purchase order %s is %s — only an issued PO still waiting for goods can be received against", po.PONumber, strings.ReplaceAll(po.Status, "_", " ")))
+			}
+		}
+	}
+	p.supplierID, p.branchID = req.SupplierID, req.BranchID
 
 	if req.SupplierID == "" || tx.QueryRow(ctx, `SELECT name FROM suppliers WHERE id::text = $1`, req.SupplierID).Scan(&p.Supplier) != nil {
 		fail("choose the supplier")
@@ -553,12 +731,34 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 			if hit.trackBatch && l.batch == "" {
 				bad("this product is batch-tracked: batch_no is required")
 			}
+			if p.PO != nil && len(l.Errors) == 0 {
+				if pl := p.PO.poLineFor(hit.id); pl != nil {
+					l.POLineID, l.POOrdered, l.POPending = pl.LineID, qtyText(pl.ordered), qtyText(math.Max(0, pl.pending-pl.invoiced))
+					if pl.invoiced+l.qty > pl.pending+1e-9 {
+						l.POStatus = "over"
+						p.PO.Over++
+						l.Warnings = append(l.Warnings, fmt.Sprintf("%s more than is pending on the purchase order (ordered %s, pending %s)",
+							qtyText(round3(pl.invoiced+l.qty-math.Max(pl.pending, pl.invoiced))), qtyText(pl.ordered), l.POPending))
+					} else {
+						l.POStatus = "on_po"
+					}
+					if pl.unitCost > 0 && math.Abs(pl.unitCost-l.cost) >= 0.01 {
+						l.Warnings = append(l.Warnings, fmt.Sprintf("the rate ₹%s differs from the purchase order's ₹%s", money(l.cost), money(pl.unitCost)))
+					}
+					pl.invoiced += l.qty
+				}
+			}
 			p.Summary.AddStock++
 		} else if len(l.Errors) == 0 || choice == "new" {
 			l.Action = "create"
 			if choice != "new" {
 				l.Suggestions = cat.suggest(l.ItemName)
-				if len(l.Suggestions) > 0 {
+				if p.PO != nil {
+					l.Suggestions = p.PO.suggestFirst(l.ItemName, l.Suggestions, cat)
+				}
+				if len(l.Suggestions) > 0 && l.Suggestions[0].OnPO {
+					l.Warnings = append(l.Warnings, "it looks like "+l.Suggestions[0].Name+" on the purchase order — pick it if this is the same item, or keep it as new")
+				} else if len(l.Suggestions) > 0 {
 					l.Warnings = append(l.Warnings, "a similar product exists — pick it if this is the same item, or keep it as new")
 				}
 			}
@@ -643,6 +843,10 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 		}
 	}
 
+	if p.PO != nil {
+		resolvePOSummary(ctx, tx, p, req, fail)
+	}
+
 	p.subtotal, p.tax = round2(p.subtotal), round2(p.tax)
 	computed := round2(p.subtotal + p.tax + req.Freight + req.OtherCharges)
 	p.Summary.Lines, p.Summary.Quantity = len(p.Lines), qtyText(qtyTotal)
@@ -667,6 +871,59 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 		}
 	}
 	return p, nil
+}
+
+func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+// resolvePOSummary: after the lines, against a PO: the lines not on it,
+// what each PO line is left with, and whether the invoice can be booked
+// (differences need accept_variances; close_short needs a reason and no
+// other draft GRN open against the PO).
+func resolvePOSummary(ctx context.Context, tx pgx.Tx, p *importPreview, req importRequest, fail func(string)) {
+	po := p.PO
+	for _, l := range p.Lines {
+		if len(l.Errors) == 0 && l.POLineID == "" && l.Action != "" {
+			l.POStatus = "unplanned"
+			po.Unplanned++
+			l.Warnings = append(l.Warnings, "not on purchase order "+po.PONumber+" — received as an extra item")
+		}
+	}
+	for _, pl := range po.Lines {
+		excess := math.Max(0, pl.invoiced-pl.pending)
+		after := math.Max(0, pl.pending-pl.invoiced)
+		pl.Ordered, pl.Received, pl.Pending, pl.Invoiced = qtyText(pl.ordered), qtyText(pl.received), qtyText(pl.pending), qtyText(round3(pl.invoiced))
+		pl.Excess, pl.PendingAfter, pl.UnitCost = qtyText(round3(excess)), qtyText(round3(after)), money(pl.unitCost)
+		switch {
+		case pl.pending == 0 && pl.invoiced == 0:
+			pl.Status = "done"
+		case pl.invoiced == 0:
+			pl.Status = "not_delivered"
+		case excess > 0:
+			pl.Status = "over"
+		case after > 0:
+			pl.Status = "short"
+		default:
+			pl.Status = "full"
+		}
+		if after > 0 {
+			po.Short++
+		}
+	}
+	po.Variances = po.Unplanned > 0 || po.Over > 0
+	if po.Variances && !req.AcceptVariances {
+		fail(fmt.Sprintf("the invoice differs from purchase order %s (%d item(s) not on it, %d over the pending quantity) — accept the differences to receive them as invoiced",
+			po.PONumber, po.Unplanned, po.Over))
+	}
+	if req.CloseShort && po.Short > 0 {
+		po.CloseShort = true
+		if strings.TrimSpace(req.CloseReason) == "" {
+			fail("give a reason for closing the purchase order short")
+		}
+		var drafts bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM goods_receipt_notes WHERE purchase_order_id::text = $1 AND status = 'draft')`, po.POID).Scan(&drafts); err == nil && drafts {
+			fail("a draft GRN is open against purchase order " + po.PONumber + " — complete or delete it before closing the PO short")
+		}
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -717,6 +974,9 @@ type importResult struct {
 	StockAdded      int      `json:"stock_added"`      // lines received into existing products
 	ProductsCreated int      `json:"products_created"` // new products
 	BrandsCreated   []string `json:"brands_created"`
+	// Against a PO: its number and status afterwards.
+	PONumber string `json:"po_number,omitempty"`
+	POStatus string `json:"po_status,omitempty"`
 }
 
 var errNeedsCatalogManage = errors.New("creating products needs catalog.manage")
@@ -768,17 +1028,22 @@ func (h *Handler) CommitImport(w http.ResponseWriter, r *http.Request) {
 			res.BrandsCreated = append(res.BrandsCreated, b)
 		}
 
-		branchPrefix := req.BranchID
+		branchPrefix := p.branchID
 		if len(branchPrefix) > 8 {
 			branchPrefix = branchPrefix[:8]
 		}
 		res.GRNNumber = fmt.Sprintf("GRN-%s-%d", branchPrefix, time.Now().UnixNano())
+		notes, poID, variance := "Imported from supplier invoice "+p.InvoiceNumber, "", false
+		if p.PO != nil {
+			notes += " against " + p.PO.PONumber
+			poID, variance = p.PO.POID, p.PO.Variances
+		}
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO goods_receipt_notes (id, merchant_id, branch_id, supplier_id, grn_number, status, freight_amount, other_charges, received_by, notes)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, 'draft', $4, $5, $6, $7)
+			INSERT INTO goods_receipt_notes (id, merchant_id, branch_id, supplier_id, grn_number, status, freight_amount, other_charges, received_by, notes,
+			                                 purchase_order_id, po_variance_accepted)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, 'draft', $4, $5, $6, $7, NULLIF($8,'')::uuid, $9)
 			RETURNING id::text`,
-			req.BranchID, req.SupplierID, res.GRNNumber, req.Freight, req.OtherCharges, claims.UserID,
-			"Imported from supplier invoice "+p.InvoiceNumber,
+			p.branchID, p.supplierID, res.GRNNumber, req.Freight, req.OtherCharges, claims.UserID, notes, poID, variance,
 		).Scan(&res.GRNID); err != nil {
 			return err
 		}
@@ -811,9 +1076,9 @@ func (h *Handler) CommitImport(w http.ResponseWriter, r *http.Request) {
 				res.StockAdded++
 			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO goods_receipt_lines (id, grn_id, variant_id, quantity, unit_cost, line_total, batch_no, expiry_date)
-				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULLIF($6,''), NULLIF($7,'')::date)`,
-				res.GRNID, variantID, l.qty, l.cost, round2(l.qty*l.cost), l.batch, l.expry); err != nil {
+				INSERT INTO goods_receipt_lines (id, grn_id, variant_id, quantity, unit_cost, line_total, batch_no, expiry_date, po_line_id, created_at)
+				VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULLIF($6,''), NULLIF($7,'')::date, NULLIF($8,'')::uuid, clock_timestamp())`,
+				res.GRNID, variantID, l.qty, l.cost, round2(l.qty*l.cost), l.batch, l.expry, l.POLineID); err != nil {
 				return err
 			}
 		}
@@ -831,10 +1096,29 @@ func (h *Handler) CommitImport(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		res.BillID, res.BillNumber, res.GrandTotal = bill.BillID, bill.BillNumber, bill.GrandTotal
+		after := map[string]any{"supplier_invoice": p.InvoiceNumber, "invoice_date": p.InvoiceDate, "grn": res.GRNNumber, "bill": res.BillNumber,
+			"lines": len(p.Lines), "stock_added": res.StockAdded, "products_created": res.ProductsCreated, "brands_created": res.BrandsCreated,
+			"subtotal": p.Summary.Subtotal, "tax": p.Summary.Tax, "round_off": p.Summary.RoundOff, "grand_total": bill.GrandTotal}
+		if p.PO != nil {
+			if p.PO.CloseShort {
+				if _, err := tx.Exec(ctx, `
+					UPDATE purchase_orders SET status = 'closed', close_reason = $2, updated_at = now()
+					WHERE id::text = $1 AND status = 'partially_received'`, p.PO.POID, strings.TrimSpace(req.CloseReason)); err != nil {
+					return err
+				}
+			}
+			if err := tx.QueryRow(ctx, `SELECT status FROM purchase_orders WHERE id::text = $1`, p.PO.POID).Scan(&res.POStatus); err != nil {
+				return err
+			}
+			res.PONumber = p.PO.PONumber
+			after["purchase_order"], after["po_status"] = p.PO.PONumber, res.POStatus
+			after["unplanned_lines"], after["over_lines"], after["variances_accepted"] = p.PO.Unplanned, p.PO.Over, p.PO.Variances
+			if p.PO.CloseShort {
+				after["closed_short"] = strings.TrimSpace(req.CloseReason)
+			}
+		}
 		return audit.Log(ctx, tx, audit.Entry{EntityType: "purchase_invoice_import", EntityID: bill.BillID, Action: "create", PerformedBy: claims.UserID,
-			After: map[string]any{"supplier_invoice": p.InvoiceNumber, "invoice_date": p.InvoiceDate, "grn": res.GRNNumber, "bill": res.BillNumber,
-				"lines": len(p.Lines), "stock_added": res.StockAdded, "products_created": res.ProductsCreated, "brands_created": res.BrandsCreated,
-				"subtotal": p.Summary.Subtotal, "tax": p.Summary.Tax, "round_off": p.Summary.RoundOff, "grand_total": bill.GrandTotal}})
+			After: after})
 	})
 	switch {
 	case err == nil && p != nil && !p.Ready:
@@ -843,6 +1127,8 @@ func (h *Handler) CommitImport(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "FORBIDDEN", "this invoice creates new products, which needs the catalog.manage permission")
 	case errors.Is(err, errBatchRequired):
 		httpx.Error(w, http.StatusBadRequest, "BATCH_REQUIRED", errBatchRequired.Error())
+	case isPOError(err):
+		respondPO(w, err, 0, nil, "import the invoice")
 	case failMsg != "":
 		httpx.Error(w, http.StatusConflict, "IMPORT_CONFLICT", failMsg)
 	case errors.Is(err, accounting.ErrPeriodLocked):

@@ -258,6 +258,17 @@ export interface PurchaseOrderLine {
   received_qty: string;
   pending_qty: string;
   track_batch: boolean;
+  /** Received beyond the ordered quantity on an invoice import whose differences were accepted (erp-core-go §3.74). */
+  excess_qty?: string;
+}
+
+/** An item received against a PO that wasn't on it (an invoice import, erp-core-go §3.74). */
+export interface PurchaseOrderUnplanned {
+  variant_id: string;
+  sku: string;
+  product_name: string;
+  quantity: string;
+  line_total: string;
 }
 
 export interface PurchaseOrderGRN {
@@ -285,6 +296,7 @@ export interface PurchaseOrder {
   created_at: string;
   lines: PurchaseOrderLine[];
   grns: PurchaseOrderGRN[];
+  unplanned?: PurchaseOrderUnplanned[];
 }
 
 export interface PurchaseOrderSummary {

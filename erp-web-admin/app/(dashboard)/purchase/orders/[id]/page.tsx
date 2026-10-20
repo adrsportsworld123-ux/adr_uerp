@@ -4,16 +4,19 @@
 // GRNs that received it (each with its purchase bill), and the next step
 // for its status. Draft → Issue; issued → Receive goods (any quantity up
 // to what is pending, as a draft GRN), until everything has arrived and
-// the PO completes by itself, or it is closed short.
+// the PO completes by itself, or it is closed short. "Import invoice"
+// receives the supplier's invoice against it instead, including what
+// differs from the order (erp-core-go §3.74): extra quantity shows as
+// "+N extra" and items that weren't ordered are listed under the items.
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { PackageCheck, Plus, Send, Trash2, X } from "lucide-react";
+import { FileUp, PackageCheck, Plus, Send, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { GRN, PurchaseOrder, PurchaseOrderLine } from "@/lib/types";
 import { qty, rupees } from "@/lib/format";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Modal } from "@/components/ui/dialog";
@@ -90,9 +93,14 @@ export default function PurchaseOrderPage() {
               </Button>
             )}
             {receivable && (
-              <Button disabled={busy} onClick={() => setReceiving(true)}>
-                <PackageCheck /> Receive goods
-              </Button>
+              <>
+                <Link href={`/purchase/import?po=${po.po_id}`} className={buttonVariants({ variant: "outline" })}>
+                  <FileUp aria-hidden /> Import invoice
+                </Link>
+                <Button disabled={busy} onClick={() => setReceiving(true)}>
+                  <PackageCheck /> Receive goods
+                </Button>
+              </>
             )}
             {(isDraft || po.status === "open") && po.grns.length === 0 && (
               <>
@@ -143,6 +151,33 @@ export default function PurchaseOrderPage() {
         <ItemsTable po={po} busy={busy} onRemove={(lineId) => run(() => api.delete<PurchaseOrder>(`${base}/lines/${lineId}`), "Item removed")} />
         {isDraft && <AddLine disabled={busy} onAdd={(body) => run(() => api.post<PurchaseOrder>(`${base}/lines`, body), "Item added")} />}
       </Panel>
+
+      {po.unplanned && po.unplanned.length > 0 && (
+        <Panel title="Received but not ordered" description="Items the supplier invoiced against this PO that weren't on it. They are in stock; the PO's pending quantities don't count them.">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[480px] text-sm" data-testid="po-unplanned">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="pb-1 font-medium">Product</th>
+                  <th className="pb-1 text-right font-medium">Received</th>
+                  <th className="pb-1 text-right font-medium">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {po.unplanned.map((u) => (
+                  <tr key={u.variant_id} className="border-t">
+                    <td className="py-1.5">
+                      {u.product_name} <span className="text-xs text-muted-foreground">({u.sku})</span>
+                    </td>
+                    <td className="tabular py-1.5 text-right">{qty(u.quantity)}</td>
+                    <td className="tabular py-1.5 text-right">{rupees(u.line_total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
 
       <Panel title="Goods receipts" description="Each delivery is a GRN against this PO; bill each one when the supplier's invoice arrives.">
         {po.grns.length === 0 ? (
@@ -241,7 +276,10 @@ function ItemsTable({ po, busy, onRemove }: { po: PurchaseOrder; busy: boolean; 
                 {l.product_name} <span className="text-xs text-muted-foreground">({l.sku})</span>
               </td>
               <td className="tabular py-1.5 text-right">{qty(l.quantity)}</td>
-              <td className="tabular py-1.5 text-right">{qty(l.received_qty)}</td>
+              <td className="tabular py-1.5 text-right">
+                {qty(l.received_qty)}
+                {Number(l.excess_qty ?? 0) > 0 && <span className="block text-xs text-warn">+{qty(l.excess_qty!)} extra</span>}
+              </td>
               <td className={`tabular py-1.5 text-right ${Number(l.pending_qty) > 0 && !isDraft ? "font-medium text-warn" : ""}`}>{qty(l.pending_qty)}</td>
               <td className="tabular py-1.5 text-right">{rupees(l.unit_cost)}</td>
               <td className="tabular py-1.5 text-right">{rupees(l.line_total)}</td>
