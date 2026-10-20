@@ -140,6 +140,12 @@ It also reopens the keypad after a failed approval PIN. Offline, the device enfo
 
 Tested in `test/product_grid_test.dart` (own SQLite folder, so the billing goldens are untouched).
 
+**Localization (2026-10-20, erp-core-go `phase0_1_design.md` §3.72).**
+- **Strings:** every on-screen string goes through `tr('English text', [args])` (`lib/l10n/l10n.dart`), with `{0}`, `{1}` placeholders. The dictionaries `lib/l10n/strings_<lang>.dart` (ta, hi, ar, ml, te, kn, fr, es) are keyed by the English text, so a new string shows in English until it is translated. `test/localization_test.dart` fails when a `tr()` string is missing from a dictionary or its placeholders differ, so add the translations with the string. Write plurals as two keys (`'1 item'` / `'{0} items'`), never `'s'` suffixes. Data sent to the server (return reasons, method codes) stays English; only the label is translated.
+- **Settings:** `AppSession.refreshShift()` loads `GET /settings/localization/terminal` into `localization`, applies it (`PosLocale`, `PosClock`), and caches it in shared preferences. `main.dart` restores the cache before the first screen. A language change bumps `localeRevision`, and `_LocaleScope` rebuilds every element without losing state.
+- **Layout:** `MaterialApp`'s builder applies `PosLocale.direction`. The wide billing layout puts the cart on `PosLocale.cartOnLeft`, which is physical, the same in RTL.
+- **Times and cash:** show times with `PosClock.parse` / `PosClock.now()` (the merchant's zone), not `toLocal()`. The shift close counts `localization.denominations`.
+
 **Shifts (Phase 13).** `lib/screens/shift_screen.dart` has three parts:
 - `ShiftScreen`: open with a float, the X report, and cash in/out via `CashMovementDialog`, which keeps one idempotency key across retries
 - `CloseShiftScreen`: a denomination count with live variance. When the count doesn't match, it asks for a reason and a manager's code and PIN. It syncs offline sales before counting.

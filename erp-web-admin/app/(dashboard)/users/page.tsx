@@ -14,6 +14,7 @@ import { api, ApiError } from "@/lib/api-client";
 import { missingPermissionHint, usePermissions } from "@/lib/permissions";
 import type { Branch } from "@/lib/types";
 import { dateTime } from "@/lib/format";
+import { LANGUAGE_NAMES, LANGUAGES } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +40,10 @@ type User = {
   home_branch: Ref | null;
   extra_branches: Ref[];
   roles: { role_id: string; name: string }[];
+  // Their own language and direction (erp-core-go migrations/065); null =
+  // the merchant's Localization.
+  language: string | null;
+  text_direction: "auto" | "ltr" | "rtl" | null;
 };
 type Role = { id: string; name: string };
 
@@ -358,6 +363,8 @@ function ManageUser({
           </Button>
         </section>
 
+        <UserLanguage user={user} busy={busy} act={act} />
+
         <section className="space-y-2" aria-label="Roles">
           <h3 className="flex items-center gap-1.5 font-semibold">
             <ShieldCheck className="size-4" aria-hidden /> Roles
@@ -388,5 +395,49 @@ function ManageUser({
         </section>
       </div>
     </Modal>
+  );
+}
+
+// A user's own language and text direction (migrations/065): the back
+// office and any till they sign in at speak it; "" = the merchant's.
+function UserLanguage({ user, busy, act }: { user: User; busy: boolean; act: (fn: () => Promise<User | void>, done: string) => void }) {
+  const [language, setLanguage] = useState(user.language ?? "");
+  const [direction, setDirection] = useState(user.text_direction ?? "");
+  const changed = language !== (user.language ?? "") || direction !== (user.text_direction ?? "");
+  return (
+    <section className="space-y-2" aria-label="Language">
+      <h3 className="font-semibold">Language</h3>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1">
+          <Label htmlFor="user-language">Language</Label>
+          <select id="user-language" value={language} onChange={(e) => setLanguage(e.target.value)} className={`${selectClass} w-56`}>
+            <option value="">The business&apos;s language</option>
+            {LANGUAGES.map((l) => (
+              <option key={l} value={l}>
+                {LANGUAGE_NAMES[l]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="user-direction">Text direction</Label>
+          <select id="user-direction" value={direction} onChange={(e) => setDirection(e.target.value)} className={`${selectClass} w-48`}>
+            <option value="">The business&apos;s</option>
+            <option value="auto">By the language</option>
+            <option value="ltr">Left to right</option>
+            <option value="rtl">Right to left</option>
+          </select>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy || !changed}
+          onClick={() => act(() => api.patch<User>(`/api/v1/users/${user.user_id}`, { language, text_direction: direction }), "Language saved")}
+        >
+          Save language
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">Their screens in the back office and at any till they sign in at. A till&apos;s own text direction still wins there.</p>
+    </section>
   );
 }

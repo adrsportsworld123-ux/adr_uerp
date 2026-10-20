@@ -1,7 +1,9 @@
 "use client";
 
 // One merchant in the console: subscription, usage, invoices, and the
-// lifecycle controls (plan, status, trial / period / grace dates). Every
+// lifecycle controls (plan, status, trial / period / grace dates), and its
+// management (components/merchant/console-management.tsx: account status,
+// company profile, admin passwords). Every
 // change needs a reason and is written to both the platform audit log and
 // the merchant's own audit log.
 import { FormEvent, useCallback, useEffect, useState } from "react";
@@ -17,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/data/page-header";
 import { StatusChip, Tone } from "@/components/data/status-chip";
+import { ConsoleMerchantManagement } from "@/components/merchant/console-management";
 
 type Detail = {
   merchant: { merchant_id: string; code: string; legal_name: string; trade_name: string | null; created_at: string };
@@ -167,6 +170,8 @@ export default function MerchantDetailPage() {
           </ul>
         </div>
       </section>
+
+      <ConsoleMerchantManagement merchantId={id} />
 
       <form onSubmit={save} className="grid gap-4 rounded-xl border bg-card p-5 sm:grid-cols-2 lg:grid-cols-3">
         <h2 className="text-sm font-semibold sm:col-span-2 lg:col-span-3">Change the subscription</h2>

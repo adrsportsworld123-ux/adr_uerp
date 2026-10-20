@@ -64,16 +64,15 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name and code are required")
 		return
 	}
+	// No zone given: the merchant's business clock (migrations/064,
+	// app_merchant_tz — Asia/Kolkata unless the merchant set another).
 	timezone := req.Timezone
-	if timezone == "" {
-		timezone = "Asia/Kolkata"
-	}
 
 	var resp branchResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO branches (id, merchant_id, name, code, timezone, gstin)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, COALESCE(NULLIF($3, ''), app_merchant_tz()), $4)
 			RETURNING id, name, code, timezone, COALESCE(gstin,''), status`,
 			req.Name, req.Code, timezone, req.GSTIN,
 		).Scan(&resp.BranchID, &resp.Name, &resp.Code, &resp.Timezone, &resp.GSTIN, &resp.Status); err != nil {

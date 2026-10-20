@@ -8,7 +8,7 @@
 // or coupon to a live sale stays a POS-terminal action (erp-pos-flutter);
 // a customer's loyalty balance is on their own page (/customers/[id]).
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Copy, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Branch, Category, Coupon, LoyaltyConfig, Promotion, PromotionConfig, VolumeTier } from "@/lib/types";
@@ -61,6 +61,12 @@ export default function PromotionsPage() {
 const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 
+const ACTIVE_OPTIONS: [string, string][] = [
+  ["", "All statuses"],
+  ["active", "Active"],
+  ["inactive", "Inactive"],
+];
+
 // A list's search box and status filter, shared by both sections.
 function ListControls({
   query,
@@ -68,12 +74,14 @@ function ListControls({
   status,
   setStatus,
   label,
+  options = ACTIVE_OPTIONS,
 }: {
   query: string;
   setQuery: (q: string) => void;
   status: string;
   setStatus: (s: string) => void;
   label: string;
+  options?: [string, string][];
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -89,20 +97,41 @@ function ListControls({
         />
       </div>
       <select aria-label={`${label} status`} value={status} onChange={(e) => setStatus(e.target.value)} className={selectClass}>
-        <option value="">All statuses</option>
-        <option value="active">Active</option>
-        <option value="inactive">Inactive</option>
+        {options.map(([value, text]) => (
+          <option key={value} value={value}>
+            {text}
+          </option>
+        ))}
       </select>
     </div>
   );
 }
 
-function RowActions({ active, onEdit, onToggle, onDelete, busy }: { active: boolean; onEdit: () => void; onToggle: () => void; onDelete: () => void; busy: boolean }) {
+function RowActions({
+  active,
+  onEdit,
+  onToggle,
+  onDelete,
+  onCopy,
+  busy,
+}: {
+  active: boolean;
+  onEdit: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+  onCopy?: () => void;
+  busy: boolean;
+}) {
   return (
     <div className="flex justify-end gap-1.5">
       <Button size="sm" variant="outline" onClick={onEdit} aria-label="Edit">
         <Pencil /> Edit
       </Button>
+      {onCopy && (
+        <Button size="sm" variant="outline" onClick={onCopy} disabled={busy} aria-label="Copy" title="Copy into a new promotion to edit">
+          <Copy /> Copy
+        </Button>
+      )}
       <Button size="sm" variant="outline" onClick={onToggle} disabled={busy}>
         {active ? "Deactivate" : "Activate"}
       </Button>
@@ -128,13 +157,29 @@ type PromoType = (typeof PROMO_TYPES)[number]["value"];
 
 const SEGMENTS: Record<string, string> = { any: "Any customer", vip: "VIP", regular: "Regular", new: "New", dormant: "Dormant" };
 
+// A promotion's state (erp-core-go migrations/065): the filter that finds
+// what is running now, and what has expired.
+// "active" / "inactive" keep their meaning (the switch); the rest filter
+// by state.
+const STATE_OPTIONS: [string, string][] = [
+  ["", "All statuses"],
+  ["active", "Active"],
+  ["inactive", "Inactive"],
+  ["current", "Not expired"],
+  ["running", "Running now"],
+  ["scheduled", "Scheduled"],
+  ["expired", "Expired"],
+];
+const STATE_LABEL: Record<Promotion["state"], string> = { running: "Active", scheduled: "Scheduled", expired: "Expired", inactive: "Inactive" };
+const STATE_TONE = { running: "ok", scheduled: "info", expired: "warn", inactive: "muted" } as const;
+
 function offerSummary(p: Promotion): string {
   const c = p.config;
   switch (p.promo_type) {
     case "percent":
-      return `${c.value_percent}% off`;
+      return `${c.value_percent}% off${p.apply_on === "mrp" ? " MRP" : ""}`;
     case "fixed":
-      return `${rupees(c.value_amount ?? 0)} off`;
+      return `${rupees(c.value_amount ?? 0)} off${p.apply_on === "mrp" ? " MRP" : ""}`;
     case "bogo":
       return `Buy ${c.buy_qty} get ${c.get_qty} at ${c.get_discount_pct}% off`;
     case "volume":
@@ -189,10 +234,26 @@ function PromotionsSection() {
     const q = query.trim().toLowerCase();
     return promotions.filter(
       (p) =>
-        (!status || (status === "active") === p.active) &&
+        (!status ||
+          (status === "active" ? p.active : status === "inactive" ? !p.active : status === "current" ? p.state !== "expired" : p.state === status)) &&
         (!q || `${p.name} ${scopeSummary(p)} ${offerSummary(p)}`.toLowerCase().includes(q)),
     );
   }, [promotions, query, status]);
+
+  // Copy: the API makes a switched-off copy, which opens to be edited.
+  async function copy(p: Promotion) {
+    setBusyId(p.promotion_id);
+    try {
+      const c = await api.post<Promotion>(`/api/v1/promotions/${p.promotion_id}/duplicate`, {});
+      toast.success("Copied — edit it, then switch it on");
+      load();
+      setEditing(c);
+    } catch (e) {
+      toast.error(errorText(e, "Could not copy the promotion"));
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <Card>
@@ -201,7 +262,7 @@ function PromotionsSection() {
           Promotions <span className="font-normal text-muted-foreground">({promotions.length})</span>
         </CardTitle>
         <div className="flex flex-wrap items-center gap-2">
-          <ListControls query={query} setQuery={setQuery} status={status} setStatus={setStatus} label="promotions" />
+          <ListControls query={query} setQuery={setQuery} status={status} setStatus={setStatus} label="promotions" options={STATE_OPTIONS} />
           <Button onClick={() => setEditing("new")}>
             <Plus /> New promotion
           </Button>
@@ -236,7 +297,7 @@ function PromotionsSection() {
                 <TableCell className="text-xs">{describeWhen(p)}</TableCell>
                 <TableCell className="tabular text-right">{p.times_used}</TableCell>
                 <TableCell>
-                  <StatusChip status={p.active ? "active" : "inactive"} />
+                  <StatusChip status={p.state} tone={STATE_TONE[p.state]} label={STATE_LABEL[p.state]} />
                 </TableCell>
                 <TableCell>
                   <RowActions
@@ -245,6 +306,7 @@ function PromotionsSection() {
                     onEdit={() => setEditing(p)}
                     onToggle={() => setActive(p, !p.active)}
                     onDelete={() => setDeleting(p)}
+                    onCopy={() => copy(p)}
                   />
                 </TableCell>
               </TableRow>
@@ -301,6 +363,7 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
   const [categories, setCategories] = useState<Category[]>([]);
   const [targetSegment, setTargetSegment] = useState<string>(p?.target_segment ?? "");
   const [stacking, setStacking] = useState<"exclusive" | "stackable">(p?.stacking ?? "exclusive");
+  const [applyOn, setApplyOn] = useState<"selling_price" | "mrp">(p?.apply_on ?? "selling_price");
   const [startsAt, setStartsAt] = useState(toLocalInput(p?.starts_at));
   const [endsAt, setEndsAt] = useState(toLocalInput(p?.ends_at));
   const [days, setDays] = useState<number[]>(p?.days_of_week ?? []);
@@ -379,6 +442,7 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
       target_segment: targetSegment,
       config: buildConfig(),
       stacking,
+      apply_on: applyOn,
       starts_at: fromLocalInput(startsAt),
       ends_at: fromLocalInput(endsAt),
       days_of_week: days,
@@ -511,6 +575,19 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
           minValueAmount={minValueAmount}
           setMinValueAmount={setMinValueAmount}
         />
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="promoApplyOn">Apply on</Label>
+          <select id="promoApplyOn" value={applyOn} onChange={(e) => setApplyOn(e.target.value as typeof applyOn)} className={`${selectClass} w-64`}>
+            <option value="selling_price">Selling price</option>
+            <option value="mrp">MRP</option>
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {applyOn === "mrp"
+              ? `The promotional price is the offer off the MRP, and applies only where it is below the selling price. MRP ${rupees(1000)}, selling price ${rupees(900)}, 20% off: the customer pays ${rupees(800)}.`
+              : `The offer is taken off the selling price. Selling price ${rupees(900)}, 20% off: the customer pays ${rupees(720)}.`}
+          </p>
+        </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="flex flex-col gap-2">

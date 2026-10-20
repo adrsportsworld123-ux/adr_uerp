@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
 import '../printing/document_saver.dart' as doc_saver;
+import '../l10n/l10n.dart';
 import '../printing/printer_service.dart';
 import '../state/session.dart';
 import '../ui/format.dart';
@@ -52,11 +53,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     setState(() => _downloading = false);
     ScaffoldMessenger.of(context).showSnackBar(
       path == null
-          ? SnackBar(content: Text(session.lastError ?? 'Could not download the receipt'))
+          ? SnackBar(content: Text(session.lastError ?? tr('Could not download the receipt')))
           : SnackBar(
-              content: Text('Saved to $path'),
+              content: Text(tr('Saved to {0}', [path])),
               action: doc_saver.canOpenSavedDocuments
-                  ? SnackBarAction(label: 'Open', onPressed: () => doc_saver.openSavedDocument(path))
+                  ? SnackBarAction(label: tr('Open'), onPressed: () => doc_saver.openSavedDocument(path))
                   : null,
             ),
     );
@@ -69,7 +70,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     if (!mounted) return;
     setState(() => _printing = false);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Sent to printer' : (session.lastError ?? 'Could not print'))),
+      SnackBar(content: Text(ok ? tr('Sent to printer') : (session.lastError ?? tr('Could not print')))),
     );
   }
 
@@ -80,17 +81,17 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       builder: (ctx) {
         final controller = TextEditingController();
         return AlertDialog(
-          title: const Text('Void this sale?'),
+          title: Text(tr('Void this sale?')),
           content: TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(labelText: 'Reason', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('Reason'), border: const OutlineInputBorder()),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Cancel'))),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('Void'),
+              child: Text(tr('Void')),
             ),
           ],
         );
@@ -103,7 +104,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     if (!mounted) return;
     setState(() => _voiding = false);
     if (ok) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sale voided')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('Sale voided'))));
       Navigator.of(context).pop();
     } else if (session.lastError != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(session.lastError!)));
@@ -115,11 +116,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     final r = widget.receipt;
     return Scaffold(
       appBar: AppBar(
-        title: Text('Receipt ${r.orderNumber}'),
+        title: Text(tr('Receipt {0}', [r.orderNumber])),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_ethernet),
-            tooltip: 'Printer settings',
+            tooltip: tr('Printer settings'),
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const PrinterSettingsScreen()),
             ),
@@ -135,14 +136,14 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 Text(r.merchantName, style: Theme.of(context).textTheme.titleLarge, textAlign: TextAlign.center),
                 Text(r.branchName, style: Theme.of(context).textTheme.bodyMedium),
                 const SizedBox(height: 4),
-                Text('Order ${r.orderNumber}', style: Theme.of(context).textTheme.bodySmall),
-                Text('Cashier: ${r.cashierName}', style: Theme.of(context).textTheme.bodySmall),
+                Text(tr('Order {0}', [r.orderNumber]), style: Theme.of(context).textTheme.bodySmall),
+                Text(tr('Cashier: {0}', [r.cashierName]), style: Theme.of(context).textTheme.bodySmall),
                 if (r.status != 'finalized')
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Chip(label: Text(statusLabel(r.status))),
                   ),
-                if (r.customerName != null) Text('Customer: ${r.customerName}', style: Theme.of(context).textTheme.bodySmall),
+                if (r.customerName != null) Text(tr('Customer: {0}', [r.customerName]), style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
           ),
@@ -156,7 +157,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                     child: Text([
                       '${line.productName}\n${r.showSku && line.sku.trim().toLowerCase() != line.productName.trim().toLowerCase() ? '${line.sku} · ' : ''}'
                           '${line.quantity} × ${formatRupees(line.unitPrice)}',
-                      if (line.openPrice) line.priceApprovedBy == null ? ' · open price' : ' · open price, approved by ${line.priceApprovedBy}',
+                      if (line.openPrice) line.priceApprovedBy == null ? tr(' · open price') : tr(' · open price, approved by {0}', [line.priceApprovedBy]),
                     ].join()),
                   ),
                   Text(formatRupees(line.lineTotal)),
@@ -164,29 +165,28 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               ),
             ),
           const Divider(height: 32),
-          _totalRow('Subtotal', r.subtotal),
+          _totalRow(tr('Subtotal'), r.subtotal),
           if (double.tryParse(r.discountTotal) != null && double.parse(r.discountTotal) > 0)
-            _totalRow('Discount', '-${r.discountTotal}'),
+            _totalRow(tr('Discount'), '-${r.discountTotal}'),
           if (r.taxBreakup?.rows.isNotEmpty == true)
             for (final t in r.taxBreakup!.rows) _totalRow(t.label, t.amount)
           else
-            _totalRow('Tax', r.taxTotal),
+            _totalRow(tr('Tax'), r.taxTotal),
           if (r.taxBreakup != null && r.taxBreakup!.split && r.taxBreakup!.placeOfSupply.isNotEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: Text(
-                'Place of supply ${r.taxBreakup!.placeOfSupply} – ${r.taxBreakup!.placeOfSupplyName}'
-                '${r.taxBreakup!.interState ? ' · inter-state' : ''}',
+                tr('Place of supply {0} – {1}{2}', [r.taxBreakup!.placeOfSupply, r.taxBreakup!.placeOfSupplyName, r.taxBreakup!.interState ? ' · ${tr('inter-state')}' : '']),
                 key: const Key('receipt-place-of-supply'),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
           if (r.hasRoundOff) ...[
-            _totalRow('Total', r.grandTotal),
-            _totalRow('Round off', r.roundOff.replaceFirst('-', ''), sign: '−', key: const Key('receipt-round-off')),
-            _totalRow('Net payable', r.payableTotal, emphasize: true),
+            _totalRow(tr('Total'), r.grandTotal),
+            _totalRow(tr('Round off'), r.roundOff.replaceFirst('-', ''), sign: '−', key: const Key('receipt-round-off')),
+            _totalRow(tr('Net payable'), r.payableTotal, emphasize: true),
           ] else
-            _totalRow('Total', r.grandTotal, emphasize: true),
+            _totalRow(tr('Total'), r.grandTotal, emphasize: true),
           const SizedBox(height: 16),
           for (final p in r.payments)
             _totalRow(p.method.toUpperCase(), p.amount),
@@ -196,7 +196,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             icon: _printing
                 ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.print),
-            label: const Text('Print receipt'),
+            label: Text(tr('Print receipt')),
           ),
           const SizedBox(height: 8),
           Row(
@@ -208,18 +208,18 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                   icon: _downloading
                       ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.download),
-                  label: const Text('Download PDF'),
+                  label: Text(tr('Download PDF')),
                 ),
               ),
               PopupMenuButton<String>(
                 key: const Key('receipt-download-format'),
-                tooltip: 'Download on other paper',
+                tooltip: tr('Download on other paper'),
                 enabled: !_downloading,
                 icon: const Icon(Icons.arrow_drop_down),
                 onSelected: (f) => _download(format: f),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'a4', child: Text('A4 PDF')),
-                  PopupMenuItem(value: 'thermal', child: Text('80 mm roll PDF')),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'a4', child: Text('A4 PDF')),
+                  PopupMenuItem(value: 'thermal', child: Text(tr('80 mm roll PDF'))),
                 ],
               ),
             ],
@@ -230,7 +230,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               key: const Key('receipt-return'),
               onPressed: widget.onReturn,
               icon: const Icon(Icons.assignment_return_outlined),
-              label: const Text('Return items'),
+              label: Text(tr('Return items')),
             ),
           ],
           if (!widget.fromHistory) ...[
@@ -240,13 +240,13 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
               icon: _voiding
                   ? const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.undo),
-              label: const Text('Void this sale'),
+              label: Text(tr('Void this sale')),
             ),
           ],
           const SizedBox(height: 8),
           FilledButton.tonal(
             onPressed: () => Navigator.of(context).pop(),
-            child: Text(widget.fromHistory ? 'Close' : 'New sale'),
+            child: Text(widget.fromHistory ? tr('Close') : tr('New sale')),
           ),
         ],
       ),

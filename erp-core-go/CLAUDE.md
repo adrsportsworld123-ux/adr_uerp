@@ -135,6 +135,14 @@ Phase 1 without this — it's a straightforward `UPDATE` inside the existing
 7. PIN quick-login + device binding
 8. Basic daily/stock/EOD reports
 
+## Localization (2026-10-20)
+
+The merchant's business clock is `app_merchant_tz()` in SQL and `locale.Location(ctx, tx)` in Go (`internal/locale`, `docs/phase0_1_design.md` §3.72). Never write `'Asia/Kolkata'` or a fixed IST zone in new date logic; platform billing (`subscriptions/limits.go`) is the one deliberate exception.
+
+## Money through bank accounts (2026-10-20)
+
+Use `accounting.PaymentLedgerCode(ctx, tx, method, bankAccountID)` / `BankLedgerCode` for any new payment that can go through a bank account: "" stays on Bank (1002). Cheques are written through `banking.Issue`, and receivable payments through `customers.ApplyReceivablePayment` (§3.73). Audit `Action` must be `create`/`update`/`delete` (a CHECK on `audit_logs`); put the detail in `Reason`.
+
 ## Repo layout
 
 ```

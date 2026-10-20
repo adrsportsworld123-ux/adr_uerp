@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../state/device_id.dart';
 import '../state/terminal_config.dart';
 import '../ui/theme.dart';
@@ -63,7 +64,7 @@ class _PairingScreenState extends State<PairingScreen> {
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } catch (_) {
-      setState(() => _error = "Can't reach the server. Pairing needs a connection — check the network and try again.");
+      setState(() => _error = tr('Can\'t reach the server. Pairing needs a connection — check the network and try again.'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -87,11 +88,10 @@ class _PairingScreenState extends State<PairingScreen> {
                   children: [
                     Icon(Icons.point_of_sale, size: 40, color: theme.colorScheme.primary),
                     const SizedBox(height: 12),
-                    Text('Pair this terminal', style: theme.textTheme.headlineSmall, textAlign: TextAlign.center),
+                    Text(tr('Pair this terminal'), style: theme.textTheme.headlineSmall, textAlign: TextAlign.center),
                     const SizedBox(height: 8),
                     Text(
-                      'In the web admin, open Organization › POS Terminals, choose this till and press "Pair device". '
-                      'Enter the code it shows. Codes work once and expire after 15 minutes.',
+                      tr('In the web admin, open Organization › POS Terminals, choose this till and press "Pair device". Enter the code it shows. Codes work once and expire after 15 minutes.'),
                       style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       textAlign: TextAlign.center,
                     ),
@@ -100,7 +100,7 @@ class _PairingScreenState extends State<PairingScreen> {
                       controller: _merchantController,
                       autofocus: true,
                       textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(labelText: 'Merchant code', hintText: 'e.g. adr_sports_world'),
+                      decoration: InputDecoration(labelText: tr('Merchant code'), hintText: tr('e.g. adr_sports_world')),
                       onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: 12),
@@ -114,7 +114,7 @@ class _PairingScreenState extends State<PairingScreen> {
                         FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9]')),
                         TextInputFormatter.withFunction((o, n) => n.copyWith(text: n.text.toUpperCase())),
                       ],
-                      decoration: const InputDecoration(labelText: 'Pairing code', counterText: ''),
+                      decoration: InputDecoration(labelText: tr('Pairing code'), counterText: ''),
                       onChanged: (_) => setState(() {}),
                       onSubmitted: (_) => _pair(),
                     ),
@@ -127,7 +127,7 @@ class _PairingScreenState extends State<PairingScreen> {
                       onPressed: _canSubmit ? _pair : null,
                       child: _busy
                           ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Text('Pair terminal'),
+                          : Text(tr('Pair terminal')),
                     ),
                   ],
                 ),

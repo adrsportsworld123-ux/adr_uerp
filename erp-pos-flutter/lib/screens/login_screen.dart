@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../l10n/l10n.dart';
 import '../state/session.dart';
 import '../ui/theme.dart';
 
@@ -44,14 +45,13 @@ class _LoginScreenState extends State<LoginScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Unpair this device?'),
+        title: Text(tr('Unpair this device?')),
         content: Text(
-          'This device will stop being ${session.terminalName}. To use it as a till again, '
-          'an admin issues a new pairing code on the POS Terminals screen.',
+          tr('This device will stop being {0}. To use it as a till again, an admin issues a new pairing code on the POS Terminals screen.', [session.terminalName]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Unpair')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Unpair'))),
         ],
       ),
     );
@@ -129,9 +129,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 16),
                 ],
                 SegmentedButton<_LoginMode>(
-                  segments: const [
-                    ButtonSegment(value: _LoginMode.password, label: Text('Password')),
-                    ButtonSegment(value: _LoginMode.pin, label: Text('PIN')),
+                  segments: [
+                    ButtonSegment(value: _LoginMode.password, label: Text(tr('Password'))),
+                    const ButtonSegment(value: _LoginMode.pin, label: Text('PIN')),
                   ],
                   selected: {_mode},
                   onSelectionChanged: (s) => setState(() => _mode = s.first),
@@ -143,11 +143,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   onPressed: _submitting ? null : _submit,
                   child: _submitting
                       ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Log in'),
+                      : Text(tr('Log in')),
                 ),
                 if (context.read<AppSession>().onUnpairDevice != null) ...[
                   const SizedBox(height: 8),
-                  TextButton(onPressed: _submitting ? null : _confirmUnpair, child: const Text('Unpair this device')),
+                  TextButton(onPressed: _submitting ? null : _confirmUnpair, child: Text(tr('Unpair this device'))),
                 ],
               ],
             ),
@@ -160,27 +160,27 @@ class _LoginScreenState extends State<LoginScreen> {
   List<Widget> _passwordFields() => [
         TextField(
           controller: _merchantCodeController,
-          decoration: const InputDecoration(labelText: 'Merchant code', border: OutlineInputBorder()),
+          decoration: InputDecoration(labelText: tr('Merchant code'), border: const OutlineInputBorder()),
         ),
         const SizedBox(height: 12),
         TextField(
           controller: _emailController,
           keyboardType: TextInputType.emailAddress,
-          decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+          decoration: InputDecoration(labelText: tr('Email'), border: const OutlineInputBorder()),
         ),
         const SizedBox(height: 12),
         TextField(
           controller: _passwordController,
           obscureText: true,
           onSubmitted: (_) => _submit(),
-          decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
+          decoration: InputDecoration(labelText: tr('Password'), border: const OutlineInputBorder()),
         ),
       ];
 
   List<Widget> _pinFields() => [
         TextField(
           controller: _employeeCodeController,
-          decoration: const InputDecoration(labelText: 'Employee code', border: OutlineInputBorder()),
+          decoration: InputDecoration(labelText: tr('Employee code'), border: const OutlineInputBorder()),
         ),
         const SizedBox(height: 12),
         TextField(
@@ -192,8 +192,7 @@ class _LoginScreenState extends State<LoginScreen> {
           decoration: const InputDecoration(labelText: 'PIN', border: OutlineInputBorder(), counterText: ''),
         ),
         Text(
-          'Sign in with your employee code and PIN. Only the device paired to '
-          'this terminal is accepted (FRD §18).',
+          tr('Sign in with your employee code and PIN. Only the device paired to this terminal is accepted (FRD §18).'),
           style: Theme.of(context).textTheme.bodySmall,
           textAlign: TextAlign.center,
         ),

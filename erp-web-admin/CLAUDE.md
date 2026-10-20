@@ -57,6 +57,26 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 - **The Pricing screen's bulk-update form has no price-range filter UI** (category and brand filters were added 2026-10-11) even though `POST /pricing/bulk-update/*` accepts one.
 - ~~The Party Ledger screen's "customer" option still requires pasting a raw customer ID~~ — closed 2026-10-18: Party Ledger and the voucher form choose customers and suppliers with `PartyPicker` (`components/data/party-picker.tsx`, server search), and the ledger takes dates and shows a running balance (`erp-core-go` `phase0_1_design.md` §3.61).
 
+**Localization (2026-10-20, erp-core-go `phase0_1_design.md` §3.72).** Organization → Localization (`/localization`, `localization.manage`) sets the merchant's language (en, ta, hi, ar, ml, te, kn, fr, es), time zone (optionally applied to every branch), text direction, POS cart side and cash denominations. POS Terminals has a per-till "Screen layout" dialog (text direction, cart side; "Same as the merchant" clears it).
+- **Strings:** `lib/i18n.tsx` `t("English", [args])` translates the shell (sidebar, breadcrumb, header, command palette), login, the Localization page and the terminal layout dialog. `STATUS_LABEL` / `METHOD_LABEL` / `CHANNEL_LABEL` / `SOURCE_LABEL` translate on lookup. Dictionaries live in `lib/locales/<lang>.ts`, keyed by the English text, so a missing string shows in English. Other screens are still English: wrap new shell-level text in `t()` and add it to every dictionary.
+- **Direction:** `LocaleProvider` sets `<html lang dir>`. Use logical classes (`ps-`/`pe-`, `start-`/`end-`, `border-e`, `text-start`) in shared layout, not `left`/`right`.
+- **Dates:** `dateTime()` and `localDate()` use the merchant's zone.
+- **Cash Reconciliation:** counts the merchant's denominations.
+- **Tests:** `e2e/localization.spec.ts` puts everything back to English in `finally`. Run e2e against `http://localhost:<port>`, not `127.0.0.1`: Next 16 blocks dev resources for an origin that isn't allowed, so the page never hydrates.
+
+**Merchant, banking and loans (2026-10-20, erp-core-go `phase0_1_design.md` §3.73).**
+- **Merchant:** Organization → Company Profile (`/company-profile`, `merchant.profile`) and the console merchant page's Access / Admins / Company profile (`components/merchant/`, one `ProfileForm` for both). The console page has two status controls: the subscription's "Status" and the account's "Access". Keep their labels apart; `phase16-subscriptions.spec.ts` finds "Status" by label.
+- **Promotions:** "Apply on" (selling price | MRP), Copy (`POST /promotions/{id}/duplicate`, opens the copy to edit), and a state filter and chip. The "active"/"inactive" filter values keep their old meaning for `promotions.spec.ts`.
+- **Banking:**
+  - Finance → Bank Accounts (cheque books inside) and Cheques (`/cheques?tab=issued|received`).
+  - `components/banking/bank-account-select.tsx` (`useBankAccounts`, `defaultAccount`, `BankAccountSelect`) is the one bank-account picker.
+  - Forms show it only when the business has a bank account, so with none they send what they always sent.
+  - The bill payment form writes a cheque on the register when the method is cheque and an account is chosen.
+- **Loans:** HR → Employee Loans (`/hr/loans`), with the payroll page's Loan column.
+- **Parties:** `PartyPicker` / `PARTY_LABEL` cover employee and bank_account (`GET /accounting/parties`).
+- **Languages:** the Users dialog and My Account set a user's own language.
+- **Tests:** `e2e/merchant-banking-loans.spec.ts`.
+
 **Reporting round (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60–§3.63):** the sales dashboard (`/dashboard`, recharts; widgets per role under `/dashboard/settings`), X & Z reports (`/reports/x-z`), the Report Library (`/reports/library`) and Saved Reports (`/reports/saved`). `e2e/reports-round10.spec.ts` covers them. The app shell puts focus back at the top after a navigation that left nothing focused (recharts' focusable charts otherwise sent the next Tab past the end of the new page).
 
 ## Working conventions to keep

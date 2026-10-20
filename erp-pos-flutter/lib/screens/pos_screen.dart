@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../state/session.dart';
 import '../ui/approval_pin_pad.dart';
 import '../ui/format.dart';
@@ -173,7 +174,7 @@ class _PosScreenState extends State<PosScreen> {
   /// take payment believing the discount still stands.
   void _noteClearedDiscounts(bool ok) {
     if (ok && mounted && context.read<AppSession>().currentOrder?.discountsCleared == true) {
-      _snack('Discounts were removed because the cart changed. Apply them again before payment.');
+      _snack(tr('Discounts were removed because the cart changed. Apply them again before payment.'));
     }
   }
 
@@ -187,7 +188,7 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _editQuantity(OrderLine line) async {
-    final value = await _promptText(context, title: line.productName, label: 'Quantity', confirm: 'Update');
+    final value = await _promptText(context, title: line.productName, label: tr('Quantity'), confirm: tr('Update'));
     final qty = double.tryParse(value ?? '');
     if (qty == null || qty <= 0 || !mounted) return;
     final session = context.read<AppSession>();
@@ -222,47 +223,47 @@ class _PosScreenState extends State<PosScreen> {
           reason: input.reason,
         ));
     _snack(ok == true
-        ? (input.fixed ? '${formatRupeesNum(input.value)} discount applied' : 'Discount applied')
+        ? (input.fixed ? tr('{0} discount applied', [formatRupeesNum(input.value)]) : tr('Discount applied'))
         : (session.lastError?.contains('authorizer') == true
-            ? 'The approver’s code or PIN doesn’t allow a discount this size'
-            : session.lastError ?? 'Could not apply the discount'));
+            ? tr('The approver’s code or PIN doesn’t allow a discount this size')
+            : session.lastError ?? tr('Could not apply the discount')));
     _refocusScan();
   }
 
   Future<void> _holdOrder() async {
     if (!_liveCart) return;
     final session = context.read<AppSession>();
-    final note = await _promptText(context, title: 'Hold this cart', label: 'Note (optional)', confirm: 'Hold');
+    final note = await _promptText(context, title: tr('Hold this cart'), label: tr('Note (optional)'), confirm: tr('Hold'));
     if (note == null) return _refocusScan();
     final ok = await _withBusy(() => session.holdCurrentOrder(note: note.isEmpty ? null : note));
     if (ok == true) setState(() => _selectedLineId = null);
-    _snack(ok == true ? 'Cart held — recall it with F9' : (session.lastError ?? 'Could not hold the cart'));
+    _snack(ok == true ? tr('Cart held — recall it with F9') : (session.lastError ?? tr('Could not hold the cart')));
     _refocusScan();
   }
 
   Future<void> _openHeldOrders() async {
     if (context.read<AppSession>().offlineMode) {
-      _snack('Held orders need a connection');
+      _snack(tr('Held orders need a connection'));
       return;
     }
     final unavailable = await Navigator.of(context).push<List<UnavailableLine>>(MaterialPageRoute(builder: (_) => const HeldOrdersScreen()));
     if (unavailable == null || !mounted) return _refocusScan();
     if (unavailable.isEmpty) {
-      _snack('Cart recalled');
+      _snack(tr('Cart recalled'));
     } else {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Cart recalled — some items need attention'),
+          title: Text(tr('Cart recalled — some items need attention')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Stock could not be held for:'),
+              Text(tr('Stock could not be held for:')),
               const SizedBox(height: 8),
               for (final line in unavailable) Text('• ${line.reason}'),
               const SizedBox(height: 8),
-              const Text('Remove or adjust these lines before checkout.'),
+              Text(tr('Remove or adjust these lines before checkout.')),
             ],
           ),
           actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
@@ -316,9 +317,8 @@ class _PosScreenState extends State<PosScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Sale complete'),
-          content: Text('Receipt ${o.orderNumber}\nTotal ${formatRupees(o.payableTotal)}'
-              '${session.isCurrentOrderLocal ? '\nSaved offline — it will sync automatically.' : ''}'),
+          title: Text(tr('Sale complete')),
+          content: Text(tr('Receipt {0}\nTotal {1}{2}', [o.orderNumber, formatRupees(o.payableTotal), session.isCurrentOrderLocal ? '\n${tr('Saved offline — it will sync automatically.')}' : ''])),
           actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
         ),
       );
@@ -332,9 +332,9 @@ class _PosScreenState extends State<PosScreen> {
     final session = context.read<AppSession>();
     await _withBusy(session.syncNow);
     _snack(session.offlineMode
-        ? 'Still offline — sales are safe on this device and will sync when the connection is back'
+        ? tr('Still offline — sales are safe on this device and will sync when the connection is back')
         : session.pendingSyncCount == 0
-            ? 'All sales synced'
+            ? tr('All sales synced')
             : '${session.pendingSyncCount} sale(s) still waiting to sync');
   }
 
@@ -386,11 +386,11 @@ class _PosScreenState extends State<PosScreen> {
           final ok = await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
-              title: const Text('Sign out with items in the cart?'),
-              content: const Text('Hold the cart first (F8) if you want to come back to it.'),
+              title: Text(tr('Sign out with items in the cart?')),
+              content: Text(tr('Hold the cart first (F8) if you want to come back to it.')),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign out')),
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel'))),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Sign out'))),
               ],
             ),
           );
@@ -484,7 +484,7 @@ class _PosScreenState extends State<PosScreen> {
                   color: theme.pos.warnSoft,
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Text(
-                    'Offline — cash, card and UPI sales continue and sync later. Discounts, customers, coupons and credit need a connection.',
+                    tr('Offline — cash, card and UPI sales continue and sync later. Discounts, customers, coupons and credit need a connection.'),
                     style: TextStyle(color: theme.pos.warn),
                   ),
                 ),
@@ -492,10 +492,14 @@ class _PosScreenState extends State<PosScreen> {
                 child: LayoutBuilder(builder: (context, constraints) {
                   final w = constraints.maxWidth;
                   if (w >= 1000) {
-                    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      Expanded(child: productPane),
-                      SizedBox(width: w >= 1280 ? 420 : 380, child: cartPanel()),
-                    ]);
+                    // The cart's side is physical (Localization, migrations/064:
+                    // the terminal's cart side), the same in either text direction.
+                    final cart = SizedBox(width: w >= 1280 ? 420 : 380, child: cartPanel());
+                    return Row(
+                      textDirection: TextDirection.ltr,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: PosLocale.cartOnLeft ? [cart, Expanded(child: productPane)] : [Expanded(child: productPane), cart],
+                    );
                   }
                   if (w >= 640) {
                     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -507,7 +511,7 @@ class _PosScreenState extends State<PosScreen> {
                     Expanded(child: productPane),
                     _PhoneCartBar(
                       onOpen: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => _scoped(Scaffold(appBar: AppBar(title: const Text('Cart')), body: SafeArea(child: cartPanel()))),
+                        builder: (_) => _scoped(Scaffold(appBar: AppBar(title: Text(tr('Cart'))), body: SafeArea(child: cartPanel()))),
                       )),
                     ),
                   ]);
@@ -546,10 +550,10 @@ class _PhoneCartBar extends StatelessWidget {
           child: Row(children: [
             Expanded(
               child: Text(lines.isEmpty
-                  ? 'Cart is empty'
-                  : '${formatQty(count.toString())} item${count == 1 ? '' : 's'} · ${formatRupees(order!.grandTotal)}'),
+                  ? tr('Cart is empty')
+                  : '${count == 1 ? tr('1 item') : tr('{0} items', [formatQty(count.toString())])} · ${formatRupees(order!.grandTotal)}'),
             ),
-            const Text('Review & pay'),
+            Text(tr('Review & pay')),
             const Icon(Icons.chevron_right),
           ]),
         ),

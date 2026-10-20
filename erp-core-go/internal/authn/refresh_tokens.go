@@ -95,3 +95,11 @@ func revokeRefreshToken(ctx context.Context, tx pgx.Tx, id string) error {
 	_, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, id)
 	return err
 }
+
+// MerchantActive reports whether a merchant may sign in (merchants.status
+// 'active'). merchants has no RLS: it is how a login finds its tenant.
+func MerchantActive(ctx context.Context, database *db.DB, merchantID string) bool {
+	var ok bool
+	err := database.Pool.QueryRow(ctx, `SELECT status = 'active' FROM merchants WHERE id::text = $1`, merchantID).Scan(&ok)
+	return err == nil && ok
+}

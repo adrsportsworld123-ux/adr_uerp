@@ -15,6 +15,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/softdelete"
 )
 
@@ -311,7 +312,7 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 		ReceivedOn string `json:"received_on"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	receivedOn, err := pastDate(req.ReceivedOn)
+	receivedOn, err := pastDate(req.ReceivedOn, locale.MerchantLocation(r.Context(), h.DB, claims.TenantID))
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "received_on: "+err.Error())
 		return
@@ -454,7 +455,7 @@ func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receive
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reference_id, performed_by, created_at)
 			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'purchase', $3, 'grn', $4, $5,
-			        COALESCE(($6::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()))`,
+			        COALESCE(($6::date + time '12:00') AT TIME ZONE app_merchant_tz(), now()))`,
 			branchID, l.variantID, l.quantity, grnID, userID, receivedOn); err != nil {
 			return err
 		}
@@ -462,7 +463,7 @@ func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receive
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE goods_receipt_notes SET status = 'completed',
-		  completed_at = COALESCE(($2::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()) WHERE id = $1`, grnID, receivedOn); err != nil {
+		  completed_at = COALESCE(($2::date + time '12:00') AT TIME ZONE app_merchant_tz(), now()) WHERE id = $1`, grnID, receivedOn); err != nil {
 		return err
 	}
 	return nil

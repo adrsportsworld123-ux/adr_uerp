@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../state/session.dart';
 import 'approval_pin_pad.dart';
 import 'format.dart';
@@ -87,9 +88,9 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
   String? get _problem {
     final v = _value;
     if (_price.text.trim().isEmpty) return null;
-    if (v == null) return 'Enter a number';
-    if (!_range.allows(v)) return 'Must be between ${formatRupees(_range.min)} and ${formatRupees(_range.max)}';
-    if (_needsApproval && widget.offline) return 'Above ${formatRupees(_range.approvalAbove!)} needs a manager\'s approval, which needs a connection';
+    if (v == null) return tr('Enter a number');
+    if (!_range.allows(v)) return tr('Must be between {0} and {1}', [formatRupees(_range.min), formatRupees(_range.max)]);
+    if (_needsApproval && widget.offline) return tr('Above {0} needs a manager\'s approval, which needs a connection', [formatRupees(_range.approvalAbove!)]);
     return null;
   }
 
@@ -121,8 +122,7 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Open price · ${formatRupees(_range.min)} to ${formatRupees(_range.max)}'
-                '${_range.approvalAbove == null ? '' : ' · approval above ${formatRupees(_range.approvalAbove!)}'}',
+                tr('Open price · {0} to {1}{2}', [formatRupees(_range.min), formatRupees(_range.max), _range.approvalAbove == null ? '' : ' · ${tr('approval above {0}', [formatRupees(_range.approvalAbove!)])}']),
                 style: theme.textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
@@ -137,7 +137,7 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
                 onChanged: (_) => setState(() {}),
                 onSubmitted: (_) => _submit(),
                 decoration: InputDecoration(
-                  labelText: 'Price',
+                  labelText: tr('Price'),
                   prefixText: '${PosCurrency.symbol} ',
                   border: const OutlineInputBorder(),
                   errorText: _problem,
@@ -149,7 +149,7 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
                   alignment: Alignment.centerLeft,
                   child: TextButton(
                     onPressed: () => setState(() => _price.text = _plain(suggested)),
-                    child: Text('Use suggested ${formatRupees(widget.prompt.suggestedPrice)}'),
+                    child: Text(tr('Use suggested {0}', [formatRupees(widget.prompt.suggestedPrice)])),
                   ),
                 ),
               const SizedBox(height: 8),
@@ -158,23 +158,23 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
                 controller: _description,
                 maxLength: 120,
                 textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  labelText: 'Description (optional)',
-                  helperText: 'Prints on the receipt instead of the item name',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: tr('Description (optional)'),
+                  helperText: tr('Prints on the receipt instead of the item name'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
               if (_needsApproval && !widget.offline) ...[
                 const SizedBox(height: 8),
-                Text('Manager approval', style: theme.textTheme.titleSmall),
+                Text(tr('Manager approval'), style: theme.textTheme.titleSmall),
                 const SizedBox(height: 8),
                 TextField(
                   key: const Key('open-price-approver'),
                   controller: _approver,
                   textCapitalization: TextCapitalization.characters,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(labelText: 'Approver employee code', border: OutlineInputBorder(), isDense: true),
+                  decoration: InputDecoration(labelText: tr('Approver employee code'), border: const OutlineInputBorder(), isDense: true),
                 ),
                 const SizedBox(height: 8),
                 ApprovalPinPad(onChanged: (pin) => setState(() => _pin = pin)),
@@ -189,11 +189,11 @@ class _OpenPriceDialogState extends State<OpenPriceDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
         FilledButton(
           key: const Key('open-price-add'),
           onPressed: _canAdd ? _submit : null,
-          child: Text(_value == null ? 'Add' : 'Add at ${formatRupeesNum(_value!)}'),
+          child: Text(_value == null ? tr('Add') : tr('Add at {0}', [formatRupeesNum(_value!)])),
         ),
       ],
     );

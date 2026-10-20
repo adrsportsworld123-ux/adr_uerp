@@ -113,8 +113,8 @@ class _ProductPaneState extends State<_ProductPane> {
             // are ignored while a previous scan is still being added.
             style: const TextStyle(fontSize: 17),
             decoration: InputDecoration(
-              labelText: 'Scan or enter barcode',
-              hintText: 'or type a name / SKU to search',
+              labelText: tr('Scan or enter barcode'),
+              hintText: tr('or type a name / SKU to search'),
               prefixIcon: Icon(Icons.qr_code_scanner, color: theme.colorScheme.primary),
               suffixIcon: widget.busy
                   ? const Padding(
@@ -128,14 +128,14 @@ class _ProductPaneState extends State<_ProductPane> {
           if (_categories.isNotEmpty && !session.offlineMode) ...[
             const SizedBox(height: 12),
             _chipRow([
-              _chip('All', _parentId == null, () => _selectCategory(null)),
+              _chip(tr('All'), _parentId == null, () => _selectCategory(null)),
               for (final c in _categories.where((c) => c.parentId == null))
                 _chip(c.name, _parentId == c.categoryId, () => _selectCategory(c.categoryId)),
             ]),
             if (_subcategories.isNotEmpty) ...[
               const SizedBox(height: 8),
               _chipRow([
-                _chip('All ${_nameOf(_parentId!)}', _subcategoryId == null, () => _selectSubcategory(null)),
+                _chip(tr('All {0}', [_nameOf(_parentId!)]), _subcategoryId == null, () => _selectSubcategory(null)),
                 for (final c in _subcategories) _chip(c.name, _subcategoryId == c.categoryId, () => _selectSubcategory(c.categoryId)),
               ]),
             ],
@@ -185,12 +185,12 @@ class _ProductPaneState extends State<_ProductPane> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.search_off, size: 36, color: theme.colorScheme.onSurfaceVariant),
           const SizedBox(height: 8),
-          Text(q.isEmpty ? 'No products to show' : 'No product matches “$q”', style: theme.textTheme.titleSmall),
+          Text(q.isEmpty ? tr('No products to show') : tr('No product matches “{0}”', [q]), style: theme.textTheme.titleSmall),
           const SizedBox(height: 4),
           Text(
             context.read<AppSession>().offlineMode
-                ? 'Offline: showing the catalog cached on this device.'
-                : 'Try a shorter name, the SKU, or scan the barcode.',
+                ? tr('Offline: showing the catalog cached on this device.')
+                : tr('Try a shorter name, the SKU, or scan the barcode.'),
             style: theme.textTheme.bodySmall,
           ),
         ]),
@@ -230,18 +230,17 @@ class _ProductTile extends StatelessWidget {
     final stockText = available == null
         ? null
         : out
-            ? 'Out of stock'
+            ? tr('Out of stock')
             : low
-                ? '${formatQty(available.toString())} left'
-                : '${formatQty(available.toString())} in stock';
+                ? tr('{0} left', [formatQty(available.toString())])
+                : tr('{0} in stock', [formatQty(available.toString())]);
     // migrations/063: the product's own colour, else an open-price item's
     // standard one, marks the tile — a tint, a coloured edge and (for an
     // open-price item) a label, so colour is never the only signal.
     final accent = tileAccent(item, pos);
     return Semantics(
       button: true,
-      label: '${item.lookup.productName}${item.openPrice ? ', open price' : ''}, '
-          '${formatRupees(item.lookup.sellingPrice)}${stockText != null ? ', $stockText' : ''}. Add to cart.',
+      label: tr('{0}{1}, {2}{3}. Add to cart.', [item.lookup.productName, item.openPrice ? tr(', open price') : '', formatRupees(item.lookup.sellingPrice), stockText != null ? ', $stockText' : '']),
       excludeSemantics: true,
       child: Opacity(
         opacity: out ? 0.55 : 1,
@@ -271,7 +270,7 @@ class _ProductTile extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                         decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(6)),
-                        child: Text('Open price',
+                        child: Text(tr('Open price'),
                             key: const Key('open-price-badge'),
                             style: theme.textTheme.labelSmall?.copyWith(color: _onColor(accent!), fontWeight: FontWeight.w600)),
                       ),

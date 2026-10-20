@@ -250,6 +250,7 @@ export default function PayrollPage() {
                   <TableHead>ESI</TableHead>
                   <TableHead>PT</TableHead>
                   <TableHead>TDS</TableHead>
+                  <TableHead>Loan</TableHead>
                   <TableHead>Net pay</TableHead>
                 </TableRow>
               </TableHeader>
@@ -263,6 +264,7 @@ export default function PayrollPage() {
                     <TableCell>{p.esi_employee}</TableCell>
                     <TableCell>{p.pt_amount}</TableCell>
                     <TableCell>{p.tds_amount}</TableCell>
+                    <TableCell title="Employee loan and advance instalments">{Number(p.loan_deduction ?? 0) > 0 ? p.loan_deduction : "—"}</TableCell>
                     <TableCell className="font-medium">{p.net_pay}</TableCell>
                   </TableRow>
                 ))}

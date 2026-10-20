@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../l10n/l10n.dart';
+
 /// Supervisor PIN entry (design system §06, Phase 12): masked dots plus a
 /// large on-screen keypad for touch terminals, and the hardware keyboard
 /// works too (digits, Backspace). Reports the PIN through [onChanged]; the
@@ -78,7 +80,7 @@ class _ApprovalPinPadState extends State<ApprovalPinPad> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Semantics(
-              label: 'PIN, ${_pin.length} digits entered',
+              label: tr('PIN, {0} digits entered', [_pin.length]),
               child: Row(
                 key: const Key('pin-dots'),
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -107,9 +109,9 @@ class _ApprovalPinPadState extends State<ApprovalPinPad> {
               childAspectRatio: 2.2,
               children: [
                 for (final d in ['1', '2', '3', '4', '5', '6', '7', '8', '9']) key(d, onTap: () => _digit(d)),
-                key('Clear', onTap: () => _set(''), child: const Text('Clear')),
+                key(tr('Clear'), onTap: () => _set(''), child: Text(tr('Clear'))),
                 key('0', onTap: () => _digit('0')),
-                key('⌫', onTap: _back, child: const Icon(Icons.backspace_outlined), semantics: 'Delete last digit'),
+                key('⌫', onTap: _back, child: const Icon(Icons.backspace_outlined), semantics: tr('Delete last digit')),
               ],
             ),
           ],

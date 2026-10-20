@@ -262,8 +262,15 @@ func clearDiscountLayers(ctx context.Context, tx pgx.Tx, orderID string) (bool, 
 // which re-plans a cart's promotions from scratch when they are its only
 // layers: every line back to undiscounted, every layer row removed.
 func ClearDiscountLayers(ctx context.Context, tx pgx.Tx, orderID string) error {
-	_, err := clearDiscountLayers(ctx, tx, orderID)
-	return err
+	cleared, err := clearDiscountLayers(ctx, tx, orderID)
+	if err != nil || !cleared {
+		return err
+	}
+	// The order's cached totals follow its lines: a cart whose promotions
+	// have all lapsed (edited, switched off, out of their hours) and get
+	// no new layer would otherwise keep showing the old discount.
+	var resp orderResponse
+	return recalcOrderTotals(ctx, tx, orderID, &resp)
 }
 
 // LoadOrder returns the order's current snapshot, the shape every cart

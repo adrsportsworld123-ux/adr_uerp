@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:erp_pos_app/api/api_client.dart';
@@ -30,6 +31,7 @@ class _Backend {
   double paidOut = 0;
   final movements = <Map<String, dynamic>>[];
   Map<String, dynamic>? lastClose;
+  Map<String, dynamic>? localization; // GET /settings/localization/terminal; null = an older server
 
   double get expected => float + 500 - paidOut; // 500 of cash sales in the window
 
@@ -133,6 +135,7 @@ class _Backend {
         'settings': {'allow_pos': true},
       });
     }
+    if (path == '/api/v1/settings/localization/terminal' && localization != null) return json(200, localization!);
     if (path == '/api/v1/categories') return json(200, {'categories': []});
     if (path == '/api/v1/products/search') return json(200, {'results': [], 'total': 0});
     return json(404, {
@@ -274,6 +277,42 @@ void main() {
     expect(backend.lastClose!['approver_code'], 'EMP003');
     expect(backend.lastClose!['approver_pin'], '1234');
     session.dispose();
+  });
+
+  testWidgets('the count uses the merchant denominations (Localization), coins below one included', (tester) async {
+    final backend = _Backend()
+      ..open = true
+      ..float = 1000
+      ..localization = {
+        'language': 'en',
+        'direction': 'ltr',
+        'cart_side': 'right',
+        'timezone': 'Asia/Dubai',
+        'utc_offset_minutes': 240,
+        'currency_code': 'AED',
+        'denominations': ['1000.00', '200.00', '50.00', '0.25'],
+      };
+    SharedPreferences.setMockInitialValues({});
+    final session = _session(backend);
+    await session.refreshShift();
+    expect(session.localization.denominations, [1000.0, 200.0, 50.0, 0.25]);
+    await _pump(tester, session, const CloseShiftScreen());
+
+    expect(find.byKey(const Key('count-2000')), findsNothing, reason: 'not the INR notes');
+    expect(find.byKey(const Key('count-0.25')), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('count-1000')), '1');
+    await tester.enterText(find.byKey(const Key('count-200')), '2');
+    await tester.enterText(find.byKey(const Key('count-50')), '2');
+    await tester.pump();
+    final confirm = find.byKey(const Key('confirm-close'));
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await _settle(tester);
+    final sent = {for (final d in backend.lastClose!['denominations'] as List) (d['denomination'] as num).toDouble(): d['count']};
+    expect(sent, {1000.0: 1, 200.0: 2, 50.0: 2, 0.25: 0});
+    session.dispose();
+    // The settings are app-wide: back to the defaults for the next test.
+    AppSession.applyLocalization(const PosLocalization());
   });
 
   testWidgets('when shifts are required and none is open, the till starts on the shift screen', (tester) async {

@@ -13,6 +13,7 @@ import (
 	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/banking"
 	"erp-core-go/internal/branches"
 	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/customers"
@@ -24,7 +25,10 @@ import (
 	"erp-core-go/internal/gst"
 	"erp-core-go/internal/hr"
 	"erp-core-go/internal/inventory"
+	"erp-core-go/internal/loans"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/loyalty"
+	"erp-core-go/internal/merchants"
 	"erp-core-go/internal/notifications"
 	"erp-core-go/internal/payroll"
 	"erp-core-go/internal/pharmacy"
@@ -78,6 +82,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	docs := &documents.Handler{DB: database}
 	taxH := &taxes.Handler{DB: database}
 	usersH := &users.Handler{DB: database}
+	localeH := &locale.Handler{DB: database}
 	srch := &search.Handler{DB: database, Client: searchClient}
 	cust := &customers.Handler{DB: database}
 	promo := &promotions.Handler{DB: database}
@@ -124,6 +129,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 		// Phase 16: the SaaS console (platform staff, no tenant). A platform
 		// token is refused by every tenant route, and the other way round.
 		plat := &subscriptions.PlatformHandler{DB: database, Issuer: issuer}
+		merchantPlat := &merchants.PlatformHandler{DB: database}
 		api.Post("/platform/auth/login", plat.Login)
 		api.Group(func(pr chi.Router) {
 			pr.Use(authn.RequireAuth(issuer))
@@ -131,6 +137,11 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			pr.Get("/platform/merchants", plat.ListMerchants)
 			pr.Post("/platform/merchants", plat.CreateMerchant)
 			pr.Get("/platform/merchants/{id}", plat.GetMerchant)
+			// Merchant Management (internal/merchants, migrations/065).
+			pr.Get("/platform/merchants/{id}/profile", merchantPlat.GetMerchant)
+			pr.Patch("/platform/merchants/{id}/profile", merchantPlat.UpdateMerchant)
+			pr.Post("/platform/merchants/{id}/status", merchantPlat.SetStatus)
+			pr.Post("/platform/merchants/{id}/admins/{user_id}/password", merchantPlat.ResetAdminPassword)
 			pr.Patch("/platform/merchants/{id}/subscription", plat.UpdateSubscription)
 			pr.Post("/platform/merchants/{id}/invoices/{invoice_id}/{action}", plat.InvoiceAction)
 			pr.Get("/platform/plans", plat.ListPlans)
@@ -196,6 +207,15 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/me/permissions", me.Permissions)
 			// User Management (internal/users, migrations/062): passwords,
 			// PINs, status and home branch; one's own password and PIN.
+			// Company profile (internal/merchants, migrations/065).
+			merchantH := &merchants.Handler{DB: database}
+			protected.Get("/merchant/profile", merchantH.GetProfile)
+			protected.With(authn.RequirePermission(database, "merchant.profile")).Put("/merchant/profile", merchantH.UpdateProfile)
+			// Localization (internal/locale, migrations/064).
+			protected.Get("/settings/localization", localeH.GetSettings)
+			protected.Get("/settings/localization/terminal", localeH.ForTerminal)
+			protected.Put("/me/localization", localeH.UpdateMine)
+			protected.With(authn.RequirePermission(database, "localization.manage")).Put("/settings/localization", localeH.UpdateSettings)
 			protected.Put("/me/password", usersH.ChangeOwnPassword)
 			protected.Put("/me/pin", usersH.ChangeOwnPIN)
 			manageUsers := authn.RequirePermission(database, "users.manage")
@@ -459,6 +479,37 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "accounting.manage")).
 				Put("/accounting/settings", acct.UpdateAccountingSettings)
 			protected.Get("/accounting/party-ledger", acct.PartyLedger)
+			protected.Get("/accounting/parties", acct.PartySearch)
+
+			// Bank accounts, cheque books and cheques (internal/banking, migrations/066).
+			bankH := &banking.Handler{DB: database}
+			bankManage := authn.RequirePermission(database, "bank.manage")
+			chequesManage := authn.RequirePermission(database, "cheques.manage")
+			protected.Get("/bank-accounts", bankH.ListAccounts)
+			protected.With(bankManage).Post("/bank-accounts", bankH.CreateAccount)
+			protected.With(bankManage).Patch("/bank-accounts/{id}", bankH.UpdateAccount)
+			protected.Get("/bank-accounts/{id}/cheque-books", bankH.ListBooks)
+			protected.With(bankManage).Post("/bank-accounts/{id}/cheque-books", bankH.CreateBook)
+			protected.With(bankManage).Post("/cheque-books/{id}/close", bankH.CloseBook)
+			protected.Get("/cheques/issued", bankH.ListIssued)
+			protected.With(chequesManage).Post("/cheques/issued", bankH.CreateIssued)
+			protected.With(chequesManage).Post("/cheques/issued/cancel-leaf", bankH.CancelLeaf)
+			protected.With(chequesManage).Get("/cheques/issued/{id}/print", bankH.PrintIssued)
+			protected.With(chequesManage).Post("/cheques/issued/{id}/{action}", bankH.IssuedAction)
+			protected.Get("/cheques/received", bankH.ListReceived)
+			protected.With(chequesManage).Post("/cheques/received", bankH.CreateReceived)
+			protected.With(chequesManage).Post("/cheques/received/{id}/{action}", bankH.ReceivedAction)
+
+			// Employee loans and advances (internal/loans, migrations/067).
+			loansH := &loans.Handler{DB: database}
+			loansManage := authn.RequirePermission(database, "loans.manage")
+			protected.With(loansManage).Get("/employee-loans", loansH.List)
+			protected.With(loansManage).Post("/employee-loans", loansH.Create)
+			protected.With(loansManage).Post("/employee-loans/preview", loansH.PreviewSchedule)
+			protected.Get("/employee-loans/{id}", loansH.Get)
+			protected.With(loansManage).Post("/employee-loans/{id}/repayments", loansH.Repay)
+			protected.With(loansManage).Post("/employee-loans/{id}/foreclose", loansH.Foreclose)
+			protected.Get("/me/loans", loansH.Mine)
 			protected.Get("/accounting/day-book", acct.DayBook)
 			protected.Get("/accounting/cash-book", acct.CashBook)
 
@@ -531,6 +582,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Patch("/promotions/{id}", promo.UpdatePromotion)
 			protected.With(authn.RequirePermission(database, "promotions.manage")).
 				Delete("/promotions/{id}", promo.DeletePromotion)
+			protected.With(authn.RequirePermission(database, "promotions.manage")).
+				Post("/promotions/{id}/duplicate", promo.DuplicatePromotion)
 
 			protected.Get("/coupons", promo.ListCoupons)
 			protected.With(authn.RequirePermission(database, "promotions.manage")).

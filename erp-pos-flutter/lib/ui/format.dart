@@ -1,3 +1,5 @@
+import '../l10n/l10n.dart';
+
 /// The branch's currency (Tax Settings, erp-core-go migrations/061), set
 /// by `AppSession.refreshShift` and kept for offline sales. INR groups the
 /// Indian way (₹1,23,456.00); any other currency in thousands ($123,456.00).
@@ -14,6 +16,30 @@ class PosCurrency {
 
   /// The symbol before an amount: a letter symbol gets a space ("AED 10.00").
   static String get prefix => RegExp(r'[A-Za-z]$').hasMatch(symbol) ? '$symbol ' : symbol;
+}
+
+/// The merchant's business clock (Localization, erp-core-go
+/// migrations/064): times on the till read in the merchant's time zone,
+/// whatever the device's own zone. Set by `AppSession.refreshShift` from the
+/// zone's current offset and kept for the next start; unset, the device's
+/// clock is used, as before.
+class PosClock {
+  static int? utcOffsetMinutes;
+
+  /// [t] as wall-clock time on the merchant's clock (use its fields, not
+  /// its zone).
+  static DateTime toMerchant(DateTime t) {
+    final off = utcOffsetMinutes;
+    return off == null ? t.toLocal() : t.toUtc().add(Duration(minutes: off));
+  }
+
+  static DateTime now() => toMerchant(DateTime.now());
+
+  /// An API timestamp on the merchant's clock; null when unparseable.
+  static DateTime? parse(String? iso) {
+    final t = iso == null ? null : DateTime.tryParse(iso);
+    return t == null ? null : toMerchant(t);
+  }
 }
 
 /// Money formatting for DISPLAY only, in the branch's currency. Money
@@ -58,12 +84,12 @@ String formatQty(String qty) {
 
 /// Order status as cashiers say it.
 String statusLabel(String status) => switch (status) {
-      'finalized' => 'Completed',
-      'voided' => 'Voided',
-      'refunded' => 'Refunded',
-      'partially_refunded' => 'Partly refunded',
-      'held' => 'On hold',
-      'held_voided' => 'Released',
-      'cart' => 'In progress',
+      'finalized' => tr('Completed'),
+      'voided' => tr('Voided'),
+      'refunded' => tr('Refunded'),
+      'partially_refunded' => tr('Partly refunded'),
+      'held' => tr('On hold'),
+      'held_voided' => tr('Released'),
+      'cart' => tr('In progress'),
       _ => status,
     };

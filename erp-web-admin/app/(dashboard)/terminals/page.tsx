@@ -6,7 +6,7 @@
 // Deactivating a terminal (or its branch) stops new PIN logins on it at
 // once; its sales history is untouched.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Copy, KeyRound, Link2Off, Loader2, MonitorSmartphone, Pencil, Plus, Power } from "lucide-react";
+import { Copy, KeyRound, Languages, Link2Off, Loader2, MonitorSmartphone, Pencil, Plus, Power } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Branch } from "@/lib/types";
@@ -16,6 +16,8 @@ import { AlertModal, Modal } from "@/components/ui/dialog";
 import { EditDialog } from "@/components/data/edit-dialog";
 import { PageHeader } from "@/components/data/page-header";
 import { StatusChip } from "@/components/data/status-chip";
+import { selectClass } from "@/components/data/panel";
+import { t as tr } from "@/lib/i18n";
 
 type Terminal = {
   terminal_id: string;
@@ -29,7 +31,80 @@ type Terminal = {
   pairing_pending: boolean;
   last_synced_at: string | null;
   created_at: string;
+  // Localization (erp-core-go migrations/064): this till's own text
+  // direction and cart side; null = the merchant's (Organization → Localization).
+  text_direction: "auto" | "ltr" | "rtl" | null;
+  cart_side: "left" | "right" | null;
 };
+
+const DIRECTION_LABEL: Record<string, string> = { auto: "Automatic", ltr: "Left to right", rtl: "Right to left" };
+
+/** "Right to left · cart left", or null when the till follows the merchant. */
+function layoutSummary(t: Terminal): string | null {
+  const parts = [
+    t.text_direction ? tr(DIRECTION_LABEL[t.text_direction]) : null,
+    t.cart_side ? (t.cart_side === "left" ? tr("Cart on the left") : tr("Cart on the right")) : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function LayoutDialog({ terminal, onClose, onSaved }: { terminal: Terminal; onClose: () => void; onSaved: () => void }) {
+  const [direction, setDirection] = useState(terminal.text_direction ?? "");
+  const [cartSide, setCartSide] = useState(terminal.cart_side ?? "");
+  const [saving, setSaving] = useState(false);
+  async function save() {
+    setSaving(true);
+    try {
+      await api.patch(`/api/v1/pos-terminals/${terminal.terminal_id}`, { text_direction: direction, cart_side: cartSide });
+      toast.success(tr("Layout saved for {0}", [terminal.name]));
+      onSaved();
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : tr("Could not save the layout"));
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={tr("Screen layout · {0}", [terminal.name])}
+      description={tr("Overrides the merchant's Localization for this till only.")}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            {tr("Cancel")}
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving && <Loader2 className="animate-spin" aria-hidden />}
+            {tr("Save")}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4">
+        <label className="grid gap-1.5 text-sm">
+          <span className="font-medium">{tr("Text direction")}</span>
+          <select aria-label={tr("Text direction")} value={direction} onChange={(e) => setDirection(e.target.value as Terminal["text_direction"] & string)} className={selectClass}>
+            <option value="">{tr("Same as the merchant")}</option>
+            <option value="auto">{tr("Automatic (right-to-left for Arabic)")}</option>
+            <option value="ltr">{tr("Left to right")}</option>
+            <option value="rtl">{tr("Right to left")}</option>
+          </select>
+        </label>
+        <label className="grid gap-1.5 text-sm">
+          <span className="font-medium">{tr("Cart side")}</span>
+          <select aria-label={tr("Cart side")} value={cartSide} onChange={(e) => setCartSide(e.target.value as Terminal["cart_side"] & string)} className={selectClass}>
+            <option value="">{tr("Same as the merchant")}</option>
+            <option value="right">{tr("Cart on the right")}</option>
+            <option value="left">{tr("Cart on the left")}</option>
+          </select>
+        </label>
+      </div>
+    </Modal>
+  );
+}
 
 function when(iso: string | null) {
   if (!iso) return "—";
@@ -103,6 +178,7 @@ export default function TerminalsPage() {
   const [busy, setBusy] = useState(false);
 
   const [renaming, setRenaming] = useState<Terminal | null>(null);
+  const [layoutFor, setLayoutFor] = useState<Terminal | null>(null);
   const [confirming, setConfirming] = useState<{ terminal: Terminal; action: "deactivate" | "reset" } | null>(null);
   const [pairing, setPairing] = useState<{ terminal: Terminal; code: string; expiresAt: string } | null>(null);
 
@@ -238,7 +314,10 @@ export default function TerminalsPage() {
               )}
               {visible.map((t) => (
                 <tr key={t.terminal_id} className="border-t">
-                  <td className="px-3 py-2.5 font-medium">{t.name}</td>
+                  <td className="px-3 py-2.5 font-medium">
+                    {t.name}
+                    {layoutSummary(t) && <span className="block text-xs font-normal text-muted-foreground">{layoutSummary(t)}</span>}
+                  </td>
                   <td className="px-3 py-2.5">
                     {t.branch_name}
                     {t.branch_status !== "active" && <StatusChip status="inactive" className="ml-2" label="Branch inactive" />}
@@ -271,6 +350,16 @@ export default function TerminalsPage() {
                       </Button>
                       <Button variant="ghost" size="icon-sm" aria-label={`Rename ${t.name}`} title={denied ?? "Rename"} disabled={!allowed} onClick={() => setRenaming(t)}>
                         <Pencil />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Screen layout of ${t.name}`}
+                        title={denied ?? tr("Text direction and cart side")}
+                        disabled={!allowed}
+                        onClick={() => setLayoutFor(t)}
+                      >
+                        <Languages />
                       </Button>
                       <Button
                         variant="ghost"
@@ -356,6 +445,8 @@ export default function TerminalsPage() {
           <button type="submit" hidden />
         </form>
       </Modal>
+
+      {layoutFor && <LayoutDialog terminal={layoutFor} onClose={() => setLayoutFor(null)} onSaved={load} />}
 
       {renaming && (
         <EditDialog

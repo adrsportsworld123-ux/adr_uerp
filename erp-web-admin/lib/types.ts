@@ -505,6 +505,10 @@ export interface Promotion {
   category_name: string | null;
   // Sales this promotion discounted; a used promotion can't be deleted.
   times_used: number;
+  // What the percent or amount is taken from (erp-core-go migrations/065).
+  apply_on: "selling_price" | "mrp";
+  // Worked out by the API now: running, scheduled, expired or inactive.
+  state: "running" | "scheduled" | "expired" | "inactive";
 }
 
 export interface Coupon {
@@ -1263,6 +1267,8 @@ export interface Payslip {
   lwf_employer: string;
   total_deductions: string;
   net_pay: string;
+  // Employee loan instalments recovered from this pay (migrations/067).
+  loan_deduction?: string;
 }
 
 export interface PayrollRun {
@@ -1749,4 +1755,159 @@ export interface LedgerEntry {
 export interface AccountingSettings {
   jv_approval_required: boolean;
   locked_through: string | null;
+}
+
+// ---------------------------------------------------------------------
+// Bank accounts and cheques (erp-core-go migrations/066, internal/banking)
+// ---------------------------------------------------------------------
+
+export interface ChequeLayout {
+  offset_x_mm: number;
+  offset_y_mm: number;
+  signatory_line?: string;
+}
+
+export interface BankAccount {
+  bank_account_id: string;
+  branch_id: string | null; // null = merchant level
+  branch_name: string | null;
+  account_name: string;
+  bank_name: string;
+  bank_branch: string;
+  account_number: string;
+  ifsc: string;
+  account_type: "current" | "savings" | "overdraft" | "cash_credit";
+  ledger_code: string;
+  ledger_name: string;
+  balance: string;
+  is_default: boolean;
+  status: "active" | "inactive";
+  cheque_layout: ChequeLayout;
+  notes: string;
+  cheque_books: number;
+  leaves_left: number;
+  display_name: string;
+  created_at: string;
+}
+
+export interface ChequeBook {
+  cheque_book_id: string;
+  bank_account_id: string;
+  series_from: number;
+  series_to: number;
+  leaf_digits: number;
+  received_on: string | null;
+  status: "active" | "closed";
+  notes: string;
+  used: number;
+  next_leaf: string;
+  created_at: string;
+}
+
+export interface IssuedCheque {
+  cheque_id: string;
+  bank_account_id: string;
+  bank_account: string;
+  cheque_book_id: string | null;
+  cheque_number: string;
+  cheque_date: string;
+  payee_name: string;
+  amount: string;
+  account_payee: boolean;
+  party_type: "supplier" | "employee" | null;
+  party_id: string | null;
+  purchase_bill_id: string | null;
+  bill_number: string | null;
+  bill_payment_id: string | null;
+  memo: string;
+  status: "issued" | "cleared" | "bounced" | "cancelled";
+  cleared_on: string | null;
+  bounced_on: string | null;
+  status_reason: string;
+  print_count: number;
+  created_at: string;
+}
+
+export interface ReceivedCheque {
+  cheque_id: string;
+  branch_id: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  sales_order_id: string | null;
+  order_number: string | null;
+  drawer_name: string;
+  drawer_bank: string;
+  drawer_branch: string;
+  cheque_number: string;
+  cheque_date: string;
+  amount: string;
+  status: "received" | "deposited" | "cleared" | "bounced" | "returned";
+  post_dated: boolean;
+  deposit_bank_account_id: string | null;
+  deposit_bank_account: string | null;
+  deposited_on: string | null;
+  cleared_on: string | null;
+  bounced_on: string | null;
+  status_reason: string;
+  notes: string;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------
+// Employee loans (erp-core-go migrations/067, internal/loans)
+// ---------------------------------------------------------------------
+
+export interface LoanInstallment {
+  seq: number;
+  due_month: number;
+  due_year: number;
+  principal_part: number;
+  interest_part: number;
+  amount: number;
+  status: "pending" | "recovered";
+  recovered_on: string | null;
+  recovered_via: string | null;
+}
+
+export interface LoanRepayment {
+  repayment_id: string;
+  amount: string;
+  principal_part: string;
+  interest_part: string;
+  method: string;
+  reference_no: string;
+  paid_on: string;
+  foreclosure: boolean;
+  payroll_run_id: string | null;
+}
+
+export interface EmployeeLoan {
+  loan_id: string;
+  loan_number: string;
+  user_id: string;
+  employee_name: string;
+  employee_code: string | null;
+  branch_id: string | null;
+  loan_type: "loan" | "advance";
+  purpose: string;
+  principal: string;
+  interest_rate: string;
+  tenure_months: number;
+  total_interest: string;
+  emi_amount: string;
+  start_month: number;
+  start_year: number;
+  disbursed_on: string;
+  disbursement_method: "cash" | "bank_transfer" | "cheque";
+  bank_account_id: string | null;
+  issued_cheque_id: string | null;
+  status: "active" | "closed" | "foreclosed";
+  closed_on: string | null;
+  outstanding_principal: string;
+  outstanding_interest: string;
+  recovered: string;
+  installments_left: number;
+  created_at: string;
+  schedule?: LoanInstallment[];
+  repayments?: LoanRepayment[];
 }

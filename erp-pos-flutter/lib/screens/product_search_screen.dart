@@ -1,3 +1,4 @@
+import '../l10n/l10n.dart';
 import '../ui/format.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -111,14 +112,14 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
     setState(() => _addingVariantId = null);
     if (!ok && session.lastError == null) return; // price entry cancelled
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Added ${r.name}' : (session.lastError ?? 'Could not add to cart'))),
+      SnackBar(content: Text(ok ? tr('Added {0}', [r.name]) : (session.lastError ?? tr('Could not add to cart')))),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.lookupMode ? 'Product lookup' : 'Find a product')),
+      appBar: AppBar(title: Text(widget.lookupMode ? tr('Product lookup') : tr('Find a product'))),
       body: Column(
         children: [
           Padding(
@@ -127,7 +128,7 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
               controller: _queryController,
               autofocus: true,
               decoration: InputDecoration(
-                labelText: 'Search by name or SKU',
+                labelText: tr('Search by name or SKU'),
                 border: const OutlineInputBorder(),
                 suffixIcon: IconButton(icon: const Icon(Icons.search), onPressed: _search),
               ),
@@ -141,9 +142,9 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
                 Expanded(
                   child: DropdownButtonFormField<String?>(
                     initialValue: _categoryId,
-                    decoration: const InputDecoration(labelText: 'Category', border: OutlineInputBorder(), isDense: true),
+                    decoration: InputDecoration(labelText: tr('Category'), border: const OutlineInputBorder(), isDense: true),
                     items: [
-                      const DropdownMenuItem<String?>(value: null, child: Text('All categories')),
+                      DropdownMenuItem<String?>(value: null, child: Text(tr('All categories'))),
                       for (final c in _topLevelCategories) DropdownMenuItem<String?>(value: c.categoryId, child: Text(c.name)),
                     ],
                     onChanged: (v) {
@@ -159,9 +160,9 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
                 Expanded(
                   child: DropdownButtonFormField<String?>(
                     initialValue: _subcategoryId,
-                    decoration: const InputDecoration(labelText: 'Subcategory', border: OutlineInputBorder(), isDense: true),
+                    decoration: InputDecoration(labelText: tr('Subcategory'), border: const OutlineInputBorder(), isDense: true),
                     items: [
-                      const DropdownMenuItem<String?>(value: null, child: Text('All subcategories')),
+                      DropdownMenuItem<String?>(value: null, child: Text(tr('All subcategories'))),
                       for (final c in _subcategories) DropdownMenuItem<String?>(value: c.categoryId, child: Text(c.name)),
                     ],
                     onChanged: _categoryId == null
@@ -183,7 +184,7 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
             ),
           Expanded(
             child: _results.isEmpty && !_loading
-                ? const Center(child: Text('No products match'))
+                ? Center(child: Text(tr('No products match')))
                 : ListView.builder(
                     itemCount: _results.length,
                     itemBuilder: (context, i) {
@@ -206,7 +207,7 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
                               else
                                 IconButton(
                                   icon: const Icon(Icons.add_circle_outline),
-                                  tooltip: 'Add to cart',
+                                  tooltip: tr('Add to cart'),
                                   onPressed: () => _addToCart(r),
                                 ),
                             ],
@@ -216,7 +217,7 @@ class _ProductSearchScreenState extends State<ProductSearchScreen> {
                             ? null
                             : IconButton(
                                 icon: const Icon(Icons.info_outline),
-                                tooltip: 'Price, stock and label',
+                                tooltip: tr('Price, stock and label'),
                                 onPressed: () => _openLookup(r.productId, r.variantId),
                               ),
                         onTap: widget.lookupMode ? () => _openLookup(r.productId, r.variantId) : (adding ? null : () => _addToCart(r)),

@@ -12,9 +12,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/hr"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/loans"
 )
 
 var (
@@ -43,6 +45,9 @@ type payslipResponse struct {
 	LWFEmployer      string `json:"lwf_employer"`
 	TotalDeductions  string `json:"total_deductions"`
 	NetPay           string `json:"net_pay"`
+	// LoanDeduction: employee loan and advance instalments recovered from
+	// this pay (migrations/067); part of total_deductions.
+	LoanDeduction string `json:"loan_deduction"`
 }
 
 type payrollRunResponse struct {
@@ -246,14 +251,29 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 			totalDed := round2(pfEmployee + esiEmployee + ptAmount + tdsAmount + cfg.LWFEmployee)
 			netPay := round2(grossEarnings - totalDed)
 
+			// Employee loans (migrations/067): the instalments due by this
+			// month that fit in the net pay; 0 for anyone without a loan.
+			var existingPayslip string
+			if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT id::text FROM payslips WHERE payroll_run_id = $1 AND user_id = $2), '')`,
+				runID, e.id).Scan(&existingPayslip); err != nil {
+				return err
+			}
+			loanIDs, loanDed, err := loans.PlanPayrollDeduction(ctx, tx, e.id, existingPayslip, req.PeriodMonth, req.PeriodYear, netPay)
+			if err != nil {
+				return err
+			}
+			totalDed = round2(totalDed + loanDed)
+			netPay = round2(netPay - loanDed)
+
 			var ps payslipResponse
+			var payslipID string
 			if err := tx.QueryRow(ctx, `
 				INSERT INTO payslips (id, merchant_id, payroll_run_id, user_id, basic, hra, special_allowance, other_allowances,
 				                       commission_amount, gross_earnings, days_in_period, days_present,
 				                       pf_employee, pf_employer, esi_employee, esi_employer, pt_amount, tds_amount,
-				                       lwf_employee, lwf_employer, total_deductions, net_pay)
+				                       lwf_employee, lwf_employer, total_deductions, net_pay, loan_deduction)
 				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-				        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+				        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 				ON CONFLICT (payroll_run_id, user_id) DO UPDATE SET
 				  basic = EXCLUDED.basic, hra = EXCLUDED.hra, special_allowance = EXCLUDED.special_allowance,
 				  other_allowances = EXCLUDED.other_allowances, commission_amount = EXCLUDED.commission_amount,
@@ -261,17 +281,23 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 				  days_present = EXCLUDED.days_present, pf_employee = EXCLUDED.pf_employee, pf_employer = EXCLUDED.pf_employer,
 				  esi_employee = EXCLUDED.esi_employee, esi_employer = EXCLUDED.esi_employer, pt_amount = EXCLUDED.pt_amount,
 				  tds_amount = EXCLUDED.tds_amount, lwf_employee = EXCLUDED.lwf_employee, lwf_employer = EXCLUDED.lwf_employer,
-				  total_deductions = EXCLUDED.total_deductions, net_pay = EXCLUDED.net_pay
+				  total_deductions = EXCLUDED.total_deductions, net_pay = EXCLUDED.net_pay, loan_deduction = EXCLUDED.loan_deduction
 				RETURNING user_id, basic::text, hra::text, special_allowance::text, other_allowances::text,
 				          commission_amount::text, gross_earnings::text, days_in_period::text, days_present::text,
 				          pf_employee::text, pf_employer::text, esi_employee::text, esi_employer::text, pt_amount::text,
-				          tds_amount::text, lwf_employee::text, lwf_employer::text, total_deductions::text, net_pay::text`,
+				          tds_amount::text, lwf_employee::text, lwf_employer::text, total_deductions::text, net_pay::text,
+				          loan_deduction::text, id::text`,
 				runID, e.id, basicP, hraP, specialP, otherP, commissionAmount, grossEarnings, daysInPeriod, daysPresent,
 				pfEmployee, pfEmployer, esiEmployee, esiEmployer, ptAmount, tdsAmount, cfg.LWFEmployee, cfg.LWFEmployer, totalDed, netPay,
+				loanDed,
 			).Scan(&ps.UserID, &ps.Basic, &ps.HRA, &ps.SpecialAllowance, &ps.OtherAllowances, &ps.CommissionAmount,
 				&ps.GrossEarnings, &ps.DaysInPeriod, &ps.DaysPresent, &ps.PFEmployee, &ps.PFEmployer, &ps.ESIEmployee,
 				&ps.ESIEmployer, &ps.PTAmount, &ps.TDSAmount, &ps.LWFEmployee, &ps.LWFEmployer, &ps.TotalDeductions, &ps.NetPay,
+				&ps.LoanDeduction, &payslipID,
 			); err != nil {
+				return err
+			}
+			if err := loans.AssignPayrollDeduction(ctx, tx, payslipID, loanIDs); err != nil {
 				return err
 			}
 			ps.Name = e.name
@@ -313,14 +339,22 @@ func (h *Handler) FinalizeRun(w http.ResponseWriter, r *http.Request) {
 
 	var resp payrollRunResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			UPDATE payroll_runs SET status = 'finalized', finalized_at = now()
 			WHERE id = $1 AND status = 'draft'
 			RETURNING id, period_month, period_year, status, total_gross::text, total_deductions::text, total_net::text, finalized_at::text`,
 			id,
-		).Scan(&resp.ID, &resp.PeriodMonth, &resp.PeriodYear, &resp.Status, &resp.TotalGross, &resp.TotalDeductions, &resp.TotalNet, &resp.FinalizedAt)
+		).Scan(&resp.ID, &resp.PeriodMonth, &resp.PeriodYear, &resp.Status, &resp.TotalGross, &resp.TotalDeductions, &resp.TotalNet, &resp.FinalizedAt); err != nil {
+			return err
+		}
+		// The loan instalments the payslips deducted are recovered now (migrations/067).
+		return loans.RecoverForRun(ctx, tx, resp.ID, resp.PeriodMonth, resp.PeriodYear, claims.UserID)
 	})
 	switch {
+	case errors.Is(err, loans.ErrRecomputeNeeded):
+		httpx.Error(w, http.StatusConflict, "PAYROLL_RECOMPUTE_NEEDED", err.Error()+": run the payroll for this period again, then finalize")
+	case errors.Is(err, accounting.ErrPeriodLocked):
+		httpx.Error(w, http.StatusConflict, "PERIOD_LOCKED", "the period's last day is in a locked accounting period")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusConflict, "PAYROLL_RUN_FINALIZED", "no draft payroll run with this id (already finalized, or doesn't exist)")
 	case err != nil:
@@ -383,7 +417,8 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 			SELECT p.user_id, u.name, p.basic::text, p.hra::text, p.special_allowance::text, p.other_allowances::text,
 			       p.commission_amount::text, p.gross_earnings::text, p.days_in_period::text, p.days_present::text,
 			       p.pf_employee::text, p.pf_employer::text, p.esi_employee::text, p.esi_employer::text, p.pt_amount::text,
-			       p.tds_amount::text, p.lwf_employee::text, p.lwf_employer::text, p.total_deductions::text, p.net_pay::text
+			       p.tds_amount::text, p.lwf_employee::text, p.lwf_employer::text, p.total_deductions::text, p.net_pay::text,
+			       p.loan_deduction::text
 			FROM payslips p JOIN users u ON u.id = p.user_id
 			WHERE p.payroll_run_id = $1 ORDER BY u.name`, id)
 		if err != nil {
@@ -396,7 +431,7 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&ps.UserID, &ps.Name, &ps.Basic, &ps.HRA, &ps.SpecialAllowance, &ps.OtherAllowances,
 				&ps.CommissionAmount, &ps.GrossEarnings, &ps.DaysInPeriod, &ps.DaysPresent, &ps.PFEmployee, &ps.PFEmployer,
 				&ps.ESIEmployee, &ps.ESIEmployer, &ps.PTAmount, &ps.TDSAmount, &ps.LWFEmployee, &ps.LWFEmployer,
-				&ps.TotalDeductions, &ps.NetPay); err != nil {
+				&ps.TotalDeductions, &ps.NetPay, &ps.LoanDeduction); err != nil {
 				return err
 			}
 			resp.Payslips = append(resp.Payslips, ps)
@@ -440,7 +475,8 @@ func (h *Handler) GetMyPayslips(w http.ResponseWriter, r *http.Request) {
 			SELECT p.user_id, u.name, p.basic::text, p.hra::text, p.special_allowance::text, p.other_allowances::text,
 			       p.commission_amount::text, p.gross_earnings::text, p.days_in_period::text, p.days_present::text,
 			       p.pf_employee::text, p.pf_employer::text, p.esi_employee::text, p.esi_employer::text, p.pt_amount::text,
-			       p.tds_amount::text, p.lwf_employee::text, p.lwf_employer::text, p.total_deductions::text, p.net_pay::text
+			       p.tds_amount::text, p.lwf_employee::text, p.lwf_employer::text, p.total_deductions::text, p.net_pay::text,
+			       p.loan_deduction::text
 			FROM payslips p JOIN users u ON u.id = p.user_id JOIN payroll_runs pr ON pr.id = p.payroll_run_id
 			WHERE p.user_id = $1 ORDER BY pr.period_year DESC, pr.period_month DESC`, employeeID)
 		if err != nil {
@@ -452,7 +488,7 @@ func (h *Handler) GetMyPayslips(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&ps.UserID, &ps.Name, &ps.Basic, &ps.HRA, &ps.SpecialAllowance, &ps.OtherAllowances,
 				&ps.CommissionAmount, &ps.GrossEarnings, &ps.DaysInPeriod, &ps.DaysPresent, &ps.PFEmployee, &ps.PFEmployer,
 				&ps.ESIEmployee, &ps.ESIEmployer, &ps.PTAmount, &ps.TDSAmount, &ps.LWFEmployee, &ps.LWFEmployer,
-				&ps.TotalDeductions, &ps.NetPay); err != nil {
+				&ps.TotalDeductions, &ps.NetPay, &ps.LoanDeduction); err != nil {
 				return err
 			}
 			payslips = append(payslips, ps)

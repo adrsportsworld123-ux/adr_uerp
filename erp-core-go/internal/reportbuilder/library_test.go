@@ -34,8 +34,10 @@ func TestLibraryCompiles(t *testing.T) {
 }
 
 func TestResolvePeriod(t *testing.T) {
-	// Sunday 18 Oct 2026, 23:30 UTC = Monday 19 Oct, 05:00 IST.
-	now := time.Date(2026, 10, 18, 23, 30, 0, 0, time.UTC)
+	// Sunday 18 Oct 2026, 23:30 UTC = Monday 19 Oct, 05:00 IST: the
+	// period follows the clock it is given (Spec.now passes the
+	// merchant's), so on IST's it is already Monday.
+	now := time.Date(2026, 10, 18, 23, 30, 0, 0, time.UTC).In(istZone)
 	cases := map[string][2]string{
 		"today":        {"2026-10-19", "2026-10-19"},
 		"yesterday":    {"2026-10-18", "2026-10-18"},
@@ -62,5 +64,22 @@ func TestResolvePeriod(t *testing.T) {
 	s := l.specFor(libraryRequest{Period: "today", DateFrom: "2026-01-01", DateTo: "2026-01-31"})
 	if s.DateFrom != "2026-01-01" || s.Period != "" {
 		t.Errorf("dates: %+v", s)
+	}
+}
+
+func TestResolvePeriodFollowsTheClock(t *testing.T) {
+	// The same instant on a Dubai clock (UTC+4) is still... Monday 03:30.
+	dubai := time.FixedZone("GST", 4*3600)
+	now := time.Date(2026, 10, 18, 23, 30, 0, 0, time.UTC).In(dubai)
+	if f, to, _ := ResolvePeriod("today", now); f != "2026-10-19" || to != "2026-10-19" {
+		t.Errorf("Dubai today: %s..%s", f, to)
+	}
+	// ...and on a New York clock (UTC-4) it is Sunday evening.
+	ny := time.FixedZone("EDT", -4*3600)
+	if f, _, _ := ResolvePeriod("today", time.Date(2026, 10, 18, 23, 30, 0, 0, time.UTC).In(ny)); f != "2026-10-18" {
+		t.Errorf("New York today: %s", f)
+	}
+	if s := (Spec{}).now(); s.Location() != istZone {
+		t.Error("a spec with no clock keeps IST")
 	}
 }

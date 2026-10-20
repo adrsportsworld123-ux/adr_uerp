@@ -66,6 +66,12 @@ func (h *PinLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "TERMINAL_UNAVAILABLE", "this terminal is not active")
 		return
 	}
+	// A merchant the platform suspended or cancelled (migrations/065)
+	// can't sign in at a till either, as at the password login.
+	if !MerchantActive(ctx, h.DB, tenantID) {
+		httpx.Error(w, http.StatusForbidden, "MERCHANT_INACTIVE", "this business's account is not active")
+		return
+	}
 	if boundFingerprint != nil && *boundFingerprint != "" && *boundFingerprint != req.DeviceFingerprint {
 		httpx.Error(w, http.StatusForbidden, "DEVICE_MISMATCH", "this terminal is bound to a different device")
 		return

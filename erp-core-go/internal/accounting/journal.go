@@ -9,6 +9,7 @@ package accounting
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -30,7 +31,7 @@ type JournalLine struct {
 	AccountCode string
 	Debit       float64
 	Credit      float64
-	PartyType   string // "" | "customer" | "supplier"
+	PartyType   string // "" | "customer" | "supplier" | "employee" | "bank_account"
 	PartyID     string // "" if this line isn't tied to a specific party
 }
 
@@ -55,6 +56,9 @@ const (
 	AccountOtherIncome        = "4002" // Phase 13 cash paid in (migrations/040)
 	AccountPettyCash          = "5004" // Phase 13 cash paid out of the drawer
 	AccountRoundOff           = "5005" // supplier invoice round-off (migrations/048) and sale round-off waivers (059); a credit balance is a gain
+	AccountEmployeeLoans      = "1150" // employee loans and salary advances (migrations/067)
+	AccountSalariesPayable    = "2150" // payroll recoveries net off against it (migrations/067)
+	AccountInterestIncome     = "4050" // interest on employee loans (migrations/067)
 )
 
 // AccountCodeForPaymentMethod maps a sales/bill payment method to the
@@ -156,4 +160,43 @@ func postJournalEntry(ctx context.Context, tx pgx.Tx, branchID, sourceType, sour
 		}
 	}
 	return entryNumber, nil
+}
+
+// Bank account lookups (migrations/066). A payment that names one of the
+// merchant's bank accounts posts to its ledger account; one that names
+// none posts to Bank (1002), as every payment did before.
+var (
+	ErrNoBankAccount       = errors.New("bank account not found")
+	ErrBankAccountInactive = errors.New("bank account is inactive")
+)
+
+// BankLedgerCode is the ledger account code for bank account id ("" =
+// AccountBank). The account must be active and visible to the session
+// (a branch's own account only to that branch's users).
+func BankLedgerCode(ctx context.Context, tx pgx.Tx, id string) (string, error) {
+	if id == "" {
+		return AccountBank, nil
+	}
+	var code, status string
+	err := tx.QueryRow(ctx, `
+		SELECT coa.code, ba.status FROM bank_accounts ba JOIN chart_of_accounts coa ON coa.id = ba.ledger_account_id
+		WHERE ba.id::text = $1 AND (ba.branch_id IS NULL OR app_branch_visible(ba.branch_id))`, id).Scan(&code, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNoBankAccount
+	} else if err != nil {
+		return "", err
+	}
+	if status != "active" {
+		return "", ErrBankAccountInactive
+	}
+	return code, nil
+}
+
+// PaymentLedgerCode is AccountCodeForPaymentMethod with a bank account:
+// bank_transfer and cheque go to that account's ledger when one is named.
+func PaymentLedgerCode(ctx context.Context, tx pgx.Tx, method, bankAccountID string) (string, error) {
+	if bankAccountID == "" || (method != "bank_transfer" && method != "cheque") {
+		return AccountCodeForPaymentMethod(method), nil
+	}
+	return BankLedgerCode(ctx, tx, bankAccountID)
 }

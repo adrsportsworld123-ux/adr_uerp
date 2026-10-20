@@ -78,7 +78,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     final after = double.tryParse(session.currentOrder?.discountTotal ?? '') ?? before;
     setState(() {
       _working = false;
-      if (ok && after > before + 0.004) _message = 'Promotions applied: ${formatRupeesNum(after - before)} off';
+      if (ok && after > before + 0.004) _message = tr('Promotions applied: {0} off', [formatRupeesNum(after - before)]);
     });
   }
 
@@ -109,12 +109,12 @@ class _PaymentSheetState extends State<_PaymentSheet> {
 
   Future<void> _otherWaive(AppSession s) async {
     final text = await _promptText(context,
-        title: 'Round off — amount to waive (up to ${formatRupeesNum(_waiveLimit(s))})', label: 'Amount waived (${PosCurrency.symbol})', confirm: 'Apply');
+        title: tr('Round off — amount to waive (up to {0})', [formatRupeesNum(_waiveLimit(s))]), label: tr('Amount waived ({0})', [PosCurrency.symbol]), confirm: tr('Apply'));
     if (text == null || !mounted) return;
     final v = double.tryParse(text.trim());
     setState(() {
       if (v == null || v < 0 || v > _waiveLimit(s) + 0.004) {
-        _message = 'Enter an amount up to ${formatRupeesNum(_waiveLimit(s))}';
+        _message = tr('Enter an amount up to {0}', [formatRupeesNum(_waiveLimit(s))]);
         return;
       }
       _customWaive = _round2(v);
@@ -125,8 +125,8 @@ class _PaymentSheetState extends State<_PaymentSheet> {
 
   String? _tenderDisabledReason(AppSession s, String method) {
     if (method == 'credit') {
-      if (s.offlineMode || s.isCurrentOrderLocal) return 'Credit needs a connection (the limit is checked live)';
-      if (s.attachedCustomerId == null) return 'Attach a customer first';
+      if (s.offlineMode || s.isCurrentOrderLocal) return tr('Credit needs a connection (the limit is checked live)');
+      if (s.attachedCustomerId == null) return tr('Attach a customer first');
     }
     return null;
   }
@@ -141,7 +141,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     if (!mounted) return;
     setState(() {
       _working = false;
-      _message = ok ? okText : (session.lastError ?? 'That didn’t work');
+      _message = ok ? okText : (session.lastError ?? tr('That didn’t work'));
     });
   }
 
@@ -168,7 +168,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     final remaining = _remaining(s);
     final amount = double.tryParse(_splitAmountController.text) ?? remaining;
     if (amount <= 0 || amount > remaining + 0.004) {
-      setState(() => _message = 'Enter an amount up to ${formatRupeesNum(remaining)}');
+      setState(() => _message = tr('Enter an amount up to {0}', [formatRupeesNum(remaining)]));
       return;
     }
     final ref = _referenceController.text.trim();
@@ -214,12 +214,12 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
-            Expanded(child: Text('Payment', style: theme.textTheme.titleLarge)),
+            Expanded(child: Text(tr('Payment'), style: theme.textTheme.titleLarge)),
             if (order != null) Chip(label: Text(order.orderNumber, style: kMonoStyle.copyWith(fontSize: 12))),
           ]),
           const SizedBox(height: 12),
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Expanded(child: Text(_splitMode && _splits.isNotEmpty ? 'Still to pay' : 'Amount due', style: theme.textTheme.bodyLarge)),
+            Expanded(child: Text(_splitMode && _splits.isNotEmpty ? tr('Still to pay') : tr('Amount due'), style: theme.textTheme.bodyLarge)),
             Text(formatRupeesNum(due),
                 key: const Key('amount-due'),
                 style: theme.textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
@@ -230,7 +230,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               FilterChip(
                 key: const Key('round-off'),
                 avatar: const Icon(Icons.price_change_outlined, size: 18),
-                label: Text(_waive(session) > 0 ? 'Round off −${formatRupeesNum(_waive(session))}' : 'Round off'),
+                label: Text(_waive(session) > 0 ? tr('Round off −{0}', [formatRupeesNum(_waive(session))]) : tr('Round off')),
                 selected: _waive(session) > 0,
                 onSelected: (_customWaive ?? _paise(session)) > 0 || _roundOn
                     ? (on) => setState(() {
@@ -239,9 +239,9 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                         })
                     : null,
               ),
-              TextButton(onPressed: () => _otherWaive(session), child: const Text('Other amount')),
+              TextButton(onPressed: () => _otherWaive(session), child: Text(tr('Other amount'))),
               if (_waive(session) > 0)
-                Text('Bill ${formatRupeesNum(_total(session))}', key: const Key('bill-total'), style: theme.textTheme.bodySmall),
+                Text(tr('Bill {0}', [formatRupeesNum(_total(session))]), key: const Key('bill-total'), style: theme.textTheme.bodySmall),
             ]),
           ],
           if (live) ...[
@@ -249,13 +249,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             _BeforeYouCharge(
               couponController: _couponController,
               working: _working,
-              onCoupon: () => _run(() => session.applyCoupon(_couponController.text.trim()), 'Coupon applied'),
-              onPromotions: () => _run(session.applyPromotions, 'Eligible promotions applied'),
+              onCoupon: () => _run(() => session.applyCoupon(_couponController.text.trim()), tr('Coupon applied')),
+              onPromotions: () => _run(session.applyPromotions, tr('Eligible promotions applied')),
               onLoyalty: session.attachedCustomerId != null && (session.loyaltyAvailablePoints ?? 0) > 0
                   ? () async {
-                      final pts = await _promptText(context, title: 'Redeem points (${session.loyaltyAvailablePoints} available)', label: 'Points to redeem', confirm: 'Redeem');
+                      final pts = await _promptText(context, title: tr('Redeem points ({0} available)', [session.loyaltyAvailablePoints]), label: tr('Points to redeem'), confirm: tr('Redeem'));
                       final n = int.tryParse(pts ?? '');
-                      if (n != null && n > 0) await _run(() => session.redeemLoyaltyPoints(n), 'Points redeemed');
+                      if (n != null && n > 0) await _run(() => session.redeemLoyaltyPoints(n), tr('Points redeemed'));
                     }
                   : null,
             ),
@@ -265,7 +265,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               color: pos.warn,
               background: pos.warnSoft,
               icon: Icons.cloud_off,
-              text: 'Offline sale: coupons, promotions, loyalty and credit need a connection. Cash, card and UPI are recorded and sync later.',
+              text: tr('Offline sale: coupons, promotions, loyalty and credit need a connection. Cash, card and UPI are recorded and sync later.'),
             ),
           ],
           const SizedBox(height: 16),
@@ -275,7 +275,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             children: [
               for (final (id, label, icon) in _tenders)
                 _TenderButton(
-                  label: label,
+                  label: tr(label),
                   icon: icon,
                   selected: _method == id,
                   disabledReason: _tenderDisabledReason(session, id),
@@ -291,7 +291,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               autofocus: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-              decoration: const InputDecoration(labelText: 'Cash received', hintText: 'Leave empty for exact amount'),
+              decoration: InputDecoration(labelText: tr('Cash received'), hintText: tr('Leave empty for exact amount')),
               onChanged: (_) => setState(() {}),
               // Enter completes the sale straight from the cash field, so a
               // keyboard-only cashier never has to leave it.
@@ -303,7 +303,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             Wrap(spacing: 8, runSpacing: 8, children: [
               for (final v in quick)
                 ActionChip(
-                  label: Text(v == due ? 'Exact' : formatRupeesNum(v).replaceAll('.00', '')),
+                  label: Text(v == due ? tr('Exact') : formatRupeesNum(v).replaceAll('.00', '')),
                   onPressed: () => setState(() => _tenderedController.text = v.toStringAsFixed(2)),
                 ),
             ]),
@@ -313,20 +313,20 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(color: pos.paySoft, borderRadius: BorderRadius.circular(12)),
                 child: Row(children: [
-                  Expanded(child: Text('Change to return', style: TextStyle(color: pos.pay, fontWeight: FontWeight.w600, fontSize: 16))),
+                  Expanded(child: Text(tr('Change to return'), style: TextStyle(color: pos.pay, fontWeight: FontWeight.w600, fontSize: 16))),
                   Text(formatRupeesNum(change), key: const Key('change-due'), style: TextStyle(color: pos.pay, fontWeight: FontWeight.w700, fontSize: 20)),
                 ]),
               ),
             ] else if (change != null && change < 0)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text('That’s ${formatRupeesNum(-change)} short', style: TextStyle(color: theme.colorScheme.error)),
+                child: Text(tr('That’s {0} short', [formatRupeesNum(-change)]), style: TextStyle(color: theme.colorScheme.error)),
               ),
           ],
           if (_method == 'card' || _method == 'upi')
             TextField(
               controller: _referenceController,
-              decoration: const InputDecoration(labelText: 'Gateway reference (optional)', hintText: 'UTR / transaction id from the card machine'),
+              decoration: InputDecoration(labelText: tr('Gateway reference (optional)'), hintText: tr('UTR / transaction id from the card machine')),
             ),
           if (_splitMode) ...[
             const SizedBox(height: 8),
@@ -337,7 +337,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 leading: const Icon(Icons.check_circle, size: 18),
                 title: Text('${_splits[i].method.toUpperCase()} ${formatRupeesNum(_splits[i].amount)}'),
                 trailing: IconButton(
-                  tooltip: 'Remove this payment',
+                  tooltip: tr('Remove this payment'),
                   icon: const Icon(Icons.close, size: 18),
                   onPressed: () => setState(() => _splits.removeAt(i)),
                 ),
@@ -348,13 +348,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                   child: TextField(
                     controller: _splitAmountController,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(labelText: 'Amount on ${_method.toUpperCase()}', hintText: formatRupeesNum(due)),
+                    decoration: InputDecoration(labelText: tr('Amount on {0}', [_method.toUpperCase()]), hintText: formatRupeesNum(due)),
                   ),
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton(
                   onPressed: _tenderDisabledReason(session, _method) == null ? () => _addSplit(session) : null,
-                  child: const Text('Add payment'),
+                  child: Text(tr('Add payment')),
                 ),
               ]),
           ],
@@ -362,7 +362,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               icon: Icon(_splitMode ? Icons.call_merge : Icons.call_split, size: 18),
-              label: Text(_splitMode ? 'Pay with one method' : 'Split across methods'),
+              label: Text(_splitMode ? tr('Pay with one method') : tr('Split across methods')),
               onPressed: () => setState(() {
                 _splitMode = !_splitMode;
                 _splits.clear();
@@ -382,7 +382,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               child: OutlinedButton(
                 style: OutlinedButton.styleFrom(minimumSize: const Size(0, 56)),
                 onPressed: _working ? null : () => Navigator.pop(context),
-                child: const Text('Back'),
+                child: Text(tr('Back')),
               ),
             ),
             const SizedBox(width: 12),
@@ -394,7 +394,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 onPressed: canComplete ? () => _complete(session) : null,
                 child: _working
                     ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Text('Complete sale', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                    : Text(tr('Complete sale'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
               ),
             ),
           ]),
@@ -433,16 +433,16 @@ class _BeforeYouCharge extends StatelessWidget {
             enabled: !working,
             textCapitalization: TextCapitalization.characters,
             decoration: InputDecoration(
-              labelText: 'Coupon code',
+              labelText: tr('Coupon code'),
               isDense: true,
-              suffixIcon: IconButton(tooltip: 'Apply coupon', icon: const Icon(Icons.check), onPressed: working ? null : onCoupon),
+              suffixIcon: IconButton(tooltip: tr('Apply coupon'), icon: const Icon(Icons.check), onPressed: working ? null : onCoupon),
             ),
             onSubmitted: (_) => onCoupon(),
           ),
         ),
-        OutlinedButton.icon(onPressed: working ? null : onPromotions, icon: const Icon(Icons.local_offer_outlined, size: 18), label: const Text('Apply promotions')),
+        OutlinedButton.icon(onPressed: working ? null : onPromotions, icon: const Icon(Icons.local_offer_outlined, size: 18), label: Text(tr('Apply promotions'))),
         if (onLoyalty != null)
-          OutlinedButton.icon(onPressed: working ? null : onLoyalty, icon: const Icon(Icons.stars_outlined, size: 18), label: const Text('Redeem points')),
+          OutlinedButton.icon(onPressed: working ? null : onLoyalty, icon: const Icon(Icons.stars_outlined, size: 18), label: Text(tr('Redeem points'))),
       ],
     );
   }

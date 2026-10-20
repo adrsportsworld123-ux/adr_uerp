@@ -21,11 +21,11 @@ class _ShiftChip extends StatelessWidget {
     final theme = Theme.of(context);
     final shift = session.currentShift;
     final warn = shift == null && session.shiftsRequired;
-    final label = shift == null ? 'No shift' : 'Shift ${shift.shiftNumber}';
+    final label = shift == null ? tr('No shift') : tr('Shift {0}', [shift.shiftNumber]);
     final fg = warn ? theme.pos.warn : theme.colorScheme.onSurfaceVariant;
     return Semantics(
       button: true,
-      label: '$label. Open shift and cash drawer.',
+      label: tr('{0}. Open shift and cash drawer.', [label]),
       child: InkWell(
         key: const Key('shift-chip'),
         borderRadius: BorderRadius.circular(999),
@@ -68,10 +68,10 @@ class _AttendanceChip extends StatelessWidget {
     final warn = me != null && !checkedIn && me.allowPos;
     final since = checkedIn ? (me!.openSince ?? me.open!.clockIn) : null;
     final label = me == null
-        ? 'Check in'
+        ? tr('Check in')
         : checkedIn
-            ? (since == null ? 'Checked in' : 'In · ${TimeOfDay.fromDateTime(since).format(context)}')
-            : 'Check in';
+            ? (since == null ? tr('Checked in') : tr('In · {0}', [TimeOfDay.fromDateTime(since).format(context)]))
+            : tr('Check in');
     final fg = offline
         ? theme.disabledColor
         : checkedIn
@@ -81,7 +81,7 @@ class _AttendanceChip extends StatelessWidget {
                 : theme.colorScheme.onSurfaceVariant;
     return Semantics(
       button: true,
-      label: checkedIn ? '$label. Open attendance to check out.' : 'Not checked in. Open attendance to check in.',
+      label: checkedIn ? '$label. Open attendance to check out.' : tr('Not checked in. Open attendance to check in.'),
       child: InkWell(
         key: const Key('attendance-chip'),
         borderRadius: BorderRadius.circular(999),
@@ -130,10 +130,10 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
     final offline = session.offlineMode;
     final pending = session.pendingSyncCount;
     final (Color fg, Color bg, IconData icon, String label) = offline
-        ? (pos.warn, pos.warnSoft, Icons.cloud_off, pending > 0 ? 'Offline · $pending queued' : 'Offline')
+        ? (pos.warn, pos.warnSoft, Icons.cloud_off, pending > 0 ? tr('Offline · {0} queued', [pending]) : tr('Offline'))
         : pending > 0
-            ? (pos.warn, pos.warnSoft, Icons.sync, '$pending to sync')
-            : (pos.pay, pos.paySoft, Icons.cloud_done_outlined, compact ? 'Online' : 'Online · synced');
+            ? (pos.warn, pos.warnSoft, Icons.sync, tr('{0} to sync', [pending]))
+            : (pos.pay, pos.paySoft, Icons.cloud_done_outlined, compact ? tr('Online') : tr('Online · synced'));
 
     return Material(
       color: theme.colorScheme.surface,
@@ -171,7 +171,7 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
               ),
               Semantics(
                 button: true,
-                label: 'Sync status: $label. Tap to sync now.',
+                label: tr('Sync status: {0}. Tap to sync now.', [label]),
                 child: InkWell(
                   key: const Key('sync-pill'),
                   borderRadius: BorderRadius.circular(999),
@@ -195,49 +195,49 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
               if (!compact)
                 Padding(
                   padding: const EdgeInsets.only(right: 4),
-                  child: Text(session.roles.isNotEmpty ? session.roles.first : 'Signed in', style: theme.textTheme.bodySmall),
+                  child: Text(session.roles.isNotEmpty ? session.roles.first : tr('Signed in'), style: theme.textTheme.bodySmall),
                 ),
               PopupMenuButton<_MenuAction>(
-                tooltip: 'More',
+                tooltip: tr('More'),
                 icon: const Icon(Icons.more_vert),
                 onSelected: onMenu,
                 itemBuilder: (_) => [
                   PopupMenuItem(
                     value: _MenuAction.heldOrders,
                     enabled: !offline,
-                    child: const ListTile(leading: Icon(Icons.pause_circle_outline), title: Text('Held orders'), trailing: _KeyHint('F9')),
+                    child: ListTile(leading: const Icon(Icons.pause_circle_outline), title: Text(tr('Held orders')), trailing: const _KeyHint('F9')),
                   ),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: _MenuAction.salesHistory,
-                    child: ListTile(leading: Icon(Icons.receipt_long_outlined), title: Text('Sales history & returns'), trailing: _KeyHint('F6')),
+                    child: ListTile(leading: const Icon(Icons.receipt_long_outlined), title: Text(tr('Sales history & returns')), trailing: const _KeyHint('F6')),
                   ),
                   PopupMenuItem(
                     value: _MenuAction.tillReports,
                     enabled: !offline,
-                    child: const ListTile(leading: Icon(Icons.summarize_outlined), title: Text('X / Z reports')),
+                    child: ListTile(leading: const Icon(Icons.summarize_outlined), title: Text(tr('X / Z reports'))),
                   ),
                   PopupMenuItem(
                     value: _MenuAction.productSearch,
                     enabled: !offline,
-                    child: const ListTile(leading: Icon(Icons.manage_search), title: Text('Full product search')),
+                    child: ListTile(leading: const Icon(Icons.manage_search), title: Text(tr('Full product search'))),
                   ),
                   PopupMenuItem(
                     value: _MenuAction.productLookup,
                     enabled: !offline,
-                    child: const ListTile(leading: Icon(Icons.sell_outlined), title: Text('Product lookup · price, stock, labels')),
+                    child: ListTile(leading: const Icon(Icons.sell_outlined), title: Text(tr('Product lookup · price, stock, labels'))),
                   ),
-                  const PopupMenuItem(value: _MenuAction.syncNow, child: ListTile(leading: Icon(Icons.sync), title: Text('Sync now'))),
+                  PopupMenuItem(value: _MenuAction.syncNow, child: ListTile(leading: const Icon(Icons.sync), title: Text(tr('Sync now')))),
                   PopupMenuItem(
                     value: _MenuAction.syncQueue,
                     child: ListTile(
                       leading: const Icon(Icons.pending_actions_outlined),
-                      title: const Text('Sync queue'),
+                      title: Text(tr('Sync queue')),
                       trailing: pending > 0 ? Text('$pending') : null,
                     ),
                   ),
-                  const PopupMenuItem(value: _MenuAction.printer, child: ListTile(leading: Icon(Icons.print_outlined), title: Text('Printer settings'))),
+                  PopupMenuItem(value: _MenuAction.printer, child: ListTile(leading: const Icon(Icons.print_outlined), title: Text(tr('Printer settings')))),
                   const PopupMenuDivider(),
-                  const PopupMenuItem(value: _MenuAction.signOut, child: ListTile(leading: Icon(Icons.logout), title: Text('Sign out'))),
+                  PopupMenuItem(value: _MenuAction.signOut, child: ListTile(leading: const Icon(Icons.logout), title: Text(tr('Sign out')))),
                 ],
               ),
             ],

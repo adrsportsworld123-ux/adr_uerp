@@ -24,6 +24,9 @@ type cartLine struct {
 	categoryID       string // "" if the product has no category
 	qty, unitPrice   float64
 	existingDiscount float64
+	// mrp is the variant's MRP (never below the selling price here), for
+	// a promotion that applies on MRP (migrations/065).
+	mrp float64
 }
 
 type eligiblePromo struct {
@@ -420,7 +423,8 @@ var errOrderNotEditable = errors.New("order is not editable")
 
 func loadCartLines(ctx context.Context, tx pgx.Tx, orderID string) ([]cartLine, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT sol.id, p.id, COALESCE(p.category_id::text,''), sol.quantity, sol.unit_price, sol.discount_amount
+		SELECT sol.id, p.id, COALESCE(p.category_id::text,''), sol.quantity, sol.unit_price, sol.discount_amount,
+		       GREATEST(COALESCE(pv.mrp, 0), sol.unit_price)
 		FROM sales_order_lines sol
 		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
@@ -433,7 +437,7 @@ func loadCartLines(ctx context.Context, tx pgx.Tx, orderID string) ([]cartLine, 
 	var lines []cartLine
 	for rows.Next() {
 		var l cartLine
-		if err := rows.Scan(&l.lineID, &l.productID, &l.categoryID, &l.qty, &l.unitPrice, &l.existingDiscount); err != nil {
+		if err := rows.Scan(&l.lineID, &l.productID, &l.categoryID, &l.qty, &l.unitPrice, &l.existingDiscount, &l.mrp); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)
@@ -443,7 +447,9 @@ func loadCartLines(ctx context.Context, tx pgx.Tx, orderID string) ([]cartLine, 
 
 type promotionDef struct {
 	id, promoType, applicationLevel, productID, categoryID, targetSegment, stacking string
-	config                                                                          promoConfig
+	// applyOn: "selling_price" (default) or "mrp" (migrations/065).
+	applyOn string
+	config  promoConfig
 	// categoryTree is categoryID plus every category beneath it, filled
 	// for category-level promotions: products are filed under a leaf
 	// (Cricket > Cricket Bats), so a promotion on "Cricket" must reach
@@ -455,7 +461,7 @@ type promotionDef struct {
 func loadEligiblePromotionDefs(ctx context.Context, tx pgx.Tx) ([]promotionDef, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, promo_type, application_level, COALESCE(product_id::text,''), COALESCE(category_id::text,''),
-		       COALESCE(target_segment,''), config, stacking
+		       COALESCE(target_segment,''), config, stacking, apply_on
 		FROM promotions
 		WHERE active
 		  AND (starts_at IS NULL OR starts_at <= now())
@@ -471,7 +477,7 @@ func loadEligiblePromotionDefs(ctx context.Context, tx pgx.Tx) ([]promotionDef, 
 		var d promotionDef
 		var rawConfig []byte
 		if err := rows.Scan(&d.id, &d.promoType, &d.applicationLevel, &d.productID, &d.categoryID,
-			&d.targetSegment, &rawConfig, &d.stacking); err != nil {
+			&d.targetSegment, &rawConfig, &d.stacking, &d.applyOn); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(rawConfig, &d.config)
@@ -524,7 +530,47 @@ func matchLines(p promotionDef, lines []cartLine) []cartLine {
 // evaluatePromotion computes the rupee discount a promotion resolves to
 // against its matched lines, or ok=false if it doesn't actually apply
 // (threshold not met, no room left after prior layers, etc.).
+//
+// A promotion that applies on MRP (migrations/065) is worked out on the
+// lines' MRPs: the promotional price is the MRP less that discount, and
+// the customer pays it only where it is below the selling price. So the
+// discount off the selling price is the MRP discount less the gap between
+// MRP and selling price, and nothing when the gap is wider. MRP ₹1,000,
+// selling price ₹900, 20% off MRP: ₹200 − ₹100 = ₹100 off (pays ₹800).
 func evaluatePromotion(p promotionDef, matched []cartLine, orderSubtotal float64) (amount float64, ok bool) {
+	if p.applyOn != "mrp" {
+		return evaluateOn(p, matched, orderSubtotal, orderSubtotal)
+	}
+	onMRP := make([]cartLine, len(matched))
+	var gap, remaining float64
+	for i, l := range matched {
+		onMRP[i] = l
+		if l.mrp > l.unitPrice {
+			onMRP[i].unitPrice = l.mrp
+			gap += l.qty * (l.mrp - l.unitPrice)
+		}
+		remaining += l.qty*l.unitPrice - l.existingDiscount
+	}
+	// min_value: the threshold is what the customer actually spends; a
+	// percentage is taken from the MRP value.
+	amt, ok := evaluateOn(p, onMRP, orderSubtotal, orderSubtotal+gap)
+	if !ok {
+		return 0, false
+	}
+	amt = round2(amt - gap)
+	if amt <= 0 {
+		return 0, false // the promotional price isn't below the selling price
+	}
+	if amt > remaining {
+		amt = remaining
+	}
+	return amt, true
+}
+
+// evaluateOn is evaluatePromotion on the lines' unit prices as given;
+// threshold is the order subtotal a min_value promotion needs, base the
+// value its percentage is taken from.
+func evaluateOn(p promotionDef, matched []cartLine, threshold, base float64) (amount float64, ok bool) {
 	var matchedRaw, matchedRemaining, matchedQty float64
 	for _, l := range matched {
 		matchedRaw += l.qty * l.unitPrice
@@ -548,12 +594,12 @@ func evaluatePromotion(p promotionDef, matched []cartLine, orderSubtotal float64
 		return amt, amt > 0
 
 	case "min_value":
-		if orderSubtotal < p.config.MinPurchaseAmount {
+		if threshold < p.config.MinPurchaseAmount {
 			return 0, false
 		}
 		amt := p.config.DiscountAmount
 		if p.config.DiscountPct > 0 {
-			amt = round2(orderSubtotal * p.config.DiscountPct / 100)
+			amt = round2(base * p.config.DiscountPct / 100)
 		}
 		if amt > matchedRemaining {
 			amt = matchedRemaining

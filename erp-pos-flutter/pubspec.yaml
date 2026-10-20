@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations: # Material/Cupertino texts and RTL in the till's language (erp-core-go migrations/064)
+    sdk: flutter
   http: ^1.2.2
   provider: ^6.1.2
   shared_preferences: ^2.3.2 # persists a per-device fingerprint for PIN-login device binding

@@ -249,6 +249,11 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `DESCRIPTION_NOT_ALLOWED` | 400 | `POST .../lines`, `PUT .../lines/{line_id}/description` | A description was sent for an item that isn't open-price (§3.70) |
 | `CANNOT_DEACTIVATE_SELF` / `LAST_USER_ADMIN` | 409 | `PATCH /users/{id}` | Deactivating yourself, or the last active user who can manage users (§3.70) |
 | `EMPLOYEE_CODE_REQUIRED` | 409 | `PUT /users/{id}/pin`, `PUT /me/pin` | PIN sign-in is code + PIN, and the user has no employee code (§3.70) |
+| `MERCHANT_INACTIVE` | 403 / 401 | `POST /auth/pin-login` (403), `POST /auth/refresh` (401) | The merchant was suspended or cancelled in the SaaS console (§3.73); the password login refuses it as `INVALID_CREDENTIALS`, as before |
+| `BANK_ACCOUNT_INACTIVE` | 409 | bill / receivable payments, cheques, loans, statement import (§3.73) | The named bank account is switched off |
+| `INVALID_STATE` | 409 | `/cheques/*`, `/employee-loans/*` (§3.73) | The cheque or loan is not in a state the action can happen from (a cleared cheque bounced, a used leaf, a post-dated cheque deposited early, more than a loan's balance) |
+| `PAYROLL_RECOMPUTE_NEEDED` | 409 | `POST /payroll/runs/{id}/finalize` (§3.73) | A loan instalment a payslip deducts was repaid by hand since the run was computed: run the period again, then finalize |
+| `PAYMENT_EXCEEDS_BALANCE` | 409 | `POST /customers/{id}/payments`, `POST /cheques/received/{id}/deposit` | More than the credit invoice still owes |
 
 ### 3.1 Auth
 
@@ -2403,6 +2408,135 @@ Verified with a throwaway Postgres and a throwaway OpenSearch:
 - §3.68–3.70's 162 checks re-run.
 - POS widget tests in `test/product_grid_test.dart`; the existing billing goldens are unchanged.
 - `e2e/pos-grid.spec.ts`, plus the users, round-off and phase14 specs.
+
+### 3.72 Localization: language, time zone, text direction and cart side, currency denominations (2026-10-20)
+
+`migrations/064_localization.sql`, `internal/locale`. Merchant level, with two settings a POS terminal can override. A merchant with no row behaves exactly as before: English, Asia/Kolkata, left to right, cart on the right, the INR notes.
+
+- **Settings.** `localization_settings` holds one row per merchant (RLS):
+  - `language`: one of en, ta, hi, ar, ml, te, kn, fr, es.
+  - `timezone`: an IANA name.
+  - `text_direction`: auto | ltr | rtl. auto follows the language, so Arabic is rtl.
+  - `cart_side`: left | right.
+  - `denominations`: `NUMERIC(14,2)[]`, 1–20 positive values. NULL means the currency's standard set (`locale.DefaultDenominations`: INR 2000…1 as the POS always used, plus USD, EUR, GBP, the Gulf currencies, SGD, MYR, LKR, NPR, BDT, AUD, NZD, CAD, ZAR and KES).
+  - `pos_terminals.text_direction` and `cart_side` are NULL to follow the merchant.
+- **API.**
+  - `GET /settings/localization` (any signed-in user) returns:
+    - the settings
+    - `effective`: resolved direction, the zone's current `utc_offset_minutes`, the merchant currency (Tax Settings, §3.69), and denominations
+    - `languages`, with native names and direction
+    - `timezones`
+  - `PUT /settings/localization` needs `localization.manage` (Merchant Admin). It is partial: an omitted field keeps its value. `denominations: null` restores the standard set; a list is deduplicated and sorted largest first. `apply_timezone_to_branches: true` also moves every `branches.timezone`. Validation errors are `400 INVALID_REQUEST`; the change is audited.
+  - `GET /settings/localization/terminal?pos_terminal_id=` returns what one till uses: the terminal's overrides and its branch currency (`404 NOT_FOUND` for an unknown terminal).
+  - `PATCH /pos-terminals/{id}` takes `text_direction` / `cart_side`; `""` means follow the merchant.
+- **Business clock.**
+  - `app_merchant_tz()` (SQL, STABLE, tenant-scoped through RLS) replaces the literal `'Asia/Kolkata'` in:
+    - the dashboard's sale day and hour
+    - the report builder's date, month, weekday, hour and time fields
+    - purchase bill/GRN noon dates and the PO "today"
+    - the pricing fallback when a branch has no zone
+    - a new branch's default zone
+  - In Go, `locale.Location(ctx, tx)` and `locale.MerchantLocation` (with an IST fallback) drive the Z/X day window, "today", the close-day rule and printed times (`internal/sales/day_report.go`), purchase date validation (`internal/purchase/dates.go`), report-builder periods (`Spec.clock`), and dashboard filters.
+  - A Z report requested with no date is today on the merchant clock (it was IST).
+  - `time/tzdata` is embedded, so the zone names work on a minimal image.
+  - Platform billing months (`subscriptions/limits.go`) stay IST on purpose.
+- **POS (erp-pos-flutter).**
+  - Every on-screen string goes through `tr()` (`lib/l10n`): English-keyed, with 536 strings in each of 8 languages. A missing string falls back to English, so English reads exactly as before.
+  - `flutter_localizations` translates Material's own texts.
+  - The builder's `Directionality` applies the terminal's direction.
+  - The wide layout puts the cart on the terminal's side. The side is physical: the same in either direction.
+  - Times read on the merchant clock (`PosClock`).
+  - The shift-close count uses the merchant's denominations, including coins below 1.
+  - Settings load in `refreshShift()` and are cached in shared preferences for the login screen and offline use.
+- **Web Admin core (erp-web-admin).**
+  - `lib/i18n.tsx` `t()` translates the shell, sidebar, breadcrumbs, command palette, login, the new Organization → Localization page, the terminal layout dialog, and the status/method/source labels. There are 174 strings in each of 8 languages.
+  - `<html lang dir>` follows the merchant; the shell uses logical (start/end) classes.
+  - `dateTime()` and `localDate()` use the merchant zone.
+  - Cash Reconciliation counts the merchant's denominations.
+  - Screens beyond that core are still English.
+
+Verified:
+- A 43-check API script on a throwaway database: defaults, permission, nine validation cases, partial updates, audit, Arabic auto-rtl, terminal overrides and their reset, Z report "today" in IST and then Dubai, the dashboard and report builder on the new clock, a timestamp's business day per zone, new-branch zones, and apply-to-branches.
+- §3.68–3.70's 162 checks re-run unchanged.
+- Go unit tests (`internal/locale`, `TestResolvePeriodFollowsTheClock`).
+- 73 Flutter tests, including dictionary completeness and placeholders, Arabic RTL with the cart on the left, and merchant denominations at shift close. The English goldens are unchanged.
+- `e2e/localization.spec.ts`.
+
+### 3.73 Merchant Management, user localization, promotions on MRP, bank accounts and cheques, employee loans, employee and bank-account parties (2026-10-20)
+
+Migrations 065–067; `internal/merchants`, `internal/banking`, `internal/loans`.
+
+**Not changed by default:**
+- A promotion applies on its selling price.
+- A payment that names no bank account posts to Bank (1002).
+- A payslip with no loan has no deduction.
+- A user with no language of their own sees the merchant's.
+
+The four existing regression scripts (§3.68–3.70, §3.72; 205 checks) pass unchanged, and so do the existing promotions, users, subscriptions and localization browser specs.
+
+- **Merchant Management.**
+  - `merchants` gains `pan`, `email`, `phone`, `website`, `address` (JSONB: line1, line2, city, state, state_code, pincode, country), `status_reason` and `status_changed_at`.
+  - Self-service: `GET /merchant/profile` (any user) and `PUT /merchant/profile` (`merchant.profile`, Merchant Admin). Partial, validated (GSTIN and PAN formats; the GSTIN must carry the PAN; GST state code), audited.
+  - The registered address is the letterhead's fallback when a branch's print settings give none.
+  - Console (platform staff):
+    - `GET /platform/merchants/{id}/profile` returns the profile, active branch/user/till counts and the Merchant Admins.
+    - `PATCH` the same path edits the profile.
+    - `POST .../status {status, reason}` sets active, suspended or cancelled.
+    - `POST .../admins/{user_id}/password {new_password, reason}` sets the password, clears a lockout and revokes sessions; only for a Merchant Admin.
+    - Every action goes to `platform_audit_log`.
+  - A merchant that isn't active can't sign in: password (as before), PIN and refresh (`MERCHANT_INACTIVE`). Those last two did not check before.
+- **User localization.**
+  - `users.language` and `users.text_direction` (NULL = the merchant's). `PUT /me/localization` for oneself; `PATCH /users/{id}` with `language` / `text_direction` for an admin (`""` = the merchant's).
+  - `GET /settings/localization` adds `user`, and `effective` is that user's.
+  - The terminal endpoint uses the signed-in cashier's language; the terminal's own direction still wins.
+  - The business clock and the denominations stay the merchant's.
+- **Promotions.**
+  - `promotions.apply_on` is `selling_price` (default) or `mrp`. On MRP the promotional price is that much off the MRP, and it applies only where it is below the selling price; the discount is MRP discount − (MRP − selling price) × qty. Example: MRP ₹1,000, selling price ₹900, 20% off MRP gives ₹800 (₹100 off). 5% off MRP (₹950) gives nothing.
+  - `POST /promotions/{id}/duplicate` makes a switched-off "Copy of …".
+  - Each promotion has a computed `state` (running, scheduled, expired, inactive), and `GET /promotions?state=` filters by it (also `current` = not expired).
+  - Fixed while testing (pre-existing): a cart whose promotions all lapsed kept the old `discount_total`. `ClearDiscountLayers` now recomputes the cart's totals.
+- **Bank accounts.**
+  - `bank_accounts` sit at merchant level or are a branch's own. Each has a ledger account: the first uses Bank 1002; later ones get a sub-account `1002-NN` under it.
+  - `GET /bank-accounts` (any user); `POST` and `PATCH /bank-accounts/{id}` (`bank.manage`). There is one default per scope, a CTS print calibration (`cheque_layout`), and a balance.
+  - Bill payments, receivable payments, loan disbursements and repayments take `bank_account_id` (bank transfer or cheque), and that line names the account as a `bank_account` party.
+  - A statement import names its account and reconciles against that ledger; the report takes `bank_account_id`.
+  - The Cash Book includes the `1002-NN` sub-accounts.
+- **Cheques.**
+  - Cheque books: `/bank-accounts/{id}/cheque-books`, at most 1,000 leaves, series may not overlap, `next_leaf` is shown. `/cheque-books/{id}/close`.
+  - Issued (`cheques.manage`):
+    - A bill paid `method: cheque` with a bank account is written on the register (payee = the supplier; leaf = the book's next, or the number given).
+    - `POST /cheques/issued` for any payee; `.../cancel-leaf` for a spoilt leaf.
+    - `POST /cheques/issued/{id}/clear|bounce|cancel`. Bounce or cancel reverses the bill payment it made (Dr bank, Cr payables, `cheque_bounce`) and the bill is owed again.
+    - `GET .../print` is a 202 × 92 mm PDF: date boxes, payee, amount in Indian words and figures, "A/C PAYEE" crossing, signatory line.
+  - Received:
+    - `POST /cheques/received`; nothing is posted.
+    - `.../deposit {bank_account_id}`, not before the cheque's date: against the invoice via the shared `customers.ApplyReceivablePayment`, or on account (Dr bank, Cr receivable).
+    - `.../clear`, `.../bounce` (reverses the receipt; the invoice is owed again), `.../return`.
+- **Employee loans.**
+  - `employee_loans` and their instalments and repayments. Flat interest: principal × rate × months / 12, spread evenly, with rounding taken by the last instalment.
+  - `POST /employee-loans` (`loans.manage`) disburses by cash, transfer or cheque (the cheque goes on the register) and posts Dr 1150 (employee) / Cr cash or bank. `POST /employee-loans/preview` returns the schedule.
+  - `.../repayments`: oldest instalments first; a part payment reduces the next one, interest first. `.../foreclose` waives the remaining interest by default. Both post Dr cash/bank, Cr 1150 (principal), Cr 4050 (interest).
+  - `GET /me/loans` for the employee.
+  - Payroll: `payslips.loan_deduction` holds the instalments due by the period that fit in net pay, and is part of `total_deductions`. A recompute takes the same instalments, not twice. Finalizing recovers them and posts Dr 2150 Salaries Payable, Cr 1150, Cr 4050. If one was repaid by hand meanwhile, finalizing answers `PAYROLL_RECOMPUTE_NEEDED`.
+  - New accounts 1150, 2150 and 4050 are seeded for every merchant and for new ones (`systemAccounts`). An existing account already on one of those codes is left alone.
+- **Journal parties.**
+  - `party_type` adds `employee` (users.id) and `bank_account` on journal and voucher lines.
+  - Vouchers validate that the party exists; the party ledger accepts both types.
+  - `GET /accounting/parties?type=employee|bank_account&q=` feeds the picker.
+- **Web Admin:**
+  - Organization → Company Profile; the console merchant page's Access, Admins and Company profile.
+  - The Users dialog and My Account get Language.
+  - Promotions: Apply on, Copy, and state filter and chip ("active"/"inactive" filters kept).
+  - Finance → Bank Accounts (with cheque books) and Cheques (Issued / Received).
+  - The bill payment form takes the account and cheque fields; customer credit payments take the account.
+  - HR → Employee Loans; payroll's Loan column.
+  - Voucher and party-ledger party types; bank reconciliation's account.
+
+Verified:
+- `round9_flow.py`, 127 checks on a throwaway database, run with the four regression scripts on one fresh database (332 in all).
+- Go unit tests: `TestEvaluatePromotionOnMRP`, `TestSchedule`, `TestForUser`, `TestAmountInWords`, `TestChequeFigures`, `TestRenderCheque*`.
+- `e2e/merchant-banking-loans.spec.ts`, plus `promotions`, `users-open-price`, `phase16-subscriptions` and `bank-reconciliation`.
+- An axe sweep of the new screens in both themes.
 
 ## 4. What Phase 0 concretely delivers against this design
 

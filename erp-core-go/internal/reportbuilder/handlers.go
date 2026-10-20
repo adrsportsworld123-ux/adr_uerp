@@ -16,6 +16,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/softdelete"
 	"erp-core-go/internal/subscriptions"
 )
@@ -77,6 +78,7 @@ func (h *Handler) Datasets(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) preview(w http.ResponseWriter, r *http.Request, spec Spec) {
 	claims, _ := authn.FromContext(r.Context())
+	spec.clock = locale.MerchantLocation(r.Context(), h.DB, claims.TenantID)
 	c, err := Compile(spec, horizonFor(r.Context()), PreviewRows)
 	if err != nil {
 		writeErr(w, err)

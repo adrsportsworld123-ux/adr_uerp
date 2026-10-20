@@ -34,6 +34,22 @@ import (
 type importStatementRequest struct {
 	Filename string `json:"filename"`
 	CSV      string `json:"csv"` // raw file content: header row "date,description,reference,amount" then one row per transaction
+	// BankAccountID: whose statement this is (migrations/066); it then
+	// reconciles against that account's ledger. "" = Bank (1002).
+	BankAccountID string `json:"bank_account_id"`
+}
+
+// statementLedgerSQL is the ledger account code a statement import (alias
+// i) reconciles against: its bank account's, else Bank (1002).
+const statementLedgerSQL = `COALESCE((SELECT coa.code FROM bank_accounts ba JOIN chart_of_accounts coa ON coa.id = ba.ledger_account_id
+	WHERE ba.id = i.bank_account_id), '` + AccountBank + `')`
+
+// lineLedgerCode is statementLedgerSQL for one statement line.
+func lineLedgerCode(ctx context.Context, tx pgx.Tx, lineID string) (string, error) {
+	var code string
+	err := tx.QueryRow(ctx, `SELECT `+statementLedgerSQL+` FROM bank_statement_lines l JOIN bank_statement_imports i ON i.id = l.import_id
+		WHERE l.id::text = $1`, lineID).Scan(&code)
+	return code, err
 }
 
 type statementLineResponse struct {
@@ -44,6 +60,7 @@ type statementLineResponse struct {
 	Amount               string  `json:"amount"`
 	Status               string  `json:"status"`
 	MatchedJournalLineID *string `json:"matched_journal_line_id"`
+	ImportID             string  `json:"import_id"`
 }
 
 type importResponse struct {
@@ -89,11 +106,14 @@ func (h *Handler) ImportBankStatement(w http.ResponseWriter, r *http.Request) {
 
 	var resp importResponse
 	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := BankLedgerCode(ctx, tx, req.BankAccountID); err != nil {
+			return err
+		}
 		var importID string
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO bank_statement_imports (id, merchant_id, filename, line_count, imported_by)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3)
-			RETURNING id`, req.Filename, len(rows), claims.UserID,
+			INSERT INTO bank_statement_imports (id, merchant_id, filename, line_count, imported_by, bank_account_id)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, NULLIF($4, '')::uuid)
+			RETURNING id`, req.Filename, len(rows), claims.UserID, req.BankAccountID,
 		).Scan(&importID); err != nil {
 			return err
 		}
@@ -124,7 +144,13 @@ func (h *Handler) ImportBankStatement(w http.ResponseWriter, r *http.Request) {
 		resp = importResponse{ImportID: importID, Filename: req.Filename, LineCount: len(rows), MatchedCount: matched, Lines: lines}
 		return nil
 	})
-	if err != nil {
+	if errors.Is(err, ErrNoBankAccount) {
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "bank account not found")
+		return
+	} else if errors.Is(err, ErrBankAccountInactive) {
+		httpx.Error(w, http.StatusConflict, "BANK_ACCOUNT_INACTIVE", "that bank account is inactive")
+		return
+	} else if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not import bank statement")
 		return
 	}
@@ -202,6 +228,10 @@ func autoMatchLines(ctx context.Context, tx pgx.Tx, lineIDs []string, matchedBy 
 			Scan(&txnDate, &amount); err != nil {
 			return matched, err
 		}
+		ledger, err := lineLedgerCode(ctx, tx, lineID)
+		if err != nil {
+			return matched, err
+		}
 
 		rows, err := tx.Query(ctx, `
 			SELECT jl.id
@@ -212,7 +242,7 @@ func autoMatchLines(ctx context.Context, tx pgx.Tx, lineIDs []string, matchedBy 
 			WHERE coa.code = $1 AND je.status = 'posted' AND bsl.id IS NULL
 			  AND je.entry_date BETWEEN $2::date - INTERVAL '3 days' AND $2::date + INTERVAL '3 days'
 			  AND ABS((CASE WHEN $3::numeric > 0 THEN jl.debit ELSE jl.credit END) - ABS($3::numeric)) < 0.01`,
-			AccountBank, txnDate, amount)
+			ledger, txnDate, amount)
 		if err != nil {
 			return matched, err
 		}
@@ -245,7 +275,8 @@ func autoMatchLines(ctx context.Context, tx pgx.Tx, lineIDs []string, matchedBy 
 
 func loadStatementLines(ctx context.Context, tx pgx.Tx, importID, status string) ([]statementLineResponse, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, txn_date::text, COALESCE(description,''), COALESCE(reference,''), amount::text, status, matched_journal_line_id::text
+		SELECT id, txn_date::text, COALESCE(description,''), COALESCE(reference,''), amount::text, status, matched_journal_line_id::text,
+		       import_id::text
 		FROM bank_statement_lines
 		WHERE ($1 = '' OR import_id = $1::uuid) AND ($2 = '' OR status = $2)
 		ORDER BY txn_date, created_at`, importID, status)
@@ -256,7 +287,7 @@ func loadStatementLines(ctx context.Context, tx pgx.Tx, importID, status string)
 	lines := []statementLineResponse{}
 	for rows.Next() {
 		var l statementLineResponse
-		if err := rows.Scan(&l.LineID, &l.TxnDate, &l.Description, &l.Reference, &l.Amount, &l.Status, &l.MatchedJournalLineID); err != nil {
+		if err := rows.Scan(&l.LineID, &l.TxnDate, &l.Description, &l.Reference, &l.Amount, &l.Status, &l.MatchedJournalLineID, &l.ImportID); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)
@@ -275,6 +306,9 @@ type importSummary struct {
 	LineCount    int    `json:"line_count"`
 	MatchedCount int    `json:"matched_count"`
 	ImportedAt   string `json:"imported_at"`
+	// BankAccountID / BankAccount: whose statement (null = Bank, 1002).
+	BankAccountID *string `json:"bank_account_id"`
+	BankAccount   *string `json:"bank_account"`
 }
 
 func (h *Handler) ListBankStatementImports(w http.ResponseWriter, r *http.Request) {
@@ -286,15 +320,17 @@ func (h *Handler) ListBankStatementImports(w http.ResponseWriter, r *http.Reques
 	imports := []importSummary{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, COALESCE(filename,''), line_count, matched_count, imported_at::text
-			FROM bank_statement_imports ORDER BY imported_at DESC`)
+			SELECT i.id, COALESCE(i.filename,''), i.line_count, i.matched_count, i.imported_at::text,
+			       i.bank_account_id::text, ba.bank_name || ' ••' || right(ba.account_number, 4)
+			FROM bank_statement_imports i LEFT JOIN bank_accounts ba ON ba.id = i.bank_account_id
+			ORDER BY i.imported_at DESC`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var s importSummary
-			if err := rows.Scan(&s.ImportID, &s.Filename, &s.LineCount, &s.MatchedCount, &s.ImportedAt); err != nil {
+			if err := rows.Scan(&s.ImportID, &s.Filename, &s.LineCount, &s.MatchedCount, &s.ImportedAt, &s.BankAccountID, &s.BankAccount); err != nil {
 				return err
 			}
 			imports = append(imports, s)
@@ -366,6 +402,10 @@ func (h *Handler) BankStatementLineCandidates(w http.ResponseWriter, r *http.Req
 		if err := tx.QueryRow(ctx, `SELECT txn_date::text FROM bank_statement_lines WHERE id = $1`, lineID).Scan(&txnDate); err != nil {
 			return err
 		}
+		ledger, err := lineLedgerCode(ctx, tx, lineID)
+		if err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT jl.id, je.entry_date::text, COALESCE(je.description,''), je.source_type, jl.debit::text, jl.credit::text
 			FROM journal_lines jl
@@ -374,7 +414,7 @@ func (h *Handler) BankStatementLineCandidates(w http.ResponseWriter, r *http.Req
 			LEFT JOIN bank_statement_lines bsl ON bsl.matched_journal_line_id = jl.id
 			WHERE coa.code = $1 AND je.status = 'posted' AND bsl.id IS NULL
 			  AND je.entry_date BETWEEN $2::date - INTERVAL '7 days' AND $2::date + INTERVAL '7 days'
-			ORDER BY je.entry_date`, AccountBank, txnDate)
+			ORDER BY je.entry_date`, ledger, txnDate)
 		if err != nil {
 			return err
 		}
@@ -532,12 +572,22 @@ func (h *Handler) BankReconciliationReport(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// bank_account_id (migrations/066): one account's reconciliation;
+	// none = Bank (1002), as before.
+	bankAccountID := r.URL.Query().Get("bank_account_id")
 	resp := reconciliationReport{Start: start, End: end, UnmatchedStatementLines: []statementLineResponse{}, UnmatchedLedgerLines: []unmatchedLedgerLine{}}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		ledger := AccountBank
+		if bankAccountID != "" {
+			if err := tx.QueryRow(ctx, `SELECT coa.code FROM bank_accounts ba JOIN chart_of_accounts coa ON coa.id = ba.ledger_account_id
+				WHERE ba.id::text = $1`, bankAccountID).Scan(&ledger); err != nil {
+				return ErrNoBankAccount
+			}
+		}
 		var matchedTotal float64
 		if err := tx.QueryRow(ctx, `
-			SELECT COALESCE(SUM(ABS(amount)),0) FROM bank_statement_lines
-			WHERE status = 'matched' AND txn_date BETWEEN $1::date AND $2::date`, start, end,
+			SELECT COALESCE(SUM(ABS(l.amount)),0) FROM bank_statement_lines l JOIN bank_statement_imports i ON i.id = l.import_id
+			WHERE l.status = 'matched' AND l.txn_date BETWEEN $1::date AND $2::date AND `+statementLedgerSQL+` = $3`, start, end, ledger,
 		).Scan(&matchedTotal); err != nil {
 			return err
 		}
@@ -547,8 +597,22 @@ func (h *Handler) BankReconciliationReport(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			return err
 		}
+		ofLedger := map[string]bool{}
+		irows, err := tx.Query(ctx, `SELECT i.id::text FROM bank_statement_imports i WHERE `+statementLedgerSQL+` = $1`, ledger)
+		if err != nil {
+			return err
+		}
+		for irows.Next() {
+			var id string
+			if err := irows.Scan(&id); err != nil {
+				irows.Close()
+				return err
+			}
+			ofLedger[id] = true
+		}
+		irows.Close()
 		for _, l := range unmatchedStmt {
-			if l.TxnDate >= start && l.TxnDate <= end {
+			if l.TxnDate >= start && l.TxnDate <= end && ofLedger[l.ImportID] {
 				resp.UnmatchedStatementLines = append(resp.UnmatchedStatementLines, l)
 			}
 		}
@@ -561,7 +625,7 @@ func (h *Handler) BankReconciliationReport(w http.ResponseWriter, r *http.Reques
 			LEFT JOIN bank_statement_lines bsl ON bsl.matched_journal_line_id = jl.id
 			WHERE coa.code = $1 AND je.status = 'posted' AND bsl.id IS NULL
 			  AND je.entry_date BETWEEN $2::date AND $3::date
-			ORDER BY je.entry_date`, AccountBank, start, end)
+			ORDER BY je.entry_date`, ledger, start, end)
 		if err != nil {
 			return err
 		}
@@ -575,7 +639,10 @@ func (h *Handler) BankReconciliationReport(w http.ResponseWriter, r *http.Reques
 		}
 		return rows.Err()
 	})
-	if err != nil {
+	if errors.Is(err, ErrNoBankAccount) {
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "bank account not found")
+		return
+	} else if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not build reconciliation report")
 		return
 	}

@@ -26,7 +26,27 @@ import { BranchSelect, useMyBranches } from "@/components/data/branch-select";
 import { StatusChip } from "@/components/data/status-chip";
 
 import { currencySymbol } from "@/lib/currency";
-const DENOMINATIONS = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
+
+// The INR notes and coins, until the merchant's own list loads.
+const INR_DENOMINATIONS = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
+
+/**
+ * The notes and coins the merchant counts (Localization, erp-core-go
+ * migrations/064): its own list, or its currency's standard set.
+ */
+function useDenominations(): number[] {
+  const [list, setList] = useState(INR_DENOMINATIONS);
+  useEffect(() => {
+    api
+      .get<{ effective: { denominations: string[] } }>("/api/v1/settings/localization")
+      .then((s) => {
+        const values = (s.effective.denominations ?? []).map(Number).filter((d) => d > 0);
+        if (values.length > 0) setList(values);
+      })
+      .catch(() => {}); // an older API: the INR set
+  }, []);
+  return list;
+}
 
 export default function CashReconciliationPage() {
   const { branches, defaultBranchId } = useMyBranches();
@@ -55,6 +75,7 @@ function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; de
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CashReconciliation | null>(null);
+  const denomList = useDenominations();
 
   const loadCashSales = useCallback(() => {
     if (!branchId) return;
@@ -65,7 +86,8 @@ function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; de
   }, [branchId, date]);
   useEffect(loadCashSales, [loadCashSales]);
 
-  const countedTotal = DENOMINATIONS.reduce((sum, d) => sum + d * (Number(counts[d]) || 0), 0);
+  // In paise, so coins below one (0.25) add up exactly.
+  const countedTotal = denomList.reduce((sum, d) => sum + Math.round(d * 100) * (Number(counts[d]) || 0), 0) / 100;
   const systemExpected = (Number(openingFloat) || 0) + (Number(cashSales) || 0);
   const variance = Math.round((countedTotal - systemExpected) * 100) / 100;
   const needsApproval = variance !== 0;
@@ -75,7 +97,7 @@ function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; de
     setBusy(true);
     setError(null);
     try {
-      const denominations = DENOMINATIONS.filter((d) => Number(counts[d]) > 0).map((d) => ({
+      const denominations = denomList.filter((d) => Number(counts[d]) > 0).map((d) => ({
         denomination: d,
         count: Number(counts[d]),
       }));
@@ -121,7 +143,7 @@ function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; de
         </p>
 
         <div className="grid grid-cols-5 gap-3">
-          {DENOMINATIONS.map((d) => (
+          {denomList.map((d) => (
             <div key={d} className="flex flex-col gap-1">
               <Label className="text-xs">{currencySymbol()}{d}</Label>
               <Input type="number" min="0" step="1" className="h-8" value={counts[d] ?? ""} onChange={(e) => setCounts({ ...counts, [d]: e.target.value })} />

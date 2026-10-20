@@ -41,6 +41,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/search"
 )
 
@@ -445,7 +446,7 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 			return nil, err
 		}
 	}
-	if d, err := pastDate(req.InvoiceDate); err != nil || d == nil {
+	if d, err := pastDate(req.InvoiceDate, locale.Location(ctx, tx)); err != nil || d == nil {
 		fail("the invoice date must be a date (YYYY-MM-DD) that isn't in the future")
 	} else {
 		p.billDate = d

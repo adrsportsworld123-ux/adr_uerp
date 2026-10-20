@@ -27,6 +27,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 )
 
 type Handler struct {
@@ -59,6 +60,10 @@ type user struct {
 	HomeBranch        *branchRef  `json:"home_branch"` // null = no home branch (all branches)
 	ExtraBranches     []branchRef `json:"extra_branches"`
 	Roles             []roleRef   `json:"roles"`
+	// The user's own language and text direction (migrations/065); null =
+	// the merchant's localization.
+	Language      *string `json:"language"`
+	TextDirection *string `json:"text_direction"`
 }
 
 const userSelect = `
@@ -69,7 +74,8 @@ const userSelect = `
 	       COALESCE((SELECT json_agg(json_build_object('branch_id', ub.branch_id, 'name', b.name) ORDER BY b.name)
 	                 FROM user_branches ub JOIN branches b ON b.id = ub.branch_id WHERE ub.user_id = u.id), '[]'),
 	       COALESCE((SELECT json_agg(json_build_object('role_id', r.id, 'name', r.name) ORDER BY r.name)
-	                 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id), '[]')
+	                 FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = u.id), '[]'),
+	       u.language, u.text_direction
 	FROM users u LEFT JOIN branches hb ON hb.id = u.branch_id`
 
 func scanUser(row pgx.Row) (user, error) {
@@ -77,7 +83,7 @@ func scanUser(row pgx.Row) (user, error) {
 	var homeID, homeName *string
 	var extra, roles []byte
 	if err := row.Scan(&u.UserID, &u.Name, &u.Email, &u.Phone, &u.EmployeeCode, &u.Status, &u.Locked, &u.FailedAttempts,
-		&u.HasPassword, &u.HasPIN, &u.PasswordChangedAt, &u.CreatedAt, &homeID, &homeName, &extra, &roles); err != nil {
+		&u.HasPassword, &u.HasPIN, &u.PasswordChangedAt, &u.CreatedAt, &homeID, &homeName, &extra, &roles, &u.Language, &u.TextDirection); err != nil {
 		return u, err
 	}
 	if homeID != nil {
@@ -230,6 +236,13 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if v, ok := raw["unlock"]; ok {
 		_ = json.Unmarshal(v, &unlock)
 	}
+	// {"language": "ta" | "" , "text_direction": "rtl" | ""}: the user's own
+	// localization (migrations/065); "" = the merchant's.
+	langSet, dirSet, lang, dir, badLocale := locale.ParseUserPrefs(raw)
+	if badLocale != "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", badLocale)
+		return
+	}
 	homeSet := false
 	var home *string
 	if v, ok := raw["home_branch_id"]; ok {
@@ -294,6 +307,11 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if _, err := tx.Exec(ctx, `UPDATE users SET branch_id = $2::uuid WHERE id::text = $1`, id, home); err != nil {
+				return err
+			}
+		}
+		if langSet || dirSet {
+			if err := locale.SaveUserPrefs(ctx, tx, id, langSet, dirSet, lang, dir); err != nil {
 				return err
 			}
 		}

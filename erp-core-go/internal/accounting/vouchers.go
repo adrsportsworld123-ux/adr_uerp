@@ -185,7 +185,21 @@ type voucherLine struct {
 // party deleted since is hidden by its table's policy, so it reads null.
 const partyNameSQL = `CASE l.party_type
 	WHEN 'customer' THEN (SELECT c.name FROM customers c WHERE c.id = l.party_id)
-	WHEN 'supplier' THEN (SELECT s.name FROM suppliers s WHERE s.id = l.party_id) END`
+	WHEN 'supplier' THEN (SELECT s.name FROM suppliers s WHERE s.id = l.party_id)
+	WHEN 'employee' THEN (SELECT u.name || COALESCE(' (' || u.employee_code || ')', '') FROM users u WHERE u.id = l.party_id)
+	WHEN 'bank_account' THEN (SELECT ba.bank_name || ' ••' || right(ba.account_number, 4) FROM bank_accounts ba WHERE ba.id = l.party_id) END`
+
+// PartyTypes a journal line can name (migrations/067 added employees and
+// the merchant's bank accounts).
+var PartyTypes = map[string]bool{"customer": true, "supplier": true, "employee": true, "bank_account": true}
+
+// partyExistsSQL: $1 party type, $2 party id.
+const partyExistsSQL = `SELECT CASE $1
+	WHEN 'customer' THEN EXISTS (SELECT 1 FROM customers WHERE id::text = $2)
+	WHEN 'supplier' THEN EXISTS (SELECT 1 FROM suppliers WHERE id::text = $2)
+	WHEN 'employee' THEN EXISTS (SELECT 1 FROM users WHERE id::text = $2 AND employee_code IS NOT NULL)
+	WHEN 'bank_account' THEN EXISTS (SELECT 1 FROM bank_accounts WHERE id::text = $2)
+	ELSE false END`
 
 // partyAccounts: the control accounts whose balance is the sum of the
 // parties' balances (the party ledger). A line on one must name its party,
@@ -287,8 +301,8 @@ func (in *voucherInput) validate() error {
 		in.Lines[i].PartyType = strings.TrimSpace(l.PartyType)
 		in.Lines[i].PartyID = strings.TrimSpace(l.PartyID)
 		l = in.Lines[i]
-		if l.PartyType != "" && l.PartyType != "customer" && l.PartyType != "supplier" {
-			return fmt.Errorf("%w: line %d party_type must be customer or supplier", errVoucherInvalid, i+1)
+		if l.PartyType != "" && !PartyTypes[l.PartyType] {
+			return fmt.Errorf("%w: line %d party_type must be customer, supplier, employee or bank_account", errVoucherInvalid, i+1)
 		}
 		if (l.PartyType == "") != (l.PartyID == "") {
 			return fmt.Errorf("%w: line %d needs both a party type and a party, or neither", errVoucherInvalid, i+1)
@@ -327,8 +341,7 @@ func writeVoucherLines(ctx context.Context, tx pgx.Tx, voucherID string, lines [
 		}
 		if l.PartyID != "" {
 			var found bool
-			if err := tx.QueryRow(ctx, `SELECT CASE $1 WHEN 'customer' THEN EXISTS (SELECT 1 FROM customers WHERE id::text = $2)
-				ELSE EXISTS (SELECT 1 FROM suppliers WHERE id::text = $2) END`, l.PartyType, l.PartyID).Scan(&found); err != nil {
+			if err := tx.QueryRow(ctx, partyExistsSQL, l.PartyType, l.PartyID).Scan(&found); err != nil {
 				return err
 			}
 			if !found {
@@ -984,4 +997,57 @@ func (h *Handler) GetJournalEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, e)
+}
+
+// PartySearch: GET /accounting/parties?type=employee|bank_account&q= — the
+// employees and bank accounts a voucher line can name (migrations/067),
+// for the party picker: anyone who may write vouchers, not only HR.
+func (h *Handler) PartySearch(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	typ, q := r.URL.Query().Get("type"), strings.TrimSpace(r.URL.Query().Get("q"))
+	var query string
+	switch typ {
+	case "employee":
+		query = `SELECT id::text, name, COALESCE(employee_code, '') FROM users
+			WHERE employee_code IS NOT NULL AND ($1 = '' OR name ILIKE '%' || $1 || '%' OR employee_code ILIKE '%' || $1 || '%')
+			ORDER BY status = 'active' DESC, name LIMIT 50`
+	case "bank_account":
+		query = `SELECT id::text, bank_name || ' ••' || right(account_number, 4), account_name FROM bank_accounts
+			WHERE (branch_id IS NULL OR app_branch_visible(branch_id))
+			  AND ($1 = '' OR bank_name ILIKE '%' || $1 || '%' OR account_name ILIKE '%' || $1 || '%' OR account_number LIKE '%' || $1 || '%')
+			ORDER BY status = 'active' DESC, bank_name LIMIT 50`
+	default:
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "type must be employee or bank_account")
+		return
+	}
+	type party struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Hint string `json:"hint"`
+	}
+	out := []party{}
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, query, q)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p party
+			if err := rows.Scan(&p.ID, &p.Name, &p.Hint); err != nil {
+				return err
+			}
+			out = append(out, p)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not search parties")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"parties": out})
 }

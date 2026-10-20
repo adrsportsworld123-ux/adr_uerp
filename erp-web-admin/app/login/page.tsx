@@ -16,6 +16,7 @@ import {
   takeSessionExpiredReason,
 } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth";
+import { t, useCachedLocalization } from "@/lib/i18n";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -28,6 +29,9 @@ import { useEffect, useState } from "react";
 // uses.
 export default function LoginPage() {
   const { userId, ready, login } = useAuth();
+  // The language this browser last signed in with (migrations/064); the
+  // merchant's own is loaded after sign-in.
+  const localeKey = useCachedLocalization();
   const router = useRouter();
 
   const [merchantCode, setMerchantCode] = useState(DEFAULT_MERCHANT_CODE);
@@ -74,12 +78,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex flex-1 items-center justify-center p-6">
+    <div key={localeKey} className="flex flex-1 items-center justify-center p-6">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>ERP Admin</CardTitle>
+          <CardTitle>{t("ERP Admin")}</CardTitle>
           <CardDescription>
-            Back-office login for purchase, accounting, and reporting
+            {t("Back-office login for purchase, accounting, and reporting")}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -90,11 +94,11 @@ export default function LoginPage() {
                 data-testid="session-expired-notice"
                 className="rounded border border-warn/40 bg-warn-soft px-3 py-2 text-sm text-warn"
               >
-                {notice}
+                {t(notice)}
               </p>
             )}
             <div className="flex flex-col gap-2">
-              <Label htmlFor="merchantCode">Merchant code</Label>
+              <Label htmlFor="merchantCode">{t("Merchant code")}</Label>
               <Input
                 id="merchantCode"
                 value={merchantCode}
@@ -103,7 +107,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">{t("Email")}</Label>
               <Input
                 id="email"
                 type="email"
@@ -113,7 +117,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t("Password")}</Label>
               <Input
                 id="password"
                 type="password"
@@ -124,13 +128,13 @@ export default function LoginPage() {
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" disabled={submitting}>
-              {submitting ? "Signing in..." : "Sign in"}
+              {submitting ? t("Signing in...") : t("Sign in")}
             </Button>
             <Link
               href="/forgot-password"
               className="text-sm text-muted-foreground text-center hover:underline"
             >
-              Forgot password?
+              {t("Forgot password?")}
             </Link>
           </form>
         </CardContent>

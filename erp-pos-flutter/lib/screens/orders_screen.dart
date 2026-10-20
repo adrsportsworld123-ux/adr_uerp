@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../local/offline_store.dart';
 import '../state/session.dart';
 import '../ui/format.dart';
@@ -72,7 +73,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   (String, String) get _range {
-    final now = DateTime.now();
+    final now = PosClock.now();
     final today = DateTime(now.year, now.month, now.day);
     return switch (_period) {
       _Period.today => (_ymd(today), _ymd(today)),
@@ -126,7 +127,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _summary = results[1] as SalesSummaryData;
         _loading = false;
         _error = null;
-        _updatedAt = DateTime.now();
+        _updatedAt = PosClock.now();
       });
     } on ApiException catch (e) {
       if (!mounted || seq != _loadSeq || quiet) return;
@@ -137,7 +138,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     } catch (_) {
       if (!mounted || seq != _loadSeq || quiet) return;
       setState(() {
-        _error = 'Can\'t reach the server. Only this device\'s queued sales are shown.';
+        _error = tr('Can\'t reach the server. Only this device\'s queued sales are shown.');
         _loading = false;
       });
     }
@@ -157,7 +158,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _page += 1;
       });
     } catch (_) {
-      _snack('Could not load more sales');
+      _snack(tr('Could not load more sales'));
     } finally {
       if (mounted) setState(() => _loadingMore = false);
     }
@@ -176,7 +177,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     try {
       receipt = await session.receiptFor(o.orderId);
     } catch (_) {
-      _snack('Could not load this sale');
+      _snack(tr('Could not load this sale'));
       return;
     }
     if (!mounted) return;
@@ -208,16 +209,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sales history'),
+        title: Text(tr('Sales history')),
         actions: [
           if (_updatedAt != null)
             Center(
               child: Padding(
                 padding: const EdgeInsets.only(right: 4),
-                child: Text('Updated ${_hm(_updatedAt!)}', style: theme.textTheme.bodySmall),
+                child: Text(tr('Updated {0}', [_hm(_updatedAt!)]), style: theme.textTheme.bodySmall),
               ),
             ),
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh), tooltip: 'Refresh'),
+          IconButton(onPressed: _load, icon: const Icon(Icons.refresh), tooltip: tr('Refresh')),
         ],
       ),
       body: RefreshIndicator(
@@ -228,13 +229,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
             _filters(theme),
             const SizedBox(height: 12),
             if (session.offlineMode)
-              _banner(theme, Icons.cloud_off, 'Offline. Only sales on this device are shown; history and returns need a connection.')
+              _banner(theme, Icons.cloud_off, tr('Offline. Only sales on this device are shown; history and returns need a connection.'))
             else if (_error != null)
               _banner(theme, Icons.error_outline, _error!),
             if (_summary != null) _summaryTiles(theme, _summary!),
             if (_queued.isNotEmpty) ...[
               const SizedBox(height: 16),
-              Text('Waiting to sync (${_queued.length})', style: theme.textTheme.titleSmall),
+              Text(tr('Waiting to sync ({0})', [_queued.length]), style: theme.textTheme.titleSmall),
               const SizedBox(height: 4),
               for (final q in _queued) _queuedTile(theme, q),
             ],
@@ -242,7 +243,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             if (_loading)
               const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator()))
             else if (!session.offlineMode && _error == null) ...[
-              Text(_total == 0 ? 'No sales match' : '$_total sale${_total == 1 ? '' : 's'}', style: theme.textTheme.titleSmall),
+              Text(_total == 0 ? tr('No sales match') : (_total == 1 ? tr('1 sale') : tr('{0} sales', [_total])), style: theme.textTheme.titleSmall),
               const SizedBox(height: 4),
               for (final o in _orders) _orderTile(theme, o),
               if (_orders.length < _total)
@@ -251,7 +252,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                   child: Center(
                     child: OutlinedButton(
                       onPressed: _loadingMore ? null : _loadMore,
-                      child: Text(_loadingMore ? 'Loading…' : 'Load more'),
+                      child: Text(_loadingMore ? tr('Loading…') : tr('Load more')),
                     ),
                   ),
                 ),
@@ -269,9 +270,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(value: true, label: Text('This till')),
-            ButtonSegment(value: false, label: Text('Whole branch')),
+          segments: [
+            ButtonSegment(value: true, label: Text(tr('This till'))),
+            ButtonSegment(value: false, label: Text(tr('Whole branch'))),
           ],
           selected: {_thisTill},
           onSelectionChanged: (v) {
@@ -279,7 +280,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             _load();
           },
         ),
-        for (final (p, label) in const [(_Period.today, 'Today'), (_Period.yesterday, 'Yesterday'), (_Period.week, 'Last 7 days')])
+        for (final (p, label) in [(_Period.today, tr('Today')), (_Period.yesterday, tr('Yesterday')), (_Period.week, tr('Last 7 days'))])
           ChoiceChip(
             label: Text(label),
             selected: _period == p,
@@ -291,12 +292,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
         DropdownButton<String>(
           value: _status,
           underline: const SizedBox.shrink(),
-          items: const [
-            DropdownMenuItem(value: '', child: Text('All statuses')),
-            DropdownMenuItem(value: 'finalized', child: Text('Completed')),
-            DropdownMenuItem(value: 'partially_refunded', child: Text('Partly refunded')),
-            DropdownMenuItem(value: 'refunded', child: Text('Refunded')),
-            DropdownMenuItem(value: 'voided', child: Text('Voided')),
+          items: [
+            DropdownMenuItem(value: '', child: Text(tr('All statuses'))),
+            DropdownMenuItem(value: 'finalized', child: Text(tr('Completed'))),
+            DropdownMenuItem(value: 'partially_refunded', child: Text(tr('Partly refunded'))),
+            DropdownMenuItem(value: 'refunded', child: Text(tr('Refunded'))),
+            DropdownMenuItem(value: 'voided', child: Text(tr('Voided'))),
           ],
           onChanged: (v) {
             setState(() => _status = v ?? '');
@@ -315,12 +316,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
             decoration: InputDecoration(
               isDense: true,
               prefixIcon: const Icon(Icons.search),
-              hintText: 'Order no., customer or phone',
+              hintText: tr('Order no., customer or phone'),
               border: const OutlineInputBorder(),
               suffixIcon: _search.text.isEmpty
                   ? null
                   : IconButton(
-                      tooltip: 'Clear search',
+                      tooltip: tr('Clear search'),
                       icon: const Icon(Icons.clear),
                       onPressed: () {
                         _search.clear();
@@ -366,11 +367,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
           ]),
         );
     return Wrap(spacing: 8, runSpacing: 8, children: [
-      tile('Sales', '${s.orderCount}', key: const Key('summary-count')),
-      tile('Net sales', formatRupees(s.netSales), key: const Key('summary-net')),
+      tile(tr('Sales'), '${s.orderCount}', key: const Key('summary-count')),
+      tile(tr('Net sales'), formatRupees(s.netSales), key: const Key('summary-net')),
       for (final m in const ['cash', 'card', 'upi', 'credit'])
         if (s.byMethod.containsKey(m)) tile(m == 'upi' ? 'UPI' : '${m[0].toUpperCase()}${m.substring(1)}', formatRupees(s.byMethod[m]!)),
-      if (s.refundedCount > 0 || s.voidedCount > 0) tile('Refunded · voided', '${s.refundedCount} · ${s.voidedCount}'),
+      if (s.refundedCount > 0 || s.voidedCount > 0) tile(tr('Refunded · voided'), '${s.refundedCount} · ${s.voidedCount}'),
     ]);
   }
 
@@ -382,10 +383,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
         leading: Icon(failed ? Icons.sync_problem : Icons.cloud_upload_outlined, color: failed ? theme.colorScheme.error : null),
         title: Text(q.orderNumber),
         subtitle: Text(failed
-            ? 'Sync failed: ${q.syncError}'
-            : 'Queued · ${formatQty(q.itemCount.toString())} item(s) · ${_time(q.createdAt)}'),
+            ? tr('Sync failed: {0}', [q.syncError])
+            : tr('Queued · {0} item(s) · {1}', [formatQty(q.itemCount.toString()), _time(q.createdAt)])),
         trailing: Text(formatRupeesNum(q.grandTotal), style: theme.textTheme.titleSmall),
-        onTap: () => _snack('This sale reaches the server when the till is back online. It can be reprinted or returned after that.'),
+        onTap: () => _snack(tr('This sale reaches the server when the till is back online. It can be reprinted or returned after that.')),
       ),
     );
   }
@@ -434,9 +435,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   static String _time(String? iso) {
     if (iso == null) return '';
-    final t = DateTime.tryParse(iso)?.toLocal();
+    final t = PosClock.parse(iso);
     if (t == null) return '';
-    final now = DateTime.now();
+    final now = PosClock.now();
     final hm = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     if (t.year == now.year && t.month == now.month && t.day == now.day) return hm;
     return '${t.day}/${t.month} $hm';

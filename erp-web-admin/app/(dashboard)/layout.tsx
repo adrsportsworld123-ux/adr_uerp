@@ -5,6 +5,7 @@ import { useRequireAuth } from "@/lib/auth";
 import { AppShell } from "@/components/shell/app-shell";
 import { PermissionsProvider } from "@/lib/permissions";
 import { CurrencyProvider } from "@/lib/currency";
+import { LocaleProvider } from "@/lib/i18n";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { ready, userId } = useRequireAuth();
@@ -16,7 +17,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <PermissionsProvider>
       <CurrencyProvider>
-        <AppShell>{children}</AppShell>
+        <LocaleProvider>
+          <AppShell>{children}</AppShell>
+        </LocaleProvider>
       </CurrencyProvider>
     </PermissionsProvider>
   );

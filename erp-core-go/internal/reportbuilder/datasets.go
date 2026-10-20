@@ -11,13 +11,15 @@ package reportbuilder
 // Field types decide formatting, which filter operators apply and which
 // aggregations make sense.
 const (
-	TText     = "text"
-	TNumber   = "number"
-	TMoney    = "money"
-	TDate     = "date"
-	TBool     = "bool"
-	istDate   = "AT TIME ZONE 'Asia/Kolkata')::date"
-	istMonth  = "AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM')"
+	TText   = "text"
+	TNumber = "number"
+	TMoney  = "money"
+	TDate   = "date"
+	TBool   = "bool"
+	// The merchant's business clock (migrations/064); Asia/Kolkata unless
+	// the merchant set another.
+	istDate   = "AT TIME ZONE app_merchant_tz())::date"
+	istMonth  = "AT TIME ZONE app_merchant_tz(), 'YYYY-MM')"
 	maxFields = 20
 )
 
@@ -101,8 +103,8 @@ var Datasets = []Dataset{
 		Fields: []Field{
 			{"date", "Date", TDate, "(" + saleTime + " " + istDate},
 			{"month", "Month", TText, "to_char(" + saleTime + " " + istMonth},
-			{"weekday", "Weekday", TText, "trim(to_char(" + saleTime + " AT TIME ZONE 'Asia/Kolkata', 'Day'))"},
-			{"hour", "Hour of day", TNumber, "extract(hour FROM " + saleTime + " AT TIME ZONE 'Asia/Kolkata')::int"},
+			{"weekday", "Weekday", TText, "trim(to_char(" + saleTime + " AT TIME ZONE app_merchant_tz(), 'Day'))"},
+			{"hour", "Hour of day", TNumber, "extract(hour FROM " + saleTime + " AT TIME ZONE app_merchant_tz())::int"},
 			{"order_number", "Sale number", TText, "so.order_number"},
 			{"status", "Status", TText, "so.status"},
 			fChannel, fBranch, fTerminal,
@@ -345,7 +347,7 @@ var Datasets = []Dataset{
 		where: "true",
 		Fields: []Field{
 			{"date", "Date", TDate, "(al.created_at " + istDate},
-			{"time", "Time", TText, "to_char(al.created_at AT TIME ZONE 'Asia/Kolkata', 'HH24:MI:SS')"},
+			{"time", "Time", TText, "to_char(al.created_at AT TIME ZONE app_merchant_tz(), 'HH24:MI:SS')"},
 			{"entity_type", "Record type", TText, "al.entity_type"},
 			{"entity_id", "Record id", TText, "al.entity_id::text"},
 			{"action", "Action", TText, "al.action"},
@@ -383,7 +385,7 @@ var Datasets = []Dataset{
 		where: "true",
 		Fields: []Field{
 			{"date", "Date", TDate, "(ev.at " + istDate},
-			{"time", "Time", TText, "to_char(ev.at AT TIME ZONE 'Asia/Kolkata', 'HH24:MI')"},
+			{"time", "Time", TText, "to_char(ev.at AT TIME ZONE app_merchant_tz(), 'HH24:MI')"},
 			{"event", "Event", TText, `CASE ev.event WHEN 'void' THEN 'Sale voided' WHEN 'released' THEN 'Cart released' WHEN 'return' THEN 'Return'
 				WHEN 'manual_discount' THEN 'Manual discount' WHEN 'open_price' THEN 'Open price' END`},
 			{"order_number", "Sale number", TText, "ev.order_number"},

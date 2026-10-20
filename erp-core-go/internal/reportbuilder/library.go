@@ -14,6 +14,7 @@ import (
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/subscriptions"
 )
 
@@ -54,14 +55,16 @@ var Periods = []struct {
 
 var istZone = time.FixedZone("IST", 5*3600+30*60)
 
-// ResolvePeriod turns a period into YYYY-MM-DD dates as of now.
+// ResolvePeriod turns a period into YYYY-MM-DD dates as of now, on now's
+// own clock (the merchant's time zone, Spec.now).
 func ResolvePeriod(period string, now time.Time) (string, string, bool) {
-	n := now.In(istZone)
-	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, istZone)
+	loc := now.Location()
+	n := now
+	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, loc)
 	monday := today.AddDate(0, 0, -((int(today.Weekday()) + 6) % 7))
-	month := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, istZone)
-	quarter := time.Date(today.Year(), time.Month((int(today.Month())-1)/3*3+1), 1, 0, 0, 0, 0, istZone)
-	fy := time.Date(today.Year(), time.April, 1, 0, 0, 0, 0, istZone)
+	month := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, loc)
+	quarter := time.Date(today.Year(), time.Month((int(today.Month())-1)/3*3+1), 1, 0, 0, 0, 0, loc)
+	fy := time.Date(today.Year(), time.April, 1, 0, 0, 0, 0, loc)
 	if today.Before(fy) {
 		fy = fy.AddDate(-1, 0, 0)
 	}
@@ -307,7 +310,7 @@ func (l LibraryReport) specFor(req libraryRequest) Spec {
 // period, so an export records exactly which days it covered.
 func resolved(s Spec) Spec {
 	if s.Period != "" && s.DateFrom == "" && s.DateTo == "" {
-		if f, t, ok := ResolvePeriod(s.Period, time.Now()); ok {
+		if f, t, ok := ResolvePeriod(s.Period, s.now()); ok {
 			s.DateFrom, s.DateTo = f, t
 		}
 	}
@@ -371,8 +374,9 @@ type runResult struct {
 }
 
 func (h *Handler) previewResolved(w http.ResponseWriter, r *http.Request, spec Spec) {
-	spec = resolved(spec)
 	claims, _ := authn.FromContext(r.Context())
+	spec.clock = locale.MerchantLocation(r.Context(), h.DB, claims.TenantID)
+	spec = resolved(spec)
 	c, err := Compile(spec, horizonFor(r.Context()), PreviewRows)
 	if err != nil {
 		writeErr(w, err)
@@ -408,6 +412,7 @@ func (h *Handler) queueRun(w http.ResponseWriter, r *http.Request, spec Spec, na
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "format must be csv or xlsx")
 		return
 	}
+	spec.clock = locale.MerchantLocation(r.Context(), h.DB, claims.TenantID)
 	spec = resolved(spec)
 	if _, err := Compile(spec, horizonFor(r.Context()), ExportRows); err != nil {
 		writeErr(w, err)

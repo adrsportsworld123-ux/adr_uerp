@@ -26,6 +26,18 @@ type Spec struct {
 	// empty, so a saved report always covers the current month, week etc.
 	Period string `json:"period,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
+	// clock: the merchant's business time zone a Period is resolved in
+	// (migrations/064); set by the handlers and the runner, never stored.
+	// nil = IST, as before.
+	clock *time.Location
+}
+
+// now is the current time on the spec's clock.
+func (s Spec) now() time.Time {
+	if s.clock != nil {
+		return time.Now().In(s.clock)
+	}
+	return time.Now().In(istZone)
 }
 
 type Column struct {
@@ -148,7 +160,7 @@ func Compile(spec Spec, horizon time.Time, rowCap int) (Compiled, error) {
 
 	where := []string{"(" + ds.where + ")"}
 	if ds.HasDateRange && spec.DateFrom == "" && spec.DateTo == "" && spec.Period != "" {
-		from, to, ok := ResolvePeriod(spec.Period, time.Now())
+		from, to, ok := ResolvePeriod(spec.Period, spec.now())
 		if !ok {
 			return Compiled{}, invalid("unknown period %q", spec.Period)
 		}

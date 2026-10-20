@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../printing/printer_service.dart';
 import '../state/session.dart';
 import '../ui/approval_pin_pad.dart';
@@ -22,7 +23,7 @@ Future<void> printShiftReport(BuildContext context, String shiftId) async {
   final session = context.read<AppSession>();
   final messenger = ScaffoldMessenger.of(context);
   final ok = await session.printShiftReport(shiftId, PrinterService());
-  messenger.showSnackBar(SnackBar(content: Text(ok ? 'X report sent to the printer' : (session.lastError ?? 'Could not print'))));
+  messenger.showSnackBar(SnackBar(content: Text(ok ? tr('X report sent to the printer') : (session.lastError ?? tr('Could not print')))));
 }
 
 class ShiftScreen extends StatefulWidget {
@@ -60,7 +61,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
   Future<void> _open() async {
     final amount = double.tryParse(_float.text.trim().isEmpty ? '0' : _float.text.trim());
     if (amount == null || amount < 0) {
-      setState(() => _error = 'Enter the cash in the drawer, or 0');
+      setState(() => _error = tr('Enter the cash in the drawer, or 0'));
       return;
     }
     setState(() {
@@ -72,13 +73,13 @@ class _ShiftScreenState extends State<ShiftScreen> {
       await session.openShift(amount, _openKey);
     } on ApiException catch (e) {
       _error = switch (e.code) {
-        'SHIFT_ALREADY_OPEN' => 'This till already has an open shift.',
-        'DAY_ALREADY_RECONCILED' => 'Today\'s cash for this branch was already counted as a daily count, so a shift can\'t open today.',
+        'SHIFT_ALREADY_OPEN' => tr('This till already has an open shift.'),
+        'DAY_ALREADY_RECONCILED' => tr('Today\'s cash for this branch was already counted as a daily count, so a shift can\'t open today.'),
         _ => e.message,
       };
       await session.refreshShift();
     } catch (_) {
-      _error = 'Can\'t reach the server. Shifts need a connection.';
+      _error = tr('Can\'t reach the server. Shifts need a connection.');
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -94,7 +95,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
     if (closed == null || !mounted) return;
     await Navigator.of(context).pushReplacement(MaterialPageRoute(
       builder: (ctx) => Scaffold(
-        appBar: AppBar(title: Text('Shift closed · shift ${closed.shiftNumber}')),
+        appBar: AppBar(title: Text(tr('Shift closed · shift {0}', [closed.shiftNumber]))),
         body: ListView(padding: const EdgeInsets.all(16), children: [
           if (closed.report != null) ShiftReportView(report: closed.report!),
           const SizedBox(height: 16),
@@ -102,10 +103,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
             key: const Key('print-x-report'),
             onPressed: () => printShiftReport(ctx, closed.shiftId),
             icon: const Icon(Icons.print),
-            label: const Text('Print X report'),
+            label: Text(tr('Print X report')),
           ),
           const SizedBox(height: 8),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Done')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(tr('Done'))),
         ]),
       ),
     ));
@@ -118,16 +119,16 @@ class _ShiftScreenState extends State<ShiftScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text('Shift · ${session.terminalName}'),
-        actions: [if (shift != null) IconButton(onPressed: _refresh, icon: const Icon(Icons.refresh), tooltip: 'Refresh X report')],
+        title: Text(tr('Shift · {0}', [session.terminalName])),
+        actions: [if (shift != null) IconButton(onPressed: _refresh, icon: const Icon(Icons.refresh), tooltip: tr('Refresh X report'))],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : session.offlineMode
-              ? const Center(
+              ? Center(
                   child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('Offline. Opening, closing and cash in/out need a connection; sales continue and sync later.',
+                    padding: const EdgeInsets.all(24),
+                    child: Text(tr('Offline. Opening, closing and cash in/out need a connection; sales continue and sync later.'),
                         textAlign: TextAlign.center),
                   ),
                 )
@@ -135,10 +136,10 @@ class _ShiftScreenState extends State<ShiftScreen> {
                   padding: const EdgeInsets.all(16),
                   children: [
                     if (shift == null) ...[
-                      Text('No shift is open on this till', style: theme.textTheme.titleMedium),
+                      Text(tr('No shift is open on this till'), style: theme.textTheme.titleMedium),
                       const SizedBox(height: 4),
                       Text(
-                        session.shiftsRequired ? 'Open a shift before taking payment.' : 'Count the cash you are starting with.',
+                        session.shiftsRequired ? tr('Open a shift before taking payment.') : tr('Count the cash you are starting with.'),
                         style: theme.textTheme.bodySmall,
                       ),
                       const SizedBox(height: 16),
@@ -148,7 +149,7 @@ class _ShiftScreenState extends State<ShiftScreen> {
                         autofocus: true,
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
-                        decoration: InputDecoration(labelText: 'Opening float', prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
+                        decoration: InputDecoration(labelText: tr('Opening float'), prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
                         onSubmitted: (_) => _open(),
                       ),
                       const SizedBox(height: 8),
@@ -161,29 +162,29 @@ class _ShiftScreenState extends State<ShiftScreen> {
                         key: const Key('open-shift'),
                         onPressed: _busy ? null : _open,
                         icon: const Icon(Icons.lock_open),
-                        label: const Text('Open shift'),
+                        label: Text(tr('Open shift')),
                       ),
                     ] else ...[
-                      Text('Shift ${shift.shiftNumber} · opened by ${shift.openedBy} at ${_hm(shift.openedAt)}', style: theme.textTheme.titleMedium),
+                      Text(tr('Shift {0} · opened by {1} at {2}', [shift.shiftNumber, shift.openedBy, _hm(shift.openedAt)]), style: theme.textTheme.titleMedium),
                       const SizedBox(height: 12),
                       Wrap(spacing: 8, runSpacing: 8, children: [
                         OutlinedButton.icon(
                           key: const Key('cash-movement'),
                           onPressed: _cashMovement,
                           icon: const Icon(Icons.swap_vert),
-                          label: const Text('Cash in / out'),
+                          label: Text(tr('Cash in / out')),
                         ),
                         OutlinedButton.icon(
                           key: const Key('print-x-report'),
                           onPressed: () => printShiftReport(context, shift.shiftId),
                           icon: const Icon(Icons.print),
-                          label: const Text('Print X report'),
+                          label: Text(tr('Print X report')),
                         ),
                         FilledButton.icon(
                           key: const Key('close-shift'),
                           onPressed: _close,
                           icon: const Icon(Icons.lock_outline),
-                          label: const Text('Close shift'),
+                          label: Text(tr('Close shift')),
                         ),
                       ]),
                       const SizedBox(height: 16),
@@ -201,15 +202,15 @@ class _ShiftScreenState extends State<ShiftScreen> {
 }
 
 String _hm(String iso) {
-  final t = DateTime.tryParse(iso)?.toLocal();
+  final t = PosClock.parse(iso);
   if (t == null) return '';
   return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 }
 
-String _methodLabel(String m) => switch (m) { 'upi' => 'UPI', 'cash' => 'Cash', 'card' => 'Card', 'credit' => 'Credit', _ => m };
+String _methodLabel(String m) => switch (m) { 'upi' => 'UPI', 'cash' => tr('Cash'), 'card' => tr('Card'), 'credit' => tr('Credit'), _ => m };
 
 String _kindLabel(String k) =>
-    switch (k) { 'float_in' => 'Float in', 'drop' => 'Drop to safe', 'paid_in' => 'Paid in', 'paid_out' => 'Paid out', _ => k };
+    switch (k) { 'float_in' => tr('Float in'), 'drop' => tr('Drop to safe'), 'paid_in' => tr('Paid in'), 'paid_out' => tr('Paid out'), _ => k };
 
 /// A shift's X report: sales and tenders, returns, and the drawer's cash
 /// from the opening float to the expected (and, once the shift is closed,
@@ -249,40 +250,40 @@ class ShiftReportView extends StatelessWidget {
     final close = report.close;
     final variance = double.tryParse(close?['variance'] as String? ?? '0') ?? 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text(report.kind == 'Z' ? 'X report (final)' : 'X report (so far)', key: Key('report-${report.kind}'), style: theme.textTheme.labelLarge),
+      Text(report.kind == 'Z' ? tr('X report (final)') : tr('X report (so far)'), key: Key('report-${report.kind}'), style: theme.textTheme.labelLarge),
       const SizedBox(height: 8),
-      section('Sales', [
-        Text('${report.orderCount} sale${report.orderCount == 1 ? '' : 's'}${report.voidedCount > 0 ? ' · ${report.voidedCount} voided' : ''}'),
-        if ((double.tryParse(report.roundOffTotal) ?? 0) != 0) row('Round off', report.roundOffTotal),
-        row('Net sales', report.netSales, strong: true),
+      section(tr('Sales'), [
+        Text('${report.orderCount == 1 ? tr('1 sale') : tr('{0} sales', [report.orderCount])}${report.voidedCount > 0 ? ' · ${tr('{0} voided', [report.voidedCount])}' : ''}'),
+        if ((double.tryParse(report.roundOffTotal) ?? 0) != 0) row(tr('Round off'), report.roundOffTotal),
+        row(tr('Net sales'), report.netSales, strong: true),
         for (final e in report.byMethod.entries) row(_methodLabel(e.key), e.value),
-        if (report.returnCount > 0) row('Refunded (${report.returnCount} return${report.returnCount == 1 ? '' : 's'})', report.refundTotal, sign: '−'),
+        if (report.returnCount > 0) row(report.returnCount == 1 ? tr('Refunded (1 return)') : tr('Refunded ({0} returns)', [report.returnCount]), report.refundTotal, sign: '−'),
       ]),
-      section('Cash drawer', [
-        row('Opening float', c['opening_float']),
-        row('Cash sales', c['cash_sales'], sign: '+'),
-        if (c['cash_refunds'] != '0.00') row('Cash refunds', c['cash_refunds'], sign: '−'),
-        if (c['float_in'] != '0.00') row('Float in', c['float_in'], sign: '+'),
-        if (c['drops'] != '0.00') row('Drops to safe', c['drops'], sign: '−'),
-        if (c['paid_in'] != '0.00') row('Paid in', c['paid_in'], sign: '+'),
-        if (c['paid_out'] != '0.00') row('Paid out', c['paid_out'], sign: '−'),
+      section(tr('Cash drawer'), [
+        row(tr('Opening float'), c['opening_float']),
+        row(tr('Cash sales'), c['cash_sales'], sign: '+'),
+        if (c['cash_refunds'] != '0.00') row(tr('Cash refunds'), c['cash_refunds'], sign: '−'),
+        if (c['float_in'] != '0.00') row(tr('Float in'), c['float_in'], sign: '+'),
+        if (c['drops'] != '0.00') row(tr('Drops to safe'), c['drops'], sign: '−'),
+        if (c['paid_in'] != '0.00') row(tr('Paid in'), c['paid_in'], sign: '+'),
+        if (c['paid_out'] != '0.00') row(tr('Paid out'), c['paid_out'], sign: '−'),
         const Divider(),
-        row('Expected in drawer', c['expected'], strong: true, key: const Key('expected-cash')),
+        row(tr('Expected in drawer'), c['expected'], strong: true, key: const Key('expected-cash')),
         if (close != null) ...[
-          row('Counted', close['counted_total'] as String?),
+          row(tr('Counted'), close['counted_total'] as String?),
           row(
-            variance == 0 ? 'Difference' : (variance > 0 ? 'Over' : 'Short'),
+            variance == 0 ? tr('Difference') : (variance > 0 ? tr('Over') : tr('Short')),
             close['variance'] as String?,
             strong: true,
             color: variance == 0 ? null : theme.colorScheme.error,
             key: const Key('variance'),
           ),
-          if ((close['reason'] as String? ?? '').isNotEmpty) Text('Reason: ${close['reason']}', style: theme.textTheme.bodySmall),
-          if (close['approved_by'] != null) Text('Approved by ${close['approved_by']}', style: theme.textTheme.bodySmall),
+          if ((close['reason'] as String? ?? '').isNotEmpty) Text(tr('Reason: {0}', [close['reason']]), style: theme.textTheme.bodySmall),
+          if (close['approved_by'] != null) Text(tr('Approved by {0}', [close['approved_by']]), style: theme.textTheme.bodySmall),
         ],
       ]),
       if (report.movements.isNotEmpty)
-        section('Cash in / out', [
+        section(tr('Cash in / out'), [
           for (final m in report.movements)
             ListTile(
               dense: true,
@@ -353,16 +354,16 @@ class _CashMovementDialogState extends State<CashMovementDialog> {
       setState(() {
         _busy = false;
         _error = switch (e.code) {
-          'CASH_MOVEMENT_NOT_APPROVED' => 'Approval failed. Check the manager\'s employee code and PIN.',
+          'CASH_MOVEMENT_NOT_APPROVED' => tr('Approval failed. Check the manager\'s employee code and PIN.'),
           'INSUFFICIENT_CASH' => e.message,
-          'SHIFT_CLOSED' => 'This shift is already closed.',
+          'SHIFT_CLOSED' => tr('This shift is already closed.'),
           _ => e.message,
         };
       });
     } catch (_) {
       setState(() {
         _busy = false;
-        _error = 'Can\'t reach the server. Nothing was recorded.';
+        _error = tr('Can\'t reach the server. Nothing was recorded.');
       });
     }
   }
@@ -371,17 +372,17 @@ class _CashMovementDialogState extends State<CashMovementDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AlertDialog(
-      title: const Text('Cash in / out'),
+      title: Text(tr('Cash in / out')),
       content: SizedBox(
         width: 400,
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'float_in', label: Text('Float in')),
-                ButtonSegment(value: 'drop', label: Text('Drop')),
-                ButtonSegment(value: 'paid_in', label: Text('Paid in')),
-                ButtonSegment(value: 'paid_out', label: Text('Paid out')),
+              segments: [
+                ButtonSegment(value: 'float_in', label: Text(tr('Float in'))),
+                ButtonSegment(value: 'drop', label: Text(tr('Drop'))),
+                ButtonSegment(value: 'paid_in', label: Text(tr('Paid in'))),
+                ButtonSegment(value: 'paid_out', label: Text(tr('Paid out'))),
               ],
               selected: {_kind},
               // A new kind is a different movement: a new key.
@@ -393,10 +394,10 @@ class _CashMovementDialogState extends State<CashMovementDialog> {
             const SizedBox(height: 6),
             Text(
               switch (_kind) {
-                'float_in' => 'Change brought from the safe into the drawer.',
-                'drop' => 'Cash taken from the drawer to the safe.',
-                'paid_in' => 'Money received that isn\'t a sale.',
-                _ => 'An expense paid from the drawer. Needs a manager.',
+                'float_in' => tr('Change brought from the safe into the drawer.'),
+                'drop' => tr('Cash taken from the drawer to the safe.'),
+                'paid_in' => tr('Money received that isn\'t a sale.'),
+                _ => tr('An expense paid from the drawer. Needs a manager.'),
               },
               style: theme.textTheme.bodySmall,
             ),
@@ -408,14 +409,14 @@ class _CashMovementDialogState extends State<CashMovementDialog> {
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}'))],
               onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(labelText: 'Amount', prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('Amount'), prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             TextField(
               key: const Key('movement-reason'),
               controller: _reason,
               onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(labelText: _needsReason ? 'What for' : 'Note (optional)', border: const OutlineInputBorder()),
+              decoration: InputDecoration(labelText: _needsReason ? tr('What for') : tr('Note (optional)'), border: const OutlineInputBorder()),
             ),
             if (_needsApproval) ...[
               const SizedBox(height: 8),
@@ -424,7 +425,7 @@ class _CashMovementDialogState extends State<CashMovementDialog> {
                 controller: _approver,
                 textCapitalization: TextCapitalization.characters,
                 onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(labelText: 'Approver employee code', border: OutlineInputBorder(), isDense: true),
+                decoration: InputDecoration(labelText: tr('Approver employee code'), border: const OutlineInputBorder(), isDense: true),
               ),
               const SizedBox(height: 8),
               ApprovalPinPad(onChanged: (p) => setState(() => _pin = p)),
@@ -438,8 +439,8 @@ class _CashMovementDialogState extends State<CashMovementDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(key: const Key('movement-save'), onPressed: _canSave ? _save : null, child: const Text('Record')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
+        FilledButton(key: const Key('movement-save'), onPressed: _canSave ? _save : null, child: Text(tr('Record'))),
       ],
     );
   }
@@ -456,10 +457,14 @@ class CloseShiftScreen extends StatefulWidget {
   State<CloseShiftScreen> createState() => _CloseShiftScreenState();
 }
 
-const _denominations = [2000.0, 500.0, 200.0, 100.0, 50.0, 20.0, 10.0, 5.0, 2.0, 1.0];
+/// A denomination's test key: "2000", or "0.25" for a coin below one.
+String _denominationKey(double d) => d == d.roundToDouble() ? '${d.toInt()}' : '$d';
 
 class _CloseShiftScreenState extends State<CloseShiftScreen> {
-  final Map<double, TextEditingController> _counts = {for (final d in _denominations) d: TextEditingController()};
+  // The notes and coins the merchant counts (Localization, migrations/064;
+  // the currency's standard set unless the merchant set its own).
+  late final List<double> _denominations;
+  late final Map<double, TextEditingController> _counts;
   final _reason = TextEditingController();
   final _approver = TextEditingController();
   String _pin = '';
@@ -470,6 +475,8 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
   @override
   void initState() {
     super.initState();
+    _denominations = context.read<AppSession>().localization.denominations;
+    _counts = {for (final d in _denominations) d: TextEditingController()};
     _prepare();
   }
 
@@ -524,15 +531,15 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
       setState(() {
         _busy = false;
         _error = switch (e.code) {
-          'VARIANCE_NOT_AUTHORIZED' => 'The count doesn\'t match. A Branch Manager or Merchant Admin must approve with their code and PIN.',
-          'INVALID_REQUEST' => 'The count doesn\'t match the expected cash (it may have just changed). Give a reason and a manager\'s approval.',
+          'VARIANCE_NOT_AUTHORIZED' => tr('The count doesn\'t match. A Branch Manager or Merchant Admin must approve with their code and PIN.'),
+          'INVALID_REQUEST' => tr('The count doesn\'t match the expected cash (it may have just changed). Give a reason and a manager\'s approval.'),
           _ => e.message,
         };
       });
     } catch (_) {
       setState(() {
         _busy = false;
-        _error = 'Can\'t reach the server. The shift is still open.';
+        _error = tr('Can\'t reach the server. The shift is still open.');
       });
     }
   }
@@ -543,7 +550,7 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
     final theme = Theme.of(context);
     final variance = _varianceP / 100;
     return Scaffold(
-      appBar: AppBar(title: const Text('Close shift · count the drawer')),
+      appBar: AppBar(title: Text(tr('Close shift · count the drawer'))),
       body: _syncing
           ? const Center(child: CircularProgressIndicator())
           : ListView(padding: const EdgeInsets.all(16), children: [
@@ -554,8 +561,7 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(color: theme.colorScheme.errorContainer, borderRadius: BorderRadius.circular(8)),
                   child: Text(
-                    '${session.pendingSyncCount} offline sale(s) haven\'t synced. Their cash is in the drawer but not in the expected '
-                    'figure, so the count will look over. Sync first if you can.',
+                    tr('{0} offline sale(s) haven\'t synced. Their cash is in the drawer but not in the expected figure, so the count will look over. Sync first if you can.', [session.pendingSyncCount]),
                     style: TextStyle(color: theme.colorScheme.onErrorContainer),
                   ),
                 ),
@@ -568,7 +574,7 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
                     SizedBox(
                       width: 90,
                       child: TextField(
-                        key: Key('count-${d.toInt()}'),
+                        key: Key('count-${_denominationKey(d)}'),
                         controller: _counts[d],
                         keyboardType: TextInputType.number,
                         inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -582,9 +588,9 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
                   ]),
                 ),
               const Divider(height: 24),
-              _total(theme, 'Counted', _counted, key: const Key('counted-total')),
-              _total(theme, 'Expected', _expected),
-              _total(theme, variance == 0 ? 'Difference' : (variance > 0 ? 'Over' : 'Short'), variance.abs(),
+              _total(theme, tr('Counted'), _counted, key: const Key('counted-total')),
+              _total(theme, tr('Expected'), _expected),
+              _total(theme, variance == 0 ? tr('Difference') : (variance > 0 ? tr('Over') : tr('Short')), variance.abs(),
                   color: variance == 0 ? null : theme.colorScheme.error, key: const Key('close-variance')),
               if (_varianceP != 0) ...[
                 const SizedBox(height: 12),
@@ -592,7 +598,7 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
                   key: const Key('close-reason'),
                   controller: _reason,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(labelText: 'Why doesn\'t it match?', border: OutlineInputBorder()),
+                  decoration: InputDecoration(labelText: tr('Why doesn\'t it match?'), border: const OutlineInputBorder()),
                 ),
                 const SizedBox(height: 8),
                 TextField(
@@ -600,7 +606,7 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
                   controller: _approver,
                   textCapitalization: TextCapitalization.characters,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(labelText: 'Approver employee code', border: OutlineInputBorder(), isDense: true),
+                  decoration: InputDecoration(labelText: tr('Approver employee code'), border: const OutlineInputBorder(), isDense: true),
                 ),
                 const SizedBox(height: 8),
                 Center(
@@ -620,7 +626,7 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
                 key: const Key('confirm-close'),
                 onPressed: _canClose ? _submit : null,
                 icon: const Icon(Icons.lock_outline),
-                label: const Text('Close shift'),
+                label: Text(tr('Close shift')),
               ),
             ]),
     );

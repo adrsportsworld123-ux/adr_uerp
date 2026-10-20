@@ -21,6 +21,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/merchants"
 	"erp-core-go/internal/taxes"
 )
 
@@ -41,6 +42,7 @@ func LoadLetterhead(ctx context.Context, tx pgx.Tx, branchID string, kind Kind) 
 	var (
 		lh                                       Letterhead
 		legal, trade, merchantGSTIN, branchGSTIN string
+		merchantAddress                          []byte
 		display, address, phone, email, header   *string
 		receiptFooter, purchaseFooter, logoMime  *string
 		showLogo, showGSTIN, showSKU             bool
@@ -51,14 +53,14 @@ func LoadLetterhead(ctx context.Context, tx pgx.Tx, branchID string, kind Kind) 
 		SELECT m.legal_name, COALESCE(m.trade_name, ''), COALESCE(m.gstin, ''), b.name, COALESCE(b.gstin, ''),
 		       ps.display_name, ps.address, ps.phone, ps.email, ps.header_text, ps.receipt_footer, ps.purchase_footer,
 		       COALESCE(ps.show_logo, true), COALESCE(ps.show_gstin, true), COALESCE(ps.receipt_format, 'a4'), COALESCE(ps.show_sku, true),
-		       ps.logo, ps.logo_mime
+		       ps.logo, ps.logo_mime, m.address
 		FROM branches b
 		JOIN merchants m ON m.id = b.merchant_id
 		LEFT JOIN branch_print_settings ps ON ps.branch_id = b.id
 		WHERE b.id = $1`, branchID,
 	).Scan(&legal, &trade, &merchantGSTIN, &lh.BranchName, &branchGSTIN,
 		&display, &address, &phone, &email, &header, &receiptFooter, &purchaseFooter,
-		&showLogo, &showGSTIN, &format, &showSKU, &logo, &logoMime)
+		&showLogo, &showGSTIN, &format, &showSKU, &logo, &logoMime, &merchantAddress)
 	if err != nil {
 		return lh, FormatA4, err
 	}
@@ -66,6 +68,11 @@ func LoadLetterhead(ctx context.Context, tx pgx.Tx, branchID string, kind Kind) 
 	lh.HideSKU = !showSKU
 	lh.Name = firstNonEmpty(deref(display), trade, legal)
 	lh.Address = Lines(deref(address))
+	if len(lh.Address) == 0 {
+		// The company profile's registered address (migrations/065) when
+		// the branch's print settings give none.
+		lh.Address = merchants.AddressLines(merchantAddress)
+	}
 	lh.Phone = strings.TrimSpace(deref(phone))
 	lh.Email = strings.TrimSpace(deref(email))
 	lh.Header = Lines(deref(header))

@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../local/offline_store.dart';
 import '../printing/document_saver.dart' as doc_saver;
 import '../printing/printer_service.dart';
@@ -207,7 +210,7 @@ class AppSession extends ChangeNotifier {
       return true;
     } on ApiException catch (e) {
       _lastError = e.code == 'DEVICE_MISMATCH'
-          ? 'This terminal is registered to a different device'
+          ? tr('This terminal is registered to a different device')
           : e.message;
       notifyListeners();
       return false;
@@ -305,7 +308,7 @@ class AppSession extends ChangeNotifier {
       try {
         return await api.lookupBarcode(code);
       } on ApiException catch (e) {
-        _lastError = e.code == 'PRODUCT_NOT_FOUND' ? 'No product matches that barcode' : e.message;
+        _lastError = e.code == 'PRODUCT_NOT_FOUND' ? tr('No product matches that barcode') : e.message;
         notifyListeners();
         return null;
       } catch (e) {
@@ -317,7 +320,7 @@ class AppSession extends ChangeNotifier {
 
     final cached = await _offline.lookupBarcode(code);
     if (cached == null) {
-      _lastError = 'No product matches that barcode (offline — catalog cache may be out of date)';
+      _lastError = tr('No product matches that barcode (offline — catalog cache may be out of date)');
       notifyListeners();
       return null;
     }
@@ -341,20 +344,20 @@ class AppSession extends ChangeNotifier {
   Future<List<ProductSearchResult>> searchProducts({String query = '', String? categoryId}) async {
     _lastError = null;
     if (offlineMode) {
-      _lastError = 'Product search is not available offline';
+      _lastError = tr('Product search is not available offline');
       notifyListeners();
       return [];
     }
     try {
       return await api.searchProducts(query: query, categoryId: categoryId);
     } on ApiException catch (e) {
-      _lastError = e.code == 'SEARCH_UNAVAILABLE' ? 'Product search is temporarily unavailable' : e.message;
+      _lastError = e.code == 'SEARCH_UNAVAILABLE' ? tr('Product search is temporarily unavailable') : e.message;
       notifyListeners();
       return [];
     } catch (e) {
       if (!_isNetworkError(e)) rethrow;
       offlineMode = true;
-      _lastError = 'Product search is not available offline';
+      _lastError = tr('Product search is not available offline');
       notifyListeners();
       return [];
     }
@@ -447,8 +450,8 @@ class AppSession extends ChangeNotifier {
         return false;
       }
       _lastError = switch (e.code) {
-        'STOCK_UNAVAILABLE' => 'Not enough stock available for that quantity',
-        'OPEN_PRICE_NOT_APPROVED' => 'Approval failed. Check the manager\'s employee code and PIN.',
+        'STOCK_UNAVAILABLE' => tr('Not enough stock available for that quantity'),
+        'OPEN_PRICE_NOT_APPROVED' => tr('Approval failed. Check the manager\'s employee code and PIN.'),
         _ => e.message,
       };
       notifyListeners();
@@ -467,7 +470,7 @@ class AppSession extends ChangeNotifier {
   Future<bool> _addToCartOffline(ProductLookup product, double quantity, OpenPriceEntry? openPrice) async {
     final cached = _offlineCatalogByVariant[product.variantId];
     if (cached == null) {
-      _lastError = 'This item was not in the offline catalog cache — cannot add it while offline';
+      _lastError = tr('This item was not in the offline catalog cache — cannot add it while offline');
       notifyListeners();
       return false;
     }
@@ -481,12 +484,12 @@ class AppSession extends ChangeNotifier {
         return false;
       }
       if (!range.allows(openPrice.price)) {
-        _lastError = 'The price must be between ${formatRupees(range.min)} and ${formatRupees(range.max)}';
+        _lastError = tr('The price must be between {0} and {1}', [formatRupees(range.min), formatRupees(range.max)]);
         notifyListeners();
         return false;
       }
       if (range.needsApproval(openPrice.price)) {
-        _lastError = 'Prices above ${formatRupees(range.approvalAbove ?? '')} need a manager\'s approval, which needs a connection';
+        _lastError = tr('Prices above {0} need a manager\'s approval, which needs a connection', [formatRupees(range.approvalAbove ?? '')]);
         notifyListeners();
         return false;
       }
@@ -527,7 +530,7 @@ class AppSession extends ChangeNotifier {
       return false;
     } catch (e) {
       if (!_isNetworkError(e)) rethrow;
-      _lastError = 'Cannot remove this line while offline — it was added before connectivity was lost';
+      _lastError = tr('Cannot remove this line while offline — it was added before connectivity was lost');
       notifyListeners();
       return false;
     }
@@ -553,11 +556,11 @@ class AppSession extends ChangeNotifier {
       return true;
     } on ApiException catch (e) {
       _lastError = switch (e.code) {
-        'PAYMENT_MISMATCH' => 'Payment total does not cover the order total',
-        'CREDIT_HOLD' => 'This customer is on credit hold — cannot accept a credit payment',
-        'CREDIT_LIMIT_EXCEEDED' => 'This sale would put the customer over their credit limit',
-        'SHIFT_NOT_OPEN' => 'Open a shift on this till before taking payment (tap the shift chip at the top)',
-        'ROUND_OFF_NOT_ALLOWED' => 'That round-off isn’t allowed (it’s off, or above the limit in Sales Policy)',
+        'PAYMENT_MISMATCH' => tr('Payment total does not cover the order total'),
+        'CREDIT_HOLD' => tr('This customer is on credit hold — cannot accept a credit payment'),
+        'CREDIT_LIMIT_EXCEEDED' => tr('This sale would put the customer over their credit limit'),
+        'SHIFT_NOT_OPEN' => tr('Open a shift on this till before taking payment (tap the shift chip at the top)'),
+        'ROUND_OFF_NOT_ALLOWED' => tr('That round-off isn’t allowed (it’s off, or above the limit in Sales Policy)'),
         _ => e.message,
       };
       notifyListeners();
@@ -570,7 +573,7 @@ class AppSession extends ChangeNotifier {
       // double sale if the server actually did process the checkout right
       // before the connection dropped).
       offlineMode = true;
-      _lastError = 'Lost connection during checkout — check this sale on another device before retrying.';
+      _lastError = tr('Lost connection during checkout — check this sale on another device before retrying.');
       notifyListeners();
       return false;
     }
@@ -586,7 +589,7 @@ class AppSession extends ChangeNotifier {
 
   Future<bool> updateLineQuantity(String lineId, double quantity) async {
     if (!_canUseLiveOnlyFeatures) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -596,7 +599,7 @@ class AppSession extends ChangeNotifier {
       notifyListeners();
       return true;
     } on ApiException catch (e) {
-      _lastError = e.code == 'STOCK_UNAVAILABLE' ? 'Not enough stock available for that quantity' : e.message;
+      _lastError = e.code == 'STOCK_UNAVAILABLE' ? tr('Not enough stock available for that quantity') : e.message;
       notifyListeners();
       return false;
     }
@@ -610,7 +613,7 @@ class AppSession extends ChangeNotifier {
   /// see internal/sales/customer.go.
   Future<bool> attachCustomer({String? customerId, String? name, String? phone, String? email}) async {
     if (!_canUseLiveOnlyFeatures) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -658,7 +661,7 @@ class AppSession extends ChangeNotifier {
     required String reason,
   }) async {
     if (!_canUseLiveOnlyFeatures) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -677,7 +680,7 @@ class AppSession extends ChangeNotifier {
       return true;
     } on ApiException catch (e) {
       _lastError = e.code == 'DISCOUNT_NOT_AUTHORIZED'
-          ? 'This discount needs a higher-tier manager/admin PIN'
+          ? tr('This discount needs a higher-tier manager/admin PIN')
           : e.message;
       notifyListeners();
       return false;
@@ -686,7 +689,7 @@ class AppSession extends ChangeNotifier {
 
   Future<bool> applyPromotions() async {
     if (!_canUseLiveOnlyFeatures) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -704,7 +707,7 @@ class AppSession extends ChangeNotifier {
 
   Future<bool> applyCoupon(String code) async {
     if (!_canUseLiveOnlyFeatures) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -715,11 +718,11 @@ class AppSession extends ChangeNotifier {
       return true;
     } on ApiException catch (e) {
       _lastError = switch (e.code) {
-        'COUPON_NOT_FOUND' => 'No active coupon with that code',
-        'COUPON_NOT_VALID' => 'That coupon is not valid right now (window/branch/channel)',
-        'COUPON_MIN_PURCHASE_NOT_MET' => 'Cart total is below this coupon\'s minimum purchase',
-        'COUPON_LIMIT_REACHED' => 'This coupon has reached its usage limit',
-        'COUPON_ALREADY_APPLIED' => 'A coupon is already applied to this order',
+        'COUPON_NOT_FOUND' => tr('No active coupon with that code'),
+        'COUPON_NOT_VALID' => tr('That coupon is not valid right now (window/branch/channel)'),
+        'COUPON_MIN_PURCHASE_NOT_MET' => tr('Cart total is below this coupon\'s minimum purchase'),
+        'COUPON_LIMIT_REACHED' => tr('This coupon has reached its usage limit'),
+        'COUPON_ALREADY_APPLIED' => tr('A coupon is already applied to this order'),
         _ => e.message,
       };
       notifyListeners();
@@ -729,12 +732,12 @@ class AppSession extends ChangeNotifier {
 
   Future<bool> redeemLoyaltyPoints(int points) async {
     if (!_canUseLiveOnlyFeatures) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
     if (attachedCustomerId == null) {
-      _lastError = 'Attach a customer before redeeming loyalty points';
+      _lastError = tr('Attach a customer before redeeming loyalty points');
       notifyListeners();
       return false;
     }
@@ -746,7 +749,7 @@ class AppSession extends ChangeNotifier {
       return true;
     } on ApiException catch (e) {
       _lastError = e.code == 'INSUFFICIENT_LOYALTY_POINTS'
-          ? 'Customer does not have that many points available'
+          ? tr('Customer does not have that many points available')
           : e.message;
       notifyListeners();
       return false;
@@ -759,7 +762,7 @@ class AppSession extends ChangeNotifier {
   /// equivalent, same as every other live-only feature above.
   Future<bool> holdCurrentOrder({String? note}) async {
     if (!_canUseLiveOnlyFeatures) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -769,7 +772,7 @@ class AppSession extends ChangeNotifier {
       startNewSale();
       return true;
     } on ApiException catch (e) {
-      _lastError = e.code == 'INVALID_REQUEST' ? 'Cannot hold an empty cart' : e.message;
+      _lastError = e.code == 'INVALID_REQUEST' ? tr('Cannot hold an empty cart') : e.message;
       notifyListeners();
       return false;
     }
@@ -787,7 +790,7 @@ class AppSession extends ChangeNotifier {
   /// False with [lastError] set when it can't.
   Future<bool> voidHeldOrder(String orderId, String reason) async {
     if (offlineMode) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -800,7 +803,7 @@ class AppSession extends ChangeNotifier {
       notifyListeners();
       return false;
     } catch (_) {
-      _lastError = 'Could not reach the server';
+      _lastError = tr('Could not reach the server');
       notifyListeners();
       return false;
     }
@@ -811,12 +814,12 @@ class AppSession extends ChangeNotifier {
   /// silently orphan it — the cashier holds or finishes it first.
   Future<RecallResult?> recallOrder(String orderId) async {
     if (offlineMode) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return null;
     }
     if (currentOrder != null && !_currentOrderIsLocal && currentOrder!.status == 'cart' && currentOrder!.lines.isNotEmpty) {
-      _lastError = 'Hold or finish the current cart before recalling another one';
+      _lastError = tr('Hold or finish the current cart before recalling another one');
       notifyListeners();
       return null;
     }
@@ -844,7 +847,7 @@ class AppSession extends ChangeNotifier {
   /// action in this codebase surfaces denial.
   Future<bool> voidCurrentOrder(String reason) async {
     if (currentOrder == null || _currentOrderIsLocal || offlineMode) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -876,7 +879,7 @@ class AppSession extends ChangeNotifier {
   /// still finalized either way, only the print attempt failed.
   Future<bool> printReceipt(PrinterService printer) async {
     if (currentOrder == null || _currentOrderIsLocal) {
-      _lastError = 'Not available offline';
+      _lastError = tr('Not available offline');
       notifyListeners();
       return false;
     }
@@ -891,7 +894,7 @@ class AppSession extends ChangeNotifier {
       await printer.printBytes(bytes);
       return true;
     } catch (e) {
-      _lastError = e is StateError ? e.message : 'Could not print receipt: $e';
+      _lastError = e is StateError ? e.message : tr('Could not print receipt: {0}', [e]);
       notifyListeners();
       return false;
     }
@@ -906,7 +909,7 @@ class AppSession extends ChangeNotifier {
   /// still queued offline has no server copy to render yet.
   Future<String?> downloadReceipt({String? format}) async {
     if (currentOrder == null || _currentOrderIsLocal) {
-      _lastError = 'The receipt PDF is available once this sale has synced';
+      _lastError = tr('The receipt PDF is available once this sale has synced');
       notifyListeners();
       return null;
     }
@@ -923,11 +926,11 @@ class AppSession extends ChangeNotifier {
     } on ApiException catch (e) {
       _lastError = e.message;
     } on SocketException {
-      _lastError = "Can't reach the server — the receipt PDF needs a connection";
+      _lastError = tr('Can\'t reach the server — the receipt PDF needs a connection');
     } on http.ClientException {
-      _lastError = "Can't reach the server — the receipt PDF needs a connection";
+      _lastError = tr('Can\'t reach the server — the receipt PDF needs a connection');
     } catch (e) {
-      _lastError = 'Could not download the receipt: $e';
+      _lastError = tr('Could not download the receipt: {0}', [e]);
     }
     notifyListeners();
     return null;
@@ -1049,6 +1052,55 @@ class AppSession extends ChangeNotifier {
           ? order.taxBreakup!.rows
           : TaxBreakup.local(regime: taxRegime.regime, taxLabel: taxRegime.taxLabel, lineTaxes: order.lines.map((l) => l.taxAmount)).rows;
 
+  /// The till's localization (migrations/064): language, text direction,
+  /// cart side, the merchant's clock and the cash denominations. Loaded in
+  /// [refreshShift], kept on the device ([restoreLocalization]) for the
+  /// login screen and offline sales.
+  PosLocalization localization = const PosLocalization();
+
+  /// Bumped when the language, direction or cart side changes, so the app
+  /// rebuilds every screen in the new language.
+  int localeRevision = 0;
+
+  static const _localizationPrefsKey = 'pos_localization';
+
+  /// Applies [l] to the app-wide settings ([PosLocale], [PosClock]);
+  /// returns whether the screens need to rebuild.
+  static bool applyLocalization(PosLocalization l) {
+    PosClock.utcOffsetMinutes = l.utcOffsetMinutes;
+    return PosLocale.apply(language: l.language, textDirection: l.direction, cartSide: l.cartSide);
+  }
+
+  /// The last localization this device loaded, applied before anything is
+  /// shown (the login screen speaks the till's language too).
+  static Future<PosLocalization?> restoreLocalization() async {
+    try {
+      final raw = (await SharedPreferences.getInstance()).getString(_localizationPrefsKey);
+      if (raw == null) return null;
+      final l = PosLocalization.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      applyLocalization(l);
+      return l;
+    } catch (_) {
+      return null; // no storage (tests) or an unreadable entry: English
+    }
+  }
+
+  Future<void> _loadLocalization() async {
+    try {
+      final l = await api.localization(posTerminalId);
+      localization = l;
+      if (applyLocalization(l)) localeRevision++;
+      // Kept for the next start; never waited on, so a slow or missing
+      // store can't hold up the refresh. Without storage it is simply
+      // reloaded at the next sign-in.
+      unawaited(SharedPreferences.getInstance()
+          .then((p) => p.setString(_localizationPrefsKey, jsonEncode(l.toJson())))
+          .then((_) {}, onError: (_) {}));
+    } on ApiException {
+      // an older server has no localization: keep English and INR notes
+    }
+  }
+
   /// Loads the open shift and the merchant's sales policy. Quietly does
   /// nothing offline; the status bar then shows the last known state.
   Future<void> refreshShift() async {
@@ -1068,6 +1120,7 @@ class AppSession extends ChangeNotifier {
       } on ApiException {
         // keep the last known regime
       }
+      await _loadLocalization();
       notifyListeners();
     } catch (e) {
       if (_isNetworkError(e)) {
@@ -1183,7 +1236,7 @@ class AppSession extends ChangeNotifier {
           ? e.message
           : e is ApiException
               ? e.message
-              : 'Could not print the report: $e';
+              : tr('Could not print the report: {0}', [e]);
       notifyListeners();
       return false;
     }

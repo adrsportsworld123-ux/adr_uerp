@@ -3,6 +3,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../state/session.dart';
 
 /// Where the device is, for an attendance punch — or why it can't say.
@@ -27,19 +28,19 @@ class DeviceFix {
 Future<DeviceFix> currentFix() async {
   try {
     if (!await Geolocator.isLocationServiceEnabled()) {
-      return const DeviceFix.missing('Location is turned off on this device.');
+      return DeviceFix.missing(tr('Location is turned off on this device.'));
     }
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
     if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-      return const DeviceFix.missing('This app is not allowed to use the location.');
+      return DeviceFix.missing(tr('This app is not allowed to use the location.'));
     }
     final p = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 15)),
     );
     return DeviceFix.found(p.latitude, p.longitude, p.accuracy);
   } catch (_) {
-    return const DeviceFix.missing('This terminal has no location service.');
+    return DeviceFix.missing(tr('This terminal has no location service.'));
   }
 }
 
@@ -79,7 +80,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Attendance needs a connection to the server.');
+      if (mounted) setState(() => _error = tr('Attendance needs a connection to the server.'));
     }
   }
 
@@ -112,15 +113,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           );
       if (!mounted) return;
       final fence = checkIn ? rec.clockInGeofence : rec.clockOutGeofence;
-      final where = fence == 'outside' ? ' — outside the branch area, flagged for your manager' : '';
+      final where = fence == 'outside' ? tr(' — outside the branch area, flagged for your manager') : '';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Checked ${checkIn ? 'in' : 'out'} at ${_time(checkIn ? rec.clockIn : rec.clockOut)}$where')),
+        SnackBar(content: Text(checkIn ? tr('Checked in at {0}{1}', [_time(rec.clockIn), where]) : tr('Checked out at {0}{1}', [_time(rec.clockOut), where]))),
       );
       Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not reach the server. Try again when back online.');
+      if (mounted) setState(() => _error = tr('Could not reach the server. Try again when back online.'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -131,7 +132,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final theme = Theme.of(context);
     final me = _me;
     return Scaffold(
-      appBar: AppBar(title: const Text('Attendance')),
+      appBar: AppBar(title: Text(tr('Attendance'))),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 480),
@@ -142,7 +143,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     ? Column(mainAxisSize: MainAxisSize.min, children: [
                         Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
                         const SizedBox(height: 12),
-                        OutlinedButton(onPressed: _load, child: const Text('Try again')),
+                        OutlinedButton(onPressed: _load, child: Text(tr('Try again'))),
                       ])
                     : const CircularProgressIndicator())
                 : Column(
@@ -151,17 +152,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     children: [
                       Text(
                         me.checkedIn
-                            ? 'Checked in since ${_time(me.openSince ?? me.open!.clockIn)}'
+                            ? tr('Checked in since {0}', [_time(me.openSince ?? me.open!.clockIn)])
                             : me.sessionsToday > 0
-                                ? 'Checked out'
-                                : 'Not checked in yet',
+                                ? tr('Checked out')
+                                : tr('Not checked in yet'),
                         key: const Key('attendance-status'),
                         style: theme.textTheme.headlineSmall,
                         textAlign: TextAlign.center,
                       ),
                       if (me.sessionsToday > 0) ...[
                         const SizedBox(height: 12),
-                        Text('Today · ${me.today!.hoursWorked ?? '0.00'} h worked', textAlign: TextAlign.center, style: theme.textTheme.titleSmall),
+                        Text(tr('Today · {0} h worked', [me.today!.hoursWorked ?? '0.00']), textAlign: TextAlign.center, style: theme.textTheme.titleSmall),
                         const SizedBox(height: 4),
                         for (final (i, s) in me.today!.sessions.indexed)
                           Text(
@@ -177,14 +178,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
                             : Icon(_fix?.ok == true ? Icons.location_on : Icons.location_off_outlined),
                         title: Text(_locating
-                            ? 'Getting the location…'
+                            ? tr('Getting the location…')
                             : _fix?.ok == true
-                                ? 'Location found (±${_fix!.accuracyM!.round()} m)'
+                                ? tr('Location found (±{0} m)', [_fix!.accuracyM!.round()])
                                 : (_fix?.problem ?? '')),
                         subtitle: Text(me.geofenceBranch != null
-                            ? 'Checked against ${me.geofenceBranch}\'s ${me.geofenceRadiusM} m area. This terminal and its network address are recorded too.'
-                            : 'This terminal and its network address are recorded with the time.'),
-                        trailing: !_locating && _fix?.ok != true ? TextButton(onPressed: _locate, child: const Text('Retry')) : null,
+                            ? tr('Checked against {0}\'s {1} m area. This terminal and its network address are recorded too.', [me.geofenceBranch, me.geofenceRadiusM])
+                            : tr('This terminal and its network address are recorded with the time.')),
+                        trailing: !_locating && _fix?.ok != true ? TextButton(onPressed: _locate, child: Text(tr('Retry'))) : null,
                       ),
                       const SizedBox(height: 16),
                       FilledButton.icon(
@@ -193,13 +194,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         icon: _busy
                             ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                             : Icon(me.checkedIn ? Icons.logout : Icons.login),
-                        label: Text(me.checkedIn ? 'Check out' : (me.sessionsToday > 0 ? 'Check in again' : 'Check in')),
+                        label: Text(me.checkedIn ? tr('Check out') : (me.sessionsToday > 0 ? tr('Check in again') : tr('Check in'))),
                         style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
                       ),
                       if (!me.allowPos)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 8),
-                          child: Text('Your company has turned off checking in from the POS.', textAlign: TextAlign.center),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(tr('Your company has turned off checking in from the POS.'), textAlign: TextAlign.center),
                         ),
                       if (_error != null)
                         Padding(

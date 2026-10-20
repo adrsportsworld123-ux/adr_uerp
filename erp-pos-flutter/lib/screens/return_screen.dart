@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../state/session.dart';
 import '../ui/approval_pin_pad.dart';
 import '../ui/format.dart';
@@ -67,7 +68,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
     } on ApiException catch (e) {
       if (mounted) setState(() => _loadError = e.message);
     } catch (_) {
-      if (mounted) setState(() => _loadError = 'Can\'t reach the server. Returns need a connection.');
+      if (mounted) setState(() => _loadError = tr('Can\'t reach the server. Returns need a connection.'));
     }
   }
 
@@ -131,15 +132,15 @@ class _ReturnScreenState extends State<ReturnScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           icon: const Icon(Icons.check_circle_outline),
-          title: Text('Refund ${formatRupees(result.refundAmount)}'),
+          title: Text(tr('Refund {0}', [formatRupees(result.refundAmount)])),
           content: Text([
             'Return ${result.returnNumber} recorded.',
-            'Give back ${formatRupees(result.refundAmount)} by ${_methodLabel(result.refundMethod)}.',
+            tr('Give back {0} by {1}.', [formatRupees(result.refundAmount), _methodLabel(result.refundMethod)]),
             if (result.taxBreakup?.rows.isNotEmpty == true)
-              'Tax given back: ${result.taxBreakup!.rows.map((t) => '${t.label} ${formatRupees(t.amount)}').join(' · ')}.',
-            result.restocked ? 'Items are back in stock.' : 'Items were not restocked.',
+              tr('Tax given back: {0}.', [result.taxBreakup!.rows.map((t) => '${t.label} ${formatRupees(t.amount)}').join(' · ')]),
+            result.restocked ? tr('Items are back in stock.') : tr('Items were not restocked.'),
           ].join('\n')),
-          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Done')))],
         ),
       );
       if (mounted) Navigator.of(context).pop(true);
@@ -149,13 +150,13 @@ class _ReturnScreenState extends State<ReturnScreen> {
         _submitting = false;
         if (e.code == 'RETURN_NOT_APPROVED' && !_needsApproval) {
           _approvalDemanded = true;
-          _error = 'This refund needs a manager\'s approval.';
+          _error = tr('This refund needs a manager\'s approval.');
           return;
         }
         _error = switch (e.code) {
-          'RETURN_NOT_APPROVED' => 'Approval failed. Check the manager\'s employee code and PIN.',
-          'RETURN_WINDOW_CLOSED' => 'This sale is past the return window.',
-          'CREDIT_REFUND_EXCEEDED' => 'Store credit can only refund what is still unpaid on this sale. Choose cash, card or UPI.',
+          'RETURN_NOT_APPROVED' => tr('Approval failed. Check the manager\'s employee code and PIN.'),
+          'RETURN_WINDOW_CLOSED' => tr('This sale is past the return window.'),
+          'CREDIT_REFUND_EXCEEDED' => tr('Store credit can only refund what is still unpaid on this sale. Choose cash, card or UPI.'),
           _ => e.message,
         };
       });
@@ -163,7 +164,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = 'Can\'t reach the server. Nothing was refunded. Try again when back online.';
+        _error = tr('Can\'t reach the server. Nothing was refunded. Try again when back online.');
       });
     }
   }
@@ -181,7 +182,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
     final theme = Theme.of(context);
     final o = _order;
     return Scaffold(
-      appBar: AppBar(title: Text('Return · ${widget.orderNumber}')),
+      appBar: AppBar(title: Text(tr('Return · {0}', [widget.orderNumber]))),
       body: _loadError != null
           ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_loadError!, textAlign: TextAlign.center)))
           : o == null
@@ -192,8 +193,8 @@ class _ReturnScreenState extends State<ReturnScreen> {
                         padding: const EdgeInsets.all(24),
                         child: Text(
                           !o.windowOpen
-                              ? 'This sale is past the return window.'
-                              : 'This sale can\'t be returned (${statusLabel(o.status).toLowerCase()}).',
+                              ? tr('This sale is past the return window.')
+                              : tr('This sale can\'t be returned ({0}).', [statusLabel(o.status).toLowerCase()]),
                           textAlign: TextAlign.center,
                         ),
                       ),
@@ -218,7 +219,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
                       icon: _submitting
                           ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.assignment_return),
-                      label: Text(_anySelected ? 'Refund about ${formatRupeesNum(_estimate)}' : 'Choose items to return'),
+                      label: Text(_anySelected ? tr('Refund about {0}', [formatRupeesNum(_estimate)]) : tr('Choose items to return')),
                     ),
                   ),
                 ]),
@@ -235,14 +236,14 @@ class _ReturnScreenState extends State<ReturnScreen> {
       padding: const EdgeInsets.all(16),
       children: [
         Row(children: [
-          Expanded(child: Text('Items', style: theme.textTheme.titleMedium)),
+          Expanded(child: Text(tr('Items'), style: theme.textTheme.titleMedium)),
           TextButton(
             onPressed: () => setState(() {
               for (final l in returnable) {
                 _qty[l.lineId] = _max(l);
               }
             }),
-            child: const Text('Return everything'),
+            child: Text(tr('Return everything')),
           ),
         ]),
         for (final l in returnable) _lineRow(theme, l),
@@ -251,15 +252,16 @@ class _ReturnScreenState extends State<ReturnScreen> {
             dense: true,
             enabled: false,
             title: Text(l.productName),
-            subtitle: Text('${l.sku} · already returned'),
+            subtitle: Text(tr('{0} · already returned', [l.sku])),
           ),
         const Divider(height: 32),
-        Text('Reason', style: theme.textTheme.titleMedium),
+        Text(tr('Reason'), style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 8, children: [
+          // The reason is recorded in English; only the chip is translated.
           for (final r in [..._reasons, 'Other'])
             ChoiceChip(
-              label: Text(r),
+              label: Text(tr(r)),
               selected: _reason == r,
               onSelected: (_) => setState(() {
                 _reason = r;
@@ -274,18 +276,18 @@ class _ReturnScreenState extends State<ReturnScreen> {
               key: const Key('return-reason-other'),
               controller: _otherReason,
               onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(labelText: 'Describe the reason', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('Describe the reason'), border: const OutlineInputBorder()),
             ),
           ),
         const Divider(height: 32),
-        Text('Refund by', style: theme.textTheme.titleMedium),
+        Text(tr('Refund by'), style: theme.textTheme.titleMedium),
         const SizedBox(height: 8),
         SegmentedButton<String>(
           segments: [
-            const ButtonSegment(value: 'cash', label: Text('Cash'), icon: Icon(Icons.payments_outlined)),
-            const ButtonSegment(value: 'card', label: Text('Card'), icon: Icon(Icons.credit_card)),
+            ButtonSegment(value: 'cash', label: Text(tr('Cash')), icon: const Icon(Icons.payments_outlined)),
+            ButtonSegment(value: 'card', label: Text(tr('Card')), icon: const Icon(Icons.credit_card)),
             const ButtonSegment(value: 'upi', label: Text('UPI'), icon: Icon(Icons.qr_code_2)),
-            ButtonSegment(value: 'credit', label: const Text('Credit'), icon: const Icon(Icons.account_balance_wallet_outlined), enabled: _creditAllowed),
+            ButtonSegment(value: 'credit', label: Text(tr('Credit')), icon: const Icon(Icons.account_balance_wallet_outlined), enabled: _creditAllowed),
           ],
           selected: {_method},
           onSelectionChanged: (v) => setState(() => _method = v.first),
@@ -293,7 +295,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
         if (!_creditAllowed)
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: Text('Credit refunds only apply to sales with unpaid credit.', style: theme.textTheme.bodySmall),
+            child: Text(tr('Credit refunds only apply to sales with unpaid credit.'), style: theme.textTheme.bodySmall),
           ),
         if (_method == 'card' || _method == 'upi')
           Padding(
@@ -301,7 +303,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
             child: TextField(
               controller: _reference,
               decoration: InputDecoration(
-                labelText: _method == 'upi' ? 'UPI reference (optional)' : 'Card refund reference (optional)',
+                labelText: _method == 'upi' ? tr('UPI reference (optional)') : tr('Card refund reference (optional)'),
                 border: const OutlineInputBorder(),
               ),
             ),
@@ -309,23 +311,23 @@ class _ReturnScreenState extends State<ReturnScreen> {
         SwitchListTile(
           key: const Key('return-restock'),
           contentPadding: EdgeInsets.zero,
-          title: const Text('Put items back in stock'),
-          subtitle: const Text('Turn off for damaged or unsellable items'),
+          title: Text(tr('Put items back in stock')),
+          subtitle: Text(tr('Turn off for damaged or unsellable items')),
           value: _restock,
           onChanged: (v) => setState(() => _restock = v),
         ),
         if (_needsApproval) ...[
           const Divider(height: 32),
-          Text('Manager approval', style: theme.textTheme.titleMedium),
+          Text(tr('Manager approval'), style: theme.textTheme.titleMedium),
           const SizedBox(height: 4),
-          Text('A Branch Manager or Merchant Admin approves this return.', style: theme.textTheme.bodySmall),
+          Text(tr('A Branch Manager or Merchant Admin approves this return.'), style: theme.textTheme.bodySmall),
           const SizedBox(height: 8),
           TextField(
             key: const Key('return-approver-code'),
             controller: _approverCode,
             textCapitalization: TextCapitalization.characters,
             onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(labelText: 'Approver employee code', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('Approver employee code'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           Center(
@@ -356,14 +358,14 @@ class _ReturnScreenState extends State<ReturnScreen> {
                   l.sku,
                   'sold ${formatQty(l.soldQuantity)}',
                   if (returned > 0) 'returned ${formatQty(l.returnedQuantity)}',
-                  '${formatRupees(l.unitRefund)} each',
+                  tr('{0} each', [formatRupees(l.unitRefund)]),
                 ].join(' · '),
                 style: theme.textTheme.bodySmall,
               ),
             ]),
           ),
           IconButton(
-            tooltip: 'One less',
+            tooltip: tr('One less'),
             onPressed: q > 0 ? () => _setQty(l, q - 1) : null,
             icon: const Icon(Icons.remove_circle_outline),
           ),
@@ -373,7 +375,7 @@ class _ReturnScreenState extends State<ReturnScreen> {
           ),
           IconButton(
             key: Key('return-plus-${l.sku}'),
-            tooltip: 'One more',
+            tooltip: tr('One more'),
             // Fractional leftovers (weighed items) go back in one step.
             onPressed: q < max ? () => _setQty(l, q + 1 > max ? max : q + 1) : null,
             icon: const Icon(Icons.add_circle_outline),

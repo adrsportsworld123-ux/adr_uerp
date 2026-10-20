@@ -187,7 +187,7 @@ func (h *Handler) CreatePurchaseOrder(w http.ResponseWriter, r *http.Request) {
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO purchase_orders (merchant_id, branch_id, supplier_id, po_number, expected_date, notes, created_by, order_date)
 			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, NULLIF($4,'')::date, NULLIF($5,''), $6,
-			        (now() AT TIME ZONE 'Asia/Kolkata')::date)
+			        (now() AT TIME ZONE app_merchant_tz())::date)
 			RETURNING id`,
 			req.BranchID, req.SupplierID, poNumber, req.ExpectedDate, req.Notes, claims.UserID,
 		).Scan(&poID); err != nil {

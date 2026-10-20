@@ -1,9 +1,11 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'api/api_client.dart';
+import 'l10n/l10n.dart';
 import 'local/db_platform.dart';
 import 'state/session.dart';
 import 'state/terminal_config.dart';
@@ -68,6 +70,10 @@ class _PosAppState extends State<PosApp> {
   TerminalConfig? _config;
   bool _loading = true;
 
+  /// The localization this device last loaded (migrations/064), applied
+  /// before the first screen; the session refreshes it after sign-in.
+  PosLocalization? _localization;
+
   @override
   void initState() {
     super.initState();
@@ -80,6 +86,7 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _load() async {
+    _localization = await AppSession.restoreLocalization();
     TerminalConfig? config;
     try {
       config = await TerminalConfig.load();
@@ -107,12 +114,21 @@ class _PosAppState extends State<PosApp> {
   // Flutter carry the old Navigator (and its pairing-screen route) over to
   // the paired app, so pairing never reached the login screen and
   // unpairing never left it.
+  //
+  // The till's language and text direction (migrations/064): Material's own
+  // texts (date pickers, tooltips) follow [PosLocale.locale], and the
+  // builder's Directionality applies the terminal's direction, which may
+  // differ from the language's (Arabic left-to-right, say).
   MaterialApp _app(Widget home, {bool paired = false}) => MaterialApp(
         title: 'ERP POS',
         navigatorKey: paired ? kNavigatorKey : null,
         theme: posTheme(Brightness.light),
         darkTheme: posTheme(Brightness.dark),
         themeMode: ThemeMode.light,
+        locale: PosLocale.locale,
+        supportedLocales: [for (final l in PosLocale.supported) Locale(l)],
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
+        builder: (context, child) => Directionality(textDirection: PosLocale.direction, child: child ?? const SizedBox()),
         home: home,
       );
 
@@ -135,9 +151,45 @@ class _PosAppState extends State<PosApp> {
         terminalName: config.terminalName,
         branchName: config.branchName,
         merchantCode: config.merchantCode,
-      )..onUnpairDevice = _unpair,
-      child: _ActivityTracker(child: _app(const RootScreen(), paired: true)),
+      )
+        ..onUnpairDevice = _unpair
+        ..localization = _localization ?? const PosLocalization(),
+      child: _ActivityTracker(child: _LocaleScope(builder: () => _app(const RootScreen(), paired: true))),
     );
+  }
+}
+
+/// Rebuilds the paired app when the session loads a different language,
+/// direction or cart side (AppSession.localeRevision). Strings come from
+/// [tr], which no widget depends on, so every element is marked for a
+/// rebuild after the switch; their state (an open dialog, a typed amount)
+/// is kept.
+class _LocaleScope extends StatefulWidget {
+  final Widget Function() builder;
+  const _LocaleScope({required this.builder});
+
+  @override
+  State<_LocaleScope> createState() => _LocaleScopeState();
+}
+
+class _LocaleScopeState extends State<_LocaleScope> {
+  int? _revision;
+
+  @override
+  Widget build(BuildContext context) {
+    final revision = context.select<AppSession, int>((s) => s.localeRevision);
+    if (_revision != null && _revision != revision) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        void mark(Element e) {
+          e.markNeedsBuild();
+          e.visitChildren(mark);
+        }
+
+        if (mounted) (context as Element).visitChildren(mark);
+      });
+    }
+    _revision = revision;
+    return widget.builder();
   }
 }
 

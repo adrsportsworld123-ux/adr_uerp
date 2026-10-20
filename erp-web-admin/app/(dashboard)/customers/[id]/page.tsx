@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
+import { BankAccountSelect, defaultAccount, useBankAccounts } from "@/components/banking/bank-account-select";
 const SEGMENT_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   vip: "default",
   regular: "secondary",
@@ -288,6 +289,11 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
   const [payingInvoice, setPayingInvoice] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "upi" | "bank_transfer" | "cheque">("bank_transfer");
+  // Which bank account a transfer came into (erp-core-go migrations/066);
+  // none set up = the main Bank ledger, as before.
+  const accounts = useBankAccounts();
+  const [bankAccountId, setBankAccountId] = useState<string | null>(null);
+  const bankAccount = bankAccountId ?? defaultAccount(accounts)?.bank_account_id ?? "";
 
   async function saveSettings() {
     setBusy(true);
@@ -314,6 +320,7 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
         sales_order_id: orderId,
         amount: Number(paymentAmount),
         method: paymentMethod,
+        ...((paymentMethod === "bank_transfer" || paymentMethod === "cheque") && bankAccount ? { bank_account_id: bankAccount } : {}),
       });
       toast.success("Payment recorded");
       setPayingInvoice(null);
@@ -461,6 +468,9 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
                           <SelectItem value="upi">UPI</SelectItem>
                         </SelectContent>
                       </Select>
+                      {(paymentMethod === "bank_transfer" || paymentMethod === "cheque") && accounts.length > 0 && (
+                        <BankAccountSelect accounts={accounts} value={bankAccount} onChange={setBankAccountId} allowNone className="h-7 w-44 text-xs" />
+                      )}
                       <Button size="sm" disabled={busy} onClick={() => recordPayment(inv.order_id)}>
                         Record
                       </Button>

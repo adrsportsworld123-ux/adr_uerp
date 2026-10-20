@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // IANA zones for merchant and branch clocks (migrations/064), whatever the container ships
 
 	"erp-core-go/internal/activity"
 	"erp-core-go/internal/ai/llm"

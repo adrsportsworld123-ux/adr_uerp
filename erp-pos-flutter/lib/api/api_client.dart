@@ -350,6 +350,57 @@ class TaxRegimeSettings {
       );
 }
 
+/// The till's localization (GET /settings/localization/terminal,
+/// erp-core-go migrations/064): the merchant's language, time zone and cash
+/// denominations, with this terminal's text direction and cart side.
+/// Cached on the device so the login screen and an offline till keep them.
+class PosLocalization {
+  final String language;
+
+  /// ltr | rtl, already resolved from the language when set to auto.
+  final String direction;
+  final String cartSide;
+  final String timezone;
+
+  /// The time zone's offset when it was loaded; null = the device's clock.
+  final int? utcOffsetMinutes;
+
+  /// Largest first; the INR set from an older server.
+  final List<double> denominations;
+
+  static const inrDenominations = [2000.0, 500.0, 200.0, 100.0, 50.0, 20.0, 10.0, 5.0, 2.0, 1.0];
+
+  const PosLocalization({
+    this.language = 'en',
+    this.direction = 'ltr',
+    this.cartSide = 'right',
+    this.timezone = 'Asia/Kolkata',
+    this.utcOffsetMinutes,
+    this.denominations = inrDenominations,
+  });
+
+  factory PosLocalization.fromJson(Map<String, dynamic> j) {
+    final denoms = [for (final d in (j['denominations'] as List?) ?? const []) double.tryParse('$d') ?? 0]..removeWhere((d) => d <= 0);
+    return PosLocalization(
+      language: j['language'] as String? ?? 'en',
+      direction: j['direction'] as String? ?? 'ltr',
+      cartSide: j['cart_side'] as String? ?? 'right',
+      timezone: j['timezone'] as String? ?? 'Asia/Kolkata',
+      utcOffsetMinutes: (j['utc_offset_minutes'] as num?)?.toInt(),
+      denominations: denoms.isEmpty ? inrDenominations : denoms,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'language': language,
+        'direction': direction,
+        'cart_side': cartSide,
+        'timezone': timezone,
+        'utc_offset_minutes': utcOffsetMinutes,
+        'denominations': [for (final d in denominations) d.toStringAsFixed(2)],
+      };
+}
+
 class OrderSummary {
   final String orderId;
   final String orderNumber;
@@ -2298,6 +2349,13 @@ class ApiClient {
   Future<TaxRegimeSettings> taxRegime(String branchId) async {
     final body = _decode(await _http.get(Uri.parse('$baseUrl/api/v1/tax/regime?branch_id=$branchId'), headers: _authHeaders));
     return TaxRegimeSettings.fromJson(body);
+  }
+
+  /// GET /settings/localization/terminal — this till's language, direction,
+  /// cart side, time zone and denominations (migrations/064).
+  Future<PosLocalization> localization(String posTerminalId) async {
+    final body = _decode(await _http.get(Uri.parse('$baseUrl/api/v1/settings/localization/terminal?pos_terminal_id=$posTerminalId'), headers: _authHeaders));
+    return PosLocalization.fromJson(body);
   }
 
   Map<String, dynamic> _decode(http.Response resp) {

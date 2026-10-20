@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/data/page-header";
 import { selectClass } from "@/components/data/panel";
-import { PartyPicker, PartyType } from "@/components/data/party-picker";
+import { PARTY_LABEL, PartyPicker, PartyType } from "@/components/data/party-picker";
 
 type Ledger = {
   party_name: string | null;
@@ -33,7 +33,7 @@ export default function PartyLedgerPage() {
   // Opened from a journal line (?party_type=&party_id=): that party, straight away.
   const params = useSearchParams();
   const linkedType = params.get("party_type");
-  const linked = (linkedType === "customer" || linkedType === "supplier") && params.get("party_id") ? (linkedType as PartyType) : null;
+  const linked = linkedType && linkedType in PARTY_LABEL && params.get("party_id") ? (linkedType as PartyType) : null;
   const [partyType, setPartyType] = useState<PartyType>(linked ?? "supplier");
   const [partyId, setPartyId] = useState(linked ? params.get("party_id")! : "");
   const [partyName, setPartyName] = useState<string | null>(null);
@@ -96,6 +96,8 @@ export default function PartyLedgerPage() {
           >
             <option value="supplier">Supplier</option>
             <option value="customer">Customer</option>
+            <option value="employee">Employee</option>
+            <option value="bank_account">Bank account</option>
           </select>
         </div>
         <div className="flex w-72 flex-col gap-1.5">

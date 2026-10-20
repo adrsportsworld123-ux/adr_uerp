@@ -12,6 +12,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
+import { BankAccountSelect, defaultAccount, useBankAccounts } from "@/components/banking/bank-account-select";
+import Link from "next/link";
 
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
@@ -32,6 +34,16 @@ export default function BillDetailPage() {
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("bank_transfer");
   const [referenceNo, setReferenceNo] = useState("");
+  // Bank accounts (erp-core-go migrations/066): which account a transfer
+  // or cheque went from; a cheque from one is also written on the cheque
+  // register. With no bank account set up, the form is as it always was.
+  const accounts = useBankAccounts();
+  const [bankAccountId, setBankAccountId] = useState<string | null>(null);
+  const bankAccount = bankAccountId ?? defaultAccount(accounts)?.bank_account_id ?? "";
+  const [chequeNumber, setChequeNumber] = useState("");
+  const [chequeDate, setChequeDate] = useState("");
+  const [accountPayee, setAccountPayee] = useState(true);
+  const throughBank = (method === "bank_transfer" || method === "cheque") && accounts.length > 0;
   const [submitting, setSubmitting] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
 
@@ -59,8 +71,13 @@ export default function BillDetailPage() {
         amount: Number(amount),
         method,
         reference_no: referenceNo,
+        ...(throughBank && bankAccount ? { bank_account_id: bankAccount } : {}),
+        ...(throughBank && bankAccount && method === "cheque"
+          ? { cheque_number: chequeNumber, cheque_date: chequeDate, account_payee: accountPayee }
+          : {}),
       });
-      toast.success("Payment recorded");
+      toast.success(throughBank && bankAccount && method === "cheque" ? "Payment recorded — the cheque is on the register to print" : "Payment recorded");
+      setChequeNumber("");
       load();
     } catch (e) {
       setPayError(e instanceof ApiError ? e.message : "Could not reach the server");
@@ -148,6 +165,36 @@ export default function BillDetailPage() {
                   </Select>
                 </div>
               </div>
+              {throughBank && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="pay-bank">From account</Label>
+                  <BankAccountSelect id="pay-bank" accounts={accounts} value={bankAccount} onChange={setBankAccountId} allowNone className="w-full" />
+                </div>
+              )}
+              {throughBank && method === "cheque" && bankAccount && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="pay-cheque-no">Cheque number</Label>
+                    <Input
+                      id="pay-cheque-no"
+                      inputMode="numeric"
+                      value={chequeNumber}
+                      onChange={(e) => setChequeNumber(e.target.value.replace(/\D/g, ""))}
+                      placeholder="The next leaf"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="pay-cheque-date">Cheque date</Label>
+                    <Input id="pay-cheque-date" type="date" value={chequeDate} onChange={(e) => setChequeDate(e.target.value)} />
+                  </div>
+                  <label className="col-span-2 flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={accountPayee} onChange={(e) => setAccountPayee(e.target.checked)} /> Cross &quot;A/c Payee&quot;
+                    <Link href="/cheques" className="ms-auto text-xs text-muted-foreground hover:underline">
+                      Cheque register
+                    </Link>
+                  </label>
+                </div>
+              )}
               <div className="flex flex-col gap-2">
                 <Label htmlFor="reference">Reference number</Label>
                 <Input id="reference" value={referenceNo} onChange={(e) => setReferenceNo(e.target.value)} />

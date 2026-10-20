@@ -14,7 +14,9 @@ import (
 
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/banking"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/taxes"
 )
 
@@ -103,7 +105,7 @@ func (h *Handler) CreateBill(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	billDate, err := pastDate(req.BillDate)
+	billDate, err := pastDate(req.BillDate, locale.MerchantLocation(r.Context(), h.DB, claims.TenantID))
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "bill_date: "+err.Error())
 		return
@@ -217,7 +219,7 @@ func createBillTx(ctx context.Context, tx pgx.Tx, req createBillRequest, userID 
 	if req.SupplierInvoiceNumber != "" {
 		desc += " (supplier invoice " + req.SupplierInvoiceNumber + ")"
 	}
-	if _, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "purchase_bill", resp.BillID, desc, userID, dateOrToday(billDate), lines); err != nil {
+	if _, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "purchase_bill", resp.BillID, desc, userID, dateOrToday(billDate, locale.Location(ctx, tx)), lines); err != nil {
 		return resp, err
 	}
 	return resp, fillBillTax(ctx, tx, &resp)
@@ -235,6 +237,17 @@ type billPaymentRequest struct {
 	// future, not before the bill); the payment and its ledger entry are
 	// dated to it.
 	PaidOn string `json:"paid_on"`
+	// BankAccountID (migrations/066): which of our bank accounts a
+	// bank_transfer or cheque went from; "" = Bank (1002), as before.
+	BankAccountID string `json:"bank_account_id"`
+	// A cheque from a named bank account is also written on the cheque
+	// register (and can be printed): the leaf (cheque_number "" = the
+	// book's next one), its date (default paid_on / today) and whether
+	// it is crossed "A/c Payee" (default yes).
+	ChequeBookID string `json:"cheque_book_id"`
+	ChequeNumber string `json:"cheque_number"`
+	ChequeDate   string `json:"cheque_date"`
+	AccountPayee *bool  `json:"account_payee"`
 }
 
 func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +267,7 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "a positive amount and method are required")
 		return
 	}
-	paidOn, err := pastDate(req.PaidOn)
+	paidOn, err := pastDate(req.PaidOn, locale.MerchantLocation(r.Context(), h.DB, claims.TenantID))
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "paid_on: "+err.Error())
 		return
@@ -276,17 +289,44 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 			return errBillOverpaid
 		}
 
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO purchase_bill_payments (id, purchase_bill_id, amount, method, reference_no, performed_by, paid_at)
-			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5,
-			        COALESCE(($6::date + time '12:00') AT TIME ZONE 'Asia/Kolkata', now()))`,
-			billID, req.Amount, req.Method, req.ReferenceNo, claims.UserID, paidOn); err != nil {
+		ledger, err := accounting.PaymentLedgerCode(ctx, tx, req.Method, req.BankAccountID)
+		if err != nil {
 			return err
 		}
+		var paymentID string
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO purchase_bill_payments (id, purchase_bill_id, amount, method, reference_no, performed_by, paid_at, bank_account_id)
+			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5,
+			        COALESCE(($6::date + time '12:00') AT TIME ZONE app_merchant_tz(), now()), NULLIF($7, '')::uuid)
+			RETURNING id`,
+			billID, req.Amount, req.Method, req.ReferenceNo, claims.UserID, paidOn, req.BankAccountID).Scan(&paymentID); err != nil {
+			return err
+		}
+		paidDate := dateOrToday(paidOn, locale.Location(ctx, tx))
+		credit := accounting.JournalLine{AccountCode: ledger, Credit: req.Amount}
+		if req.BankAccountID != "" && (req.Method == "bank_transfer" || req.Method == "cheque") {
+			credit.PartyType, credit.PartyID = "bank_account", req.BankAccountID
+		}
+		if req.Method == "cheque" && req.BankAccountID != "" {
+			chequeDate := req.ChequeDate
+			if chequeDate == "" {
+				chequeDate = paidDate
+			}
+			var payee string
+			if err := tx.QueryRow(ctx, `SELECT name FROM suppliers WHERE id::text = $1`, supplierID).Scan(&payee); err != nil {
+				return err
+			}
+			if _, err := banking.Issue(ctx, tx, banking.IssueRequest{BankAccountID: req.BankAccountID, ChequeBookID: req.ChequeBookID,
+				ChequeNumber: req.ChequeNumber, ChequeDate: chequeDate, PayeeName: payee, Amount: req.Amount, AccountPayee: req.AccountPayee,
+				PartyType: "supplier", PartyID: supplierID, PurchaseBillID: billID, BillPaymentID: paymentID, BranchID: branchID,
+				Memo: "Bill payment"}, claims.UserID); err != nil {
+				return err
+			}
+		}
 
-		if _, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "bill_payment", billID, "Payment against bill", claims.UserID, dateOrToday(paidOn), []accounting.JournalLine{
+		if _, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "bill_payment", billID, "Payment against bill", claims.UserID, paidDate, []accounting.JournalLine{
 			{AccountCode: accounting.AccountPayable, Debit: req.Amount, PartyType: "supplier", PartyID: supplierID},
-			{AccountCode: accounting.AccountCodeForPaymentMethod(req.Method), Credit: req.Amount},
+			credit,
 		}); err != nil {
 			return err
 		}
@@ -316,6 +356,12 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "paid_on is before the bill's date")
 	case errors.Is(err, accounting.ErrPeriodLocked):
 		httpx.Error(w, http.StatusConflict, "PERIOD_LOCKED", "that date is in a locked accounting period")
+	case errors.Is(err, accounting.ErrNoBankAccount):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "bank account not found")
+	case errors.Is(err, accounting.ErrBankAccountInactive):
+		httpx.Error(w, http.StatusConflict, "BANK_ACCOUNT_INACTIVE", "that bank account is inactive")
+	case banking.IsClientError(err):
+		banking.WriteClientError(w, err)
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "bill not found")
 	case err != nil:

@@ -177,6 +177,8 @@ export function VoucherForm({ voucher, onSaved }: { voucher?: Voucher; onSaved: 
                     <option value="">No party</option>
                     <option value="customer">Customer</option>
                     <option value="supplier">Supplier</option>
+                    <option value="employee">Employee</option>
+                    <option value="bank_account">Bank account</option>
                   </select>
                   {l.party_type && (
                     <div className="min-w-0 flex-1">

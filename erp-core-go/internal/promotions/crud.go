@@ -40,7 +40,22 @@ type promotionResponse struct {
 	// TimesUsed is how many sales this promotion discounted; a used
 	// promotion can be edited or deactivated but not deleted.
 	TimesUsed int `json:"times_used"`
+	// ApplyOn: what the percent or amount is taken from, selling_price
+	// (default) or mrp (migrations/065).
+	ApplyOn string `json:"apply_on"`
+	// State, worked out now: running (active and inside its dates),
+	// scheduled (active, starts later), expired (its end date has passed),
+	// or inactive (switched off).
+	State string `json:"state"`
 }
+
+// promotionStateSQL is State in SQL (alias pr), shared by the list's
+// filter and its rows so the two can't disagree.
+const promotionStateSQL = `CASE
+	WHEN pr.ends_at IS NOT NULL AND pr.ends_at < now() THEN 'expired'
+	WHEN NOT pr.active THEN 'inactive'
+	WHEN pr.starts_at IS NOT NULL AND pr.starts_at > now() THEN 'scheduled'
+	ELSE 'running' END`
 
 const promotionColumns = `
 	pr.id, pr.name, pr.promo_type, pr.application_level, pr.product_id::text, pr.category_id::text,
@@ -48,7 +63,8 @@ const promotionColumns = `
 	pr.days_of_week, to_char(pr.time_start, 'HH24:MI'), to_char(pr.time_end, 'HH24:MI'), pr.active,
 	(SELECT name FROM products WHERE id = pr.product_id),
 	(SELECT name FROM categories WHERE id = pr.category_id),
-	(SELECT count(DISTINCT sales_order_id) FROM sales_order_discounts WHERE promotion_id = pr.id)::int
+	(SELECT count(DISTINCT sales_order_id) FROM sales_order_discounts WHERE promotion_id = pr.id)::int,
+	pr.apply_on, ` + promotionStateSQL + `
 `
 
 func scanPromotion(row pgx.Row) (promotionResponse, error) {
@@ -56,7 +72,8 @@ func scanPromotion(row pgx.Row) (promotionResponse, error) {
 	var rawConfig []byte
 	err := row.Scan(&p.PromotionID, &p.Name, &p.PromoType, &p.ApplicationLevel, &p.ProductID, &p.CategoryID,
 		&p.TargetSegment, &rawConfig, &p.Stacking, &p.StartsAt, &p.EndsAt,
-		&p.DaysOfWeek, &p.TimeStart, &p.TimeEnd, &p.Active, &p.ProductName, &p.CategoryName, &p.TimesUsed)
+		&p.DaysOfWeek, &p.TimeStart, &p.TimeEnd, &p.Active, &p.ProductName, &p.CategoryName, &p.TimesUsed,
+		&p.ApplyOn, &p.State)
 	if err != nil {
 		return p, err
 	}
@@ -84,6 +101,7 @@ type createPromotionRequest struct {
 	DaysOfWeek       []int       `json:"days_of_week"`
 	TimeStart        string      `json:"time_start"`
 	TimeEnd          string      `json:"time_end"`
+	ApplyOn          string      `json:"apply_on"` // "selling_price" (default) | "mrp"
 }
 
 // validatePromotion applies defaults and returns a client-facing message,
@@ -96,6 +114,9 @@ func validatePromotion(req *createPromotionRequest) string {
 	}
 	if req.Stacking == "" {
 		req.Stacking = "exclusive"
+	}
+	if req.ApplyOn == "" {
+		req.ApplyOn = "selling_price"
 	}
 	if req.ApplicationLevel != "product" {
 		req.ProductID = ""
@@ -110,6 +131,8 @@ func validatePromotion(req *createPromotionRequest) string {
 		return "application_level must be order, product, or category"
 	case req.Stacking != "exclusive" && req.Stacking != "stackable":
 		return "stacking must be exclusive or stackable"
+	case req.ApplyOn != "selling_price" && req.ApplyOn != "mrp":
+		return "apply_on must be selling_price or mrp"
 	case req.ApplicationLevel == "product" && req.ProductID == "":
 		return "choose the product this promotion applies to"
 	case req.ApplicationLevel == "category" && req.CategoryID == "":
@@ -181,15 +204,15 @@ func (h *Handler) CreatePromotion(w http.ResponseWriter, r *http.Request) {
 		return tx.QueryRow(ctx, `
 			INSERT INTO promotions
 				(id, merchant_id, name, promo_type, application_level, product_id, category_id,
-				 target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end)
+				 target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on)
 			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3,
 			        NULLIF($4,'')::uuid, NULLIF($5,'')::uuid, NULLIF($6,''), $7, $8,
 			        NULLIF($9,'')::timestamptz, NULLIF($10,'')::timestamptz, $11,
-			        NULLIF($12,'')::time, NULLIF($13,'')::time)
+			        NULLIF($12,'')::time, NULLIF($13,'')::time, $14)
 			RETURNING id`,
 			req.Name, req.PromoType, req.ApplicationLevel, req.ProductID, req.CategoryID,
 			req.TargetSegment, marshalConfig(req.Config), req.Stacking, req.StartsAt, req.EndsAt,
-			daysOfWeek, req.TimeStart, req.TimeEnd,
+			daysOfWeek, req.TimeStart, req.TimeEnd, req.ApplyOn,
 		).Scan(&promotionID)
 	})
 	if err != nil {
@@ -206,7 +229,7 @@ func (h *Handler) CreatePromotion(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------
-// GET /promotions?active=&promo_type= — open to any authenticated user
+// GET /promotions?active=&promo_type=&state= — open to any authenticated user
 // (not gated), same as GET /branches: reads aren't the business risk,
 // writes are.
 // ---------------------------------------------------------------------
@@ -220,6 +243,15 @@ func (h *Handler) ListPromotions(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	activeFilter := q.Get("active")
 	promoType := q.Get("promo_type")
+	// state: running | scheduled | expired | inactive, or "current" for
+	// everything not expired (migrations/065's expired filter).
+	state := q.Get("state")
+	switch state {
+	case "", "running", "scheduled", "expired", "inactive", "current":
+	default:
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "state must be running, scheduled, expired, inactive or current")
+		return
+	}
 
 	list := []promotionResponse{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -228,7 +260,8 @@ func (h *Handler) ListPromotions(w http.ResponseWriter, r *http.Request) {
 			FROM promotions pr
 			WHERE ($1 = '' OR pr.active = ($1 = 'true'))
 			  AND ($2 = '' OR pr.promo_type = $2)
-			ORDER BY pr.created_at DESC`, activeFilter, promoType)
+			  AND ($3 = '' OR ($3 = 'current' AND (`+promotionStateSQL+`) <> 'expired') OR (`+promotionStateSQL+`) = $3)
+			ORDER BY pr.created_at DESC`, activeFilter, promoType, state)
 		if err != nil {
 			return err
 		}
@@ -272,6 +305,7 @@ type updatePromotionRequest struct {
 	TimeStart        *string      `json:"time_start"`
 	TimeEnd          *string      `json:"time_end"`
 	Active           *bool        `json:"active"`
+	ApplyOn          *string      `json:"apply_on"`
 }
 
 var errPromotionInvalid = errors.New("invalid promotion")
@@ -302,6 +336,7 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 			TargetSegment: derefOr(cur.TargetSegment, ""), Config: cur.Config, Stacking: cur.Stacking,
 			StartsAt: rfc3339(cur.StartsAt), EndsAt: rfc3339(cur.EndsAt),
 			TimeStart: derefOr(cur.TimeStart, ""), TimeEnd: derefOr(cur.TimeEnd, ""),
+			ApplyOn: cur.ApplyOn,
 		}
 		for _, d := range cur.DaysOfWeek {
 			m.DaysOfWeek = append(m.DaysOfWeek, int(d))
@@ -310,7 +345,7 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 			{&m.Name, req.Name}, {&m.PromoType, req.PromoType}, {&m.ApplicationLevel, req.ApplicationLevel},
 			{&m.ProductID, req.ProductID}, {&m.CategoryID, req.CategoryID}, {&m.TargetSegment, req.TargetSegment},
 			{&m.Stacking, req.Stacking}, {&m.StartsAt, req.StartsAt}, {&m.EndsAt, req.EndsAt},
-			{&m.TimeStart, req.TimeStart}, {&m.TimeEnd, req.TimeEnd},
+			{&m.TimeStart, req.TimeStart}, {&m.TimeEnd, req.TimeEnd}, {&m.ApplyOn, req.ApplyOn},
 		} {
 			if f.src != nil {
 				*f.dst = *f.src
@@ -336,11 +371,11 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 				config = $7, stacking = $8,
 				starts_at = NULLIF($9,'')::timestamptz, ends_at = NULLIF($10,'')::timestamptz,
 				days_of_week = $11, time_start = NULLIF($12,'')::time, time_end = NULLIF($13,'')::time,
-				active = COALESCE($14, active)
+				active = COALESCE($14, active), apply_on = $16
 			WHERE id = $15`,
 			m.Name, m.PromoType, m.ApplicationLevel, m.ProductID, m.CategoryID, m.TargetSegment,
 			marshalConfig(m.Config), m.Stacking, m.StartsAt, m.EndsAt, days, m.TimeStart, m.TimeEnd,
-			req.Active, promotionID)
+			req.Active, promotionID, m.ApplyOn)
 		return err
 	})
 
@@ -359,6 +394,42 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.JSON(w, http.StatusOK, promo)
 	}
+}
+
+// DuplicatePromotion: POST /promotions/{id}/duplicate — gated by
+// promotions.manage. A copy to edit into a new promotion: every term the
+// same, named "Copy of …", switched off (so it never runs alongside the
+// original before it's been edited), no usage. 201 with the copy.
+func (h *Handler) DuplicatePromotion(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	var newID string
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			INSERT INTO promotions
+				(id, merchant_id, name, promo_type, application_level, product_id, category_id,
+				 target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on, active)
+			SELECT gen_random_uuid(), merchant_id, left('Copy of ' || name, 200), promo_type, application_level, product_id, category_id,
+			       target_segment, config, stacking, starts_at, ends_at, days_of_week, time_start, time_end, apply_on, false
+			FROM promotions WHERE id::text = $1
+			RETURNING id`, chi.URLParam(r, "id")).Scan(&newID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "promotion not found")
+		return
+	} else if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not copy the promotion")
+		return
+	}
+	promo, err := h.fetchByID(r.Context(), claims.TenantID, newID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "promotion copied but could not be reloaded")
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, promo)
 }
 
 // DeletePromotion: DELETE /promotions/{id} — gated by promotions.manage.

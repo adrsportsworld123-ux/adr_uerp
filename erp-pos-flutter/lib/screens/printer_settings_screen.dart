@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import '../printing/printer_service.dart';
 
 /// Configures the network ESC/POS printer PrinterService sends receipts
@@ -55,7 +56,7 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(host.isEmpty ? 'Printer cleared' : 'Printer saved')),
+      SnackBar(content: Text(host.isEmpty ? tr('Printer cleared') : tr('Printer saved'))),
     );
     Navigator.of(context).pop();
   }
@@ -63,7 +64,7 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Printer settings')),
+      appBar: AppBar(title: Text(tr('Printer settings'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Padding(
@@ -72,24 +73,22 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Network ESC/POS printer only (raw TCP, port 9100 by default) — '
-                    'the same protocol most thermal receipt printers speak on a LAN. '
-                    'Leave the host blank to disable printing.',
+                    tr('Network ESC/POS printer only (raw TCP, port 9100 by default) — the same protocol most thermal receipt printers speak on a LAN. Leave the host blank to disable printing.'),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _hostController,
-                    decoration: const InputDecoration(labelText: 'Printer IP address', border: OutlineInputBorder()),
+                    decoration: InputDecoration(labelText: tr('Printer IP address'), border: const OutlineInputBorder()),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _portController,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Port', border: OutlineInputBorder()),
+                    decoration: InputDecoration(labelText: tr('Port'), border: const OutlineInputBorder()),
                   ),
                   const SizedBox(height: 24),
-                  FilledButton(onPressed: _save, child: const Text('Save')),
+                  FilledButton(onPressed: _save, child: Text(tr('Save'))),
                 ],
               ),
             ),

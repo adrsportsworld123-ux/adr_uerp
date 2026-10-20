@@ -18,6 +18,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/documents"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/printing"
 	"erp-core-go/internal/taxes"
 )
@@ -41,7 +42,6 @@ var (
 	errDayAlreadyClosed = errors.New("day already closed")
 	errShiftsStillOpen  = errors.New("shifts still open")
 	errFutureDay        = errors.New("that day hasn't ended")
-	ist                 = time.FixedZone("IST", 5*3600+30*60)
 )
 
 type dayTaxRate struct {
@@ -144,16 +144,17 @@ type daySince struct {
 	Refunds    string `json:"refund_total"`
 }
 
-// dayWindow is the business day's [from, to) in IST.
-func dayWindow(date string) (time.Time, time.Time, error) {
-	d, err := time.ParseInLocation("2006-01-02", date, ist)
+// dayWindow is the business day's [from, to) on the merchant's clock
+// (migrations/064; IST unless the merchant set another time zone).
+func dayWindow(date string, loc *time.Location) (time.Time, time.Time, error) {
+	d, err := time.ParseInLocation("2006-01-02", date, loc)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	return d, d.Add(24 * time.Hour), nil
+	return d, d.AddDate(0, 0, 1), nil
 }
 
-func todayIST() string { return time.Now().In(ist).Format("2006-01-02") }
+func todayIn(loc *time.Location) string { return time.Now().In(loc).Format("2006-01-02") }
 
 const dayMoment = `COALESCE(so.device_created_at, so.finalized_at)`
 
@@ -161,7 +162,7 @@ const dayMoment = `COALESCE(so.device_created_at, so.finalized_at)`
 func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date string) (dayReport, error) {
 	rep := dayReport{Kind: "Z", BranchID: branchID, Date: date, Status: "open", ByMethod: map[string]string{}, ByChannel: map[string]string{},
 		RefundsMethod: map[string]string{}, TaxRates: []dayTaxRate{}, Cashiers: []dayCashier{}, Shifts: []dayShift{}}
-	from, to, err := dayWindow(date)
+	from, to, err := dayWindow(date, locale.Location(ctx, tx))
 	if err != nil {
 		return rep, err
 	}
@@ -361,6 +362,9 @@ func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date s
 // loadDayReport: the frozen Z report when the day is closed (with what has
 // changed since, if anything), else the live one.
 func loadDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date string) (dayReport, error) {
+	if date == "" {
+		date = todayIn(locale.Location(ctx, tx))
+	}
 	var raw []byte
 	err := tx.QueryRow(ctx, `SELECT report FROM z_reports WHERE branch_id::text = $1 AND business_date = $2::date`, branchID, date).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -390,10 +394,9 @@ func loadDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date st
 func dayParams(w http.ResponseWriter, r *http.Request) (branchID, date string, ok bool) {
 	q := r.URL.Query()
 	branchID, date = q.Get("branch_id"), q.Get("date")
-	if date == "" {
-		date = todayIST()
-	}
-	if branchID == "" || !isValidDate(date) {
+	// No date = today on the merchant's clock, resolved where the
+	// report is loaded (loadDayReport).
+	if branchID == "" || (date != "" && !isValidDate(date)) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "branch_id and a date (YYYY-MM-DD) are required")
 		return "", "", false
 	}
@@ -463,7 +466,7 @@ func (h *Handler) CloseDay(w http.ResponseWriter, r *http.Request) {
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if req.Date >= todayIST() {
+		if req.Date >= todayIn(locale.Location(ctx, tx)) {
 			return errFutureDay
 		}
 		var err2 error
@@ -603,24 +606,26 @@ func sortedRows(m map[string]string, labels map[string]string) []printing.Report
 	return out
 }
 
-func printedAt() string { return "Printed " + time.Now().In(ist).Format("02 Jan 2006 15:04") }
+func printedAt(loc *time.Location) string {
+	return "Printed " + time.Now().In(loc).Format("02 Jan 2006 15:04")
+}
 
-func istTime(rfc string) string {
+func localTime(rfc string, loc *time.Location) string {
 	t, err := time.Parse(time.RFC3339, rfc)
 	if err != nil {
 		return rfc
 	}
-	return t.In(ist).Format("02 Jan 15:04")
+	return t.In(loc).Format("02 Jan 15:04")
 }
 
-func dayReportPrint(lh documents.Letterhead, d dayReport) printing.ReportPrint {
+func dayReportPrint(lh documents.Letterhead, d dayReport, loc *time.Location) printing.ReportPrint {
 	sub := []string{d.Date}
 	if d.Status == "closed" && d.ZNumber != nil {
 		sub = append(sub, fmt.Sprintf("Z no. %d · closed by %s", *d.ZNumber, *d.ClosedBy))
 	} else {
 		sub = append(sub, "DAY NOT CLOSED - figures so far")
 	}
-	sub = append(sub, printedAt())
+	sub = append(sub, printedAt(loc))
 	sales := []printing.ReportRow{
 		{Label: "Sales", Value: fmt.Sprint(d.OrderCount)},
 		{Label: "Subtotal", Value: d.Subtotal},
@@ -688,15 +693,15 @@ func dayReportPrint(lh documents.Letterhead, d dayReport) printing.ReportPrint {
 		Sections: sections, Footer: footer}
 }
 
-func shiftReportPrint(lh documents.Letterhead, branchName string, s shiftResponse) printing.ReportPrint {
+func shiftReportPrint(lh documents.Letterhead, branchName string, s shiftResponse, loc *time.Location) printing.ReportPrint {
 	rep := s.Report
-	sub := []string{fmt.Sprintf("%s · shift %d", s.TerminalName, s.ShiftNumber), "Opened " + istTime(s.OpenedAt) + " by " + s.OpenedBy}
+	sub := []string{fmt.Sprintf("%s · shift %d", s.TerminalName, s.ShiftNumber), "Opened " + localTime(s.OpenedAt, loc) + " by " + s.OpenedBy}
 	if s.ClosedAt != nil {
-		sub = append(sub, "Closed "+istTime(*s.ClosedAt)+" by "+*s.ClosedBy)
+		sub = append(sub, "Closed "+localTime(*s.ClosedAt, loc)+" by "+*s.ClosedBy)
 	} else {
 		sub = append(sub, "SHIFT OPEN - figures so far")
 	}
-	sub = append(sub, printedAt())
+	sub = append(sub, printedAt(loc))
 	sales := []printing.ReportRow{{Label: "Sales", Value: fmt.Sprint(rep.OrderCount)}}
 	if rep.RoundOff != "" && rep.RoundOff != "0.00" {
 		sales = append(sales, printing.ReportRow{Label: "Round off", Value: rep.RoundOff})
@@ -721,7 +726,7 @@ func shiftReportPrint(lh documents.Letterhead, branchName string, s shiftRespons
 	}
 	moves := []printing.ReportRow{}
 	for _, m := range rep.Movements {
-		moves = append(moves, printing.ReportRow{Label: label(map[string]string{"float_in": "Float in", "drop": "Drop", "paid_in": "Paid in", "paid_out": "Paid out"}, m.Kind) + " " + istTime(m.CreatedAt), Value: m.Amount})
+		moves = append(moves, printing.ReportRow{Label: label(map[string]string{"float_in": "Float in", "drop": "Drop", "paid_in": "Paid in", "paid_out": "Paid out"}, m.Kind) + " " + localTime(m.CreatedAt, loc), Value: m.Amount})
 	}
 	sections := []printing.ReportSection{
 		{Heading: "Sales", Rows: sales},
@@ -756,7 +761,7 @@ func (h *Handler) PrintZReport(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		out = printing.BuildReport(dayReportPrint(lh, rep))
+		out = printing.BuildReport(dayReportPrint(lh, rep, locale.Location(ctx, tx)))
 		return nil
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -790,7 +795,7 @@ func (h *Handler) PrintShiftReport(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		out = printing.BuildReport(shiftReportPrint(lh, s.BranchName, s))
+		out = printing.BuildReport(shiftReportPrint(lh, s.BranchName, s, locale.Location(ctx, tx)))
 		return nil
 	})
 	if err != nil {

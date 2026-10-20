@@ -20,9 +20,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageHeader } from "@/components/data/page-header";
-import { Field, Panel } from "@/components/data/panel";
+import { Field, FilterBar, Panel } from "@/components/data/panel";
 import { StatusChip } from "@/components/data/status-chip";
 import { SOURCE_LABEL, drCr, localDate, rupees } from "@/lib/format";
+import { BankAccountSelect, useBankAccounts } from "@/components/banking/bank-account-select";
 
 
 export default function BankReconciliationPage() {
@@ -38,11 +39,22 @@ export default function BankReconciliationPage() {
   // re-fetch whenever it changes.
   const [refreshToken, setRefreshToken] = useState(0);
   const bump = useCallback(() => setRefreshToken((v) => v + 1), []);
+  // Which bank account (erp-core-go migrations/066): a statement reconciles
+  // against that account's ledger. "" = the main Bank account, as before.
+  const accounts = useBankAccounts();
+  const [bankAccountId, setBankAccountId] = useState("");
   return (
     <div className="flex max-w-5xl flex-col gap-5">
       <PageHeader title="Bank Reconciliation" description="Import a bank statement, match each line to the ledger, and review what is still unmatched." />
-      <ImportSection refreshToken={refreshToken} onMatchChanged={bump} />
-      <ReconciliationReportSection refreshToken={refreshToken} onMatchChanged={bump} />
+      {accounts.length > 0 && (
+        <FilterBar>
+          <Field label="Bank account" htmlFor="recon-bank">
+            <BankAccountSelect id="recon-bank" accounts={accounts} value={bankAccountId} onChange={setBankAccountId} allowNone noneLabel="Bank (main ledger 1002)" className="w-72" />
+          </Field>
+        </FilterBar>
+      )}
+      <ImportSection refreshToken={refreshToken} onMatchChanged={bump} bankAccountId={bankAccountId} />
+      <ReconciliationReportSection refreshToken={refreshToken} onMatchChanged={bump} bankAccountId={bankAccountId} />
     </div>
   );
 }
@@ -51,7 +63,7 @@ export default function BankReconciliationPage() {
 // Import + imported-lines viewer with inline matching
 // ---------------------------------------------------------------------
 
-function ImportSection({ refreshToken, onMatchChanged }: { refreshToken: number; onMatchChanged: () => void }) {
+function ImportSection({ refreshToken, onMatchChanged, bankAccountId }: { refreshToken: number; onMatchChanged: () => void; bankAccountId: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +113,7 @@ function ImportSection({ refreshToken, onMatchChanged }: { refreshToken: number;
       const result = await api.post<BankStatementImportResult>("/api/v1/accounting/bank-statement/import", {
         filename: file.name,
         csv,
+        ...(bankAccountId ? { bank_account_id: bankAccountId } : {}),
       });
       toast.success(`Imported ${result.line_count} line(s), ${result.matched_count} auto-matched`);
       setActiveImport(result);
@@ -290,7 +303,7 @@ function StatementLinesTable({ lines, onChanged }: { lines: BankStatementLine[];
 // Reconciliation report
 // ---------------------------------------------------------------------
 
-function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refreshToken: number; onMatchChanged: () => void }) {
+function ReconciliationReportSection({ refreshToken, onMatchChanged, bankAccountId }: { refreshToken: number; onMatchChanged: () => void; bankAccountId: string }) {
   const [start, setStart] = useState(localDate(-30));
   const [end, setEnd] = useState(localDate());
   const [report, setReport] = useState<BankReconciliationReport | null>(null);
@@ -298,13 +311,13 @@ function ReconciliationReportSection({ refreshToken, onMatchChanged }: { refresh
 
   const load = useCallback(() => {
     api
-      .get<BankReconciliationReport>(`/api/v1/accounting/bank-reconciliation?start=${start}&end=${end}`)
+      .get<BankReconciliationReport>(`/api/v1/accounting/bank-reconciliation?start=${start}&end=${end}${bankAccountId ? `&bank_account_id=${bankAccountId}` : ""}`)
       .then((r) => {
         setReport(r);
         setError(null);
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load reconciliation report"));
-  }, [start, end]);
+  }, [start, end, bankAccountId]);
   useEffect(load, [load, refreshToken]);
 
   return (

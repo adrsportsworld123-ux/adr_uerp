@@ -65,7 +65,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
         e.substring(at + 1).contains('.') &&
         !e.endsWith('.') &&
         !e.substring(at + 1).startsWith('.');
-    return ok ? null : 'Not a valid email address';
+    return ok ? null : tr('Not a valid email address');
   }
 
   @override
@@ -80,7 +80,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Attach a customer'),
+      title: Text(tr('Attach a customer')),
       content: SizedBox(
         width: 360,
         child: Column(
@@ -91,7 +91,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
               controller: _searchController,
               autofocus: true,
               decoration: InputDecoration(
-                labelText: 'Search by name/phone/email',
+                labelText: tr('Search by name/phone/email'),
                 border: const OutlineInputBorder(),
                 suffixIcon: _searching
                     ? const Padding(
@@ -120,11 +120,11 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                 ),
               ),
             const Divider(height: 24),
-            Text('Or register a walk-in', style: Theme.of(context).textTheme.labelMedium),
+            Text(tr('Or register a walk-in'), style: Theme.of(context).textTheme.labelMedium),
             const SizedBox(height: 8),
             TextField(
               controller: _walkInNameController,
-              decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: tr('Name'), border: const OutlineInputBorder(), isDense: true),
               // Bug fix: this dialog is a real State (not a StatefulBuilder),
               // so without onChanged->setState here, typing a name/phone
               // never rebuilds it — the "Add walk-in" button's disabled
@@ -139,7 +139,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
             TextField(
               controller: _walkInPhoneController,
               keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(labelText: 'Phone', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: tr('Phone'), border: const OutlineInputBorder(), isDense: true),
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 8),
@@ -148,8 +148,8 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
               controller: _walkInEmailController,
               keyboardType: TextInputType.emailAddress,
               decoration: InputDecoration(
-                labelText: 'Email (optional)',
-                helperText: 'For e-receipts',
+                labelText: tr('Email (optional)'),
+                helperText: tr('For e-receipts'),
                 border: const OutlineInputBorder(),
                 isDense: true,
                 errorText: _emailError,
@@ -160,7 +160,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
         FilledButton(
           onPressed: (_walkInNameController.text.trim().isEmpty && _walkInPhoneController.text.trim().isEmpty) || _emailError != null
               ? null
@@ -172,7 +172,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                       _walkInEmailController.text.trim().isEmpty ? null : _walkInEmailController.text.trim(),
                     ),
                   ),
-          child: const Text('Add walk-in'),
+          child: Text(tr('Add walk-in')),
         ),
       ],
     );
@@ -253,11 +253,11 @@ class _DiscountDialogState extends State<_DiscountDialog> {
   String _pct(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
 
   String get _helperText {
-    final free = _free > 0 ? 'Up to ${_pct(_free)}% needs no approval' : 'Every discount needs approval';
-    if (!_fixed) return _value > _max ? 'The maximum is ${_pct(_max)}%' : free;
-    if (!_validAmount) return 'Rupees and paise only, e.g. 99.50';
-    if (_overMax) return 'The maximum on this sale is ${formatRupeesNum(_maxAmount)}';
-    if (_value <= 0) return _free > 0 ? '$free (${formatRupeesNum(_base * _free / 100)} on this sale)' : free;
+    final free = _free > 0 ? tr('Up to {0}% needs no approval', [_pct(_free)]) : tr('Every discount needs approval');
+    if (!_fixed) return _value > _max ? tr('The maximum is {0}%', [_pct(_max)]) : free;
+    if (!_validAmount) return tr('Rupees and paise only, e.g. 99.50');
+    if (_overMax) return tr('The maximum on this sale is {0}', [formatRupeesNum(_maxAmount)]);
+    if (_value <= 0) return _free > 0 ? tr('{0} ({1} on this sale)', [free, formatRupeesNum(_base * _free / 100)]) : free;
     return '${_percent.toStringAsFixed(2)}% of the sale';
   }
 
@@ -280,7 +280,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AlertDialog(
-      title: const Text('Manual discount'),
+      title: Text(tr('Manual discount')),
       content: SizedBox(
         width: 340,
         child: SingleChildScrollView(
@@ -291,8 +291,8 @@ class _DiscountDialogState extends State<_DiscountDialog> {
               SegmentedButton<bool>(
                 key: const Key('discount-mode'),
                 segments: [
-                  const ButtonSegment(value: false, label: Text('Percent %')),
-                  ButtonSegment(value: true, label: Text('Amount ${PosCurrency.symbol}')),
+                  ButtonSegment(value: false, label: Text(tr('Percent %'))),
+                  ButtonSegment(value: true, label: Text(tr('Amount {0}', [PosCurrency.symbol]))),
                 ],
                 selected: {_fixed},
                 onSelectionChanged: (v) => setState(() {
@@ -306,7 +306,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                 autofocus: true,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
-                  labelText: _fixed ? 'Discount amount (${PosCurrency.symbol})' : 'Discount %',
+                  labelText: _fixed ? tr('Discount amount ({0})', [PosCurrency.symbol]) : tr('Discount %'),
                   helperText: _helperText,
                   helperMaxLines: 2,
                   helperStyle: _overMax || !_validAmount ? TextStyle(color: theme.colorScheme.error) : null,
@@ -316,7 +316,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
               const SizedBox(height: 12),
               TextField(
                 controller: _reasonController,
-                decoration: const InputDecoration(labelText: 'Reason'),
+                decoration: InputDecoration(labelText: tr('Reason')),
                 // Rebuild on every keystroke so Apply's enabled state is
                 // always current (the original "Apply stays disabled" bug).
                 onChanged: (_) => setState(() {}),
@@ -330,7 +330,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                     children: [
                       Icon(Icons.verified_user_outlined, color: theme.pos.plum, size: 18),
                       const SizedBox(width: 8),
-                      Expanded(child: Text('This discount needs $_tierLabel to approve.', style: TextStyle(color: theme.pos.plum))),
+                      Expanded(child: Text(tr('This discount needs {0} to approve.', [_tierLabel]), style: TextStyle(color: theme.pos.plum))),
                     ],
                   ),
                 ),
@@ -338,11 +338,11 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                 TextField(
                   controller: _approverController,
                   textCapitalization: TextCapitalization.characters,
-                  decoration: const InputDecoration(labelText: 'Approver employee code', hintText: 'e.g. EMP002'),
+                  decoration: InputDecoration(labelText: tr('Approver employee code'), hintText: 'e.g. EMP002'),
                   onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 8),
-                Text('Approver PIN', style: theme.textTheme.labelLarge),
+                Text(tr('Approver PIN'), style: theme.textTheme.labelLarge),
                 ApprovalPinPad(onChanged: (pin) => setState(() => _pin = pin)),
               ],
             ],
@@ -350,7 +350,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
         FilledButton(
           onPressed: _canApply
               ? () => Navigator.pop(
@@ -358,7 +358,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                     _DiscountInput(_fixed, _value, _approverController.text.trim(), _pin, _reasonController.text.trim()),
                   )
               : null,
-          child: const Text('Apply'),
+          child: Text(tr('Apply')),
         ),
       ],
     );
@@ -382,7 +382,7 @@ Future<String?> _promptText(BuildContext context, {required String title, requir
         onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Cancel'))),
         FilledButton(onPressed: () => Navigator.pop(ctx, controller.text.trim()), child: Text(confirm)),
       ],
     ),

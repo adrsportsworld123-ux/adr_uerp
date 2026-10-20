@@ -9,7 +9,7 @@ part of '../pos_screen.dart';
 // a missing button.
 // ---------------------------------------------------------------------
 
-const String _offlineReason = 'Needs a connection — not available offline';
+String get _offlineReason => tr('Needs a connection — not available offline');
 
 class _CartPanel extends StatelessWidget {
   final bool busy;
@@ -59,7 +59,7 @@ class _CartPanel extends StatelessWidget {
                 const SizedBox(width: 8),
                 if (lines.isNotEmpty)
                   Chip(
-                    label: Text('${formatQty(itemCount.toString())} item${itemCount == 1 ? '' : 's'}'),
+                    label: Text(itemCount == 1 ? tr('1 item') : tr('{0} items', [formatQty(itemCount.toString())])),
                     visualDensity: VisualDensity.compact,
                   ),
               ],
@@ -95,9 +95,9 @@ class _CartPanel extends StatelessWidget {
                     flex: 2,
                     child: _ActionButton(
                       icon: Icons.pause_circle_outline,
-                      label: 'Hold',
+                      label: tr('Hold'),
                       keyHint: 'F8',
-                      tooltip: live ? 'Park this cart and serve someone else' : _offlineReason,
+                      tooltip: live ? tr('Park this cart and serve someone else') : _offlineReason,
                       onPressed: live && lines.isNotEmpty && !busy ? onHold : null,
                     ),
                   ),
@@ -106,9 +106,9 @@ class _CartPanel extends StatelessWidget {
                     flex: 2,
                     child: _ActionButton(
                       icon: Icons.percent,
-                      label: 'Discount',
+                      label: tr('Discount'),
                       keyHint: 'F7',
-                      tooltip: live ? 'Manual discount' : _offlineReason,
+                      tooltip: live ? tr('Manual discount') : _offlineReason,
                       onPressed: live && lines.isNotEmpty && !busy ? onDiscount : null,
                     ),
                   ),
@@ -136,7 +136,7 @@ class _CustomerChip extends StatelessWidget {
     final theme = Theme.of(context);
     final name = session.attachedCustomerName;
     return Tooltip(
-      message: enabled ? 'Attach a customer (F4)' : (session.currentOrder == null ? 'Add an item first' : _offlineReason),
+      message: enabled ? tr('Attach a customer (F4)') : (session.currentOrder == null ? tr('Add an item first') : _offlineReason),
       child: OutlinedButton(
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(0, 44),
@@ -151,10 +151,10 @@ class _CustomerChip extends StatelessWidget {
             Expanded(
               // 'Customer' alone (no prefix) when none is attached — the
               // widget test and screen readers both rely on that label.
-              child: Text(name ?? 'Customer', maxLines: 1, overflow: TextOverflow.ellipsis),
+              child: Text(name ?? tr('Customer'), maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
             if (name != null && session.loyaltyAvailablePoints != null)
-              Text('${session.loyaltyAvailablePoints} pts', style: theme.textTheme.bodySmall),
+              Text(tr('{0} pts', [session.loyaltyAvailablePoints]), style: theme.textTheme.bodySmall),
             const SizedBox(width: 6),
             const _KeyHint('F4'),
           ],
@@ -178,10 +178,10 @@ class _EmptyCart extends StatelessWidget {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.shopping_cart_outlined, size: 40, color: theme.colorScheme.primary),
           const SizedBox(height: 8),
-          Text('Cart is empty — scan an item to begin', style: theme.textTheme.titleSmall, textAlign: TextAlign.center),
+          Text(tr('Cart is empty — scan an item to begin'), style: theme.textTheme.titleSmall, textAlign: TextAlign.center),
           const SizedBox(height: 6),
           Text(
-            offline ? 'Offline: cash sales continue and sync later.' : 'F2 scan · F4 customer · F7 discount · F8 hold · F9 recall · F12 pay',
+            offline ? tr('Offline: cash sales continue and sync later.') : tr('F2 scan · F4 customer · F7 discount · F8 hold · F9 recall · F12 pay'),
             style: theme.textTheme.bodySmall,
             textAlign: TextAlign.center,
           ),
@@ -241,8 +241,8 @@ class _CartLine extends StatelessWidget {
                   Expanded(
                     child: Text(
                         line.openPrice
-                            ? '${line.sku} · qty ${formatQty(line.quantity)} · open price ${formatRupees(line.unitPrice)}'
-                            : '${line.sku} · qty ${formatQty(line.quantity)}',
+                            ? tr('{0} · qty {1} · open price {2}', [line.sku, formatQty(line.quantity), formatRupees(line.unitPrice)])
+                            : tr('{0} · qty {1}', [line.sku, formatQty(line.quantity)]),
                         style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                   ),
                   _Stepper(
@@ -252,7 +252,7 @@ class _CartLine extends StatelessWidget {
                     onPlus: () => onStep(1),
                   ),
                   IconButton(
-                    tooltip: 'Remove',
+                    tooltip: tr('Remove'),
                     icon: const Icon(Icons.close, size: 18),
                     onPressed: editable ? onRemove : null,
                   ),
@@ -278,13 +278,13 @@ class _Stepper extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Tooltip(
-      message: enabled ? 'Change quantity (+ / −)' : _offlineReason,
+      message: enabled ? tr('Change quantity (+ / −)') : _offlineReason,
       child: Container(
         decoration: BoxDecoration(border: Border.all(color: theme.colorScheme.outline), borderRadius: BorderRadius.circular(10)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(
             visualDensity: VisualDensity.compact,
-            tooltip: 'Decrease quantity',
+            tooltip: tr('Decrease quantity'),
             icon: const Icon(Icons.remove, size: 18),
             onPressed: enabled ? onMinus : null,
           ),
@@ -295,7 +295,7 @@ class _Stepper extends StatelessWidget {
           ),
           IconButton(
             visualDensity: VisualDensity.compact,
-            tooltip: 'Increase quantity',
+            tooltip: tr('Increase quantity'),
             icon: const Icon(Icons.add, size: 18),
             onPressed: enabled ? onPlus : null,
           ),
@@ -326,16 +326,16 @@ class _Totals extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       decoration: BoxDecoration(border: Border(top: BorderSide(color: theme.colorScheme.outline))),
       child: Column(children: [
-        row('Subtotal', formatRupees(order.subtotal)),
-        if (hasDiscount) row('Discount', '−${formatRupees(order.discountTotal)}', valueColor: theme.pos.pay),
+        row(tr('Subtotal'), formatRupees(order.subtotal)),
+        if (hasDiscount) row(tr('Discount'), '−${formatRupees(order.discountTotal)}', valueColor: theme.pos.pay),
         for (final t in context.watch<AppSession>().taxRowsFor(order)) row(t.label, formatRupees(t.amount)),
         const SizedBox(height: 4),
-        row('Total', formatRupees(order.grandTotal),
+        row(tr('Total'), formatRupees(order.grandTotal),
             style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
         if (order.status != 'cart')
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: Text('Order ${order.status}', style: theme.textTheme.bodySmall),
+            child: Text(tr('Order {0}', [order.status]), style: theme.textTheme.bodySmall),
           ),
       ]),
     );
@@ -390,7 +390,7 @@ class _PayButton extends StatelessWidget {
       onPressed: onPressed,
       child: FittedBox(
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Text('Pay$total'),
+          Text(tr('Pay{0}', [total])),
           const SizedBox(width: 8),
           _KeyHint('F12', color: pos.onPay),
         ]),

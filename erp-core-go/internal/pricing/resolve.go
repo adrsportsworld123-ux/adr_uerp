@@ -90,7 +90,7 @@ func ResolveLinePriceAt(ctx context.Context, tx pgx.Tx, customerID, variantID, b
 	err := tx.QueryRow(ctx, `
 		WITH local AS (
 			SELECT $4::timestamptz AT TIME ZONE COALESCE(
-				(SELECT timezone FROM branches WHERE id = NULLIF($3,'')::uuid), 'Asia/Kolkata') AS ts
+				(SELECT timezone FROM branches WHERE id = NULLIF($3,'')::uuid), app_merchant_tz()) AS ts
 		)
 		SELECT r.id, r.name, r.rule_type, r.value
 		FROM price_rules r CROSS JOIN local

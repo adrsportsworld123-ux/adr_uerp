@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../printing/printer_service.dart';
 import '../state/session.dart';
 import '../ui/approval_pin_pad.dart';
@@ -60,7 +61,7 @@ class _ProductLookupScreenState extends State<ProductLookupScreen> {
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Can\'t reach the server. Product lookup needs a connection.');
+      if (mounted) setState(() => _error = tr('Can\'t reach the server. Product lookup needs a connection.'));
     }
   }
 
@@ -71,7 +72,7 @@ class _ProductLookupScreenState extends State<ProductLookupScreen> {
   Future<void> _editPrice() async {
     final ok = await showDialog<bool>(context: context, builder: (_) => _scoped(_PriceDialog(variant: _variant!)));
     if (ok == true) {
-      _snack('Price updated. Sales already made keep their price.');
+      _snack(tr('Price updated. Sales already made keep their price.'));
       await _load();
     }
   }
@@ -79,7 +80,7 @@ class _ProductLookupScreenState extends State<ProductLookupScreen> {
   Future<void> _adjust() async {
     final ok = await showDialog<bool>(context: context, builder: (_) => _scoped(_AdjustDialog(variant: _variant!, batches: _stock!.batches)));
     if (ok == true) {
-      _snack('Stock adjusted');
+      _snack(tr('Stock adjusted'));
       await _load();
     }
   }
@@ -89,7 +90,7 @@ class _ProductLookupScreenState extends State<ProductLookupScreen> {
       context: context,
       builder: (_) => _scoped(_LabelDialog(variant: _variant!, batches: _stock!.batches, printer: _printer)),
     );
-    if (ok == true) _snack('Sent to the printer');
+    if (ok == true) _snack(tr('Sent to the printer'));
   }
 
   @override
@@ -103,13 +104,13 @@ class _ProductLookupScreenState extends State<ProductLookupScreen> {
     Widget action(String label, IconData icon, String? permission, VoidCallback onTap, Key key) {
       final allowed = permission == null || session.can(permission);
       return Tooltip(
-        message: allowed ? label : 'Needs the $permission permission',
+        message: allowed ? label : tr('Needs the {0} permission', [permission]),
         child: OutlinedButton.icon(key: key, onPressed: allowed ? onTap : null, icon: Icon(icon), label: Text(label)),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text(_product?.name ?? 'Product')),
+      appBar: AppBar(title: Text(_product?.name ?? tr('Product'))),
       body: _error != null
           ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(_error!, textAlign: TextAlign.center)))
           : v == null
@@ -120,42 +121,41 @@ class _ProductLookupScreenState extends State<ProductLookupScreen> {
                     Text('${v.sku}${v.barcode == null ? '' : ' · ${v.barcode}'}', style: theme.textTheme.bodySmall),
                     const SizedBox(height: 8),
                     Wrap(spacing: 24, runSpacing: 8, children: [
-                      _fact(theme, 'Price', formatRupees(v.sellingPrice), key: const Key('lookup-price')),
+                      _fact(theme, tr('Price'), formatRupees(v.sellingPrice), key: const Key('lookup-price')),
                       _fact(theme, 'MRP', formatRupees(v.mrp)),
-                      _fact(theme, 'In stock here', here == null ? '—' : formatQty(here.available), key: const Key('lookup-stock')),
-                      if (v.status != 'active') _fact(theme, 'Status', statusLabel(v.status)),
+                      _fact(theme, tr('In stock here'), here == null ? '—' : formatQty(here.available), key: const Key('lookup-stock')),
+                      if (v.status != 'active') _fact(theme, tr('Status'), statusLabel(v.status)),
                     ]),
                     if (v.openPrice != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          'Open price: ${formatRupees(v.openPrice!.min)} to ${formatRupees(v.openPrice!.max)}'
-                          '${v.openPrice!.approvalAbove == null ? '' : ', approval above ${formatRupees(v.openPrice!.approvalAbove!)}'}',
+                          tr('Open price: {0} to {1}{2}', [formatRupees(v.openPrice!.min), formatRupees(v.openPrice!.max), v.openPrice!.approvalAbove == null ? '' : tr(', approval above {0}', [formatRupees(v.openPrice!.approvalAbove!)])]),
                           style: theme.textTheme.bodySmall,
                         ),
                       ),
                     const SizedBox(height: 16),
                     Wrap(spacing: 8, runSpacing: 8, children: [
-                      action('Edit price', Icons.sell_outlined, 'pricing.manage', _editPrice, const Key('lookup-edit-price')),
-                      action('Adjust stock', Icons.inventory_outlined, 'inventory.adjust', _adjust, const Key('lookup-adjust')),
-                      action('Print label', Icons.print_outlined, null, _label, const Key('lookup-label')),
+                      action(tr('Edit price'), Icons.sell_outlined, 'pricing.manage', _editPrice, const Key('lookup-edit-price')),
+                      action(tr('Adjust stock'), Icons.inventory_outlined, 'inventory.adjust', _adjust, const Key('lookup-adjust')),
+                      action(tr('Print label'), Icons.print_outlined, null, _label, const Key('lookup-label')),
                     ]),
                     if (_stock!.batches.isNotEmpty) ...[
                       const SizedBox(height: 20),
-                      Text('Batches here (sells soonest expiry first)', style: theme.textTheme.titleSmall),
+                      Text(tr('Batches here (sells soonest expiry first)'), style: theme.textTheme.titleSmall),
                       for (final b in _stock!.batches)
                         ListTile(
                           dense: true,
                           contentPadding: EdgeInsets.zero,
                           title: Text(b.batchNo),
-                          subtitle: Text(b.expiryDate == null ? 'No expiry' : 'Expires ${b.expiryDate}${b.expired ? ' · expired' : ''}',
+                          subtitle: Text(b.expiryDate == null ? tr('No expiry') : tr('Expires {0}{1}', [b.expiryDate, b.expired ? ' · ${tr('expired')}' : '']),
                               style: b.expired ? TextStyle(color: theme.colorScheme.error) : null),
                           trailing: Text(formatQty(b.remaining)),
                         ),
                     ],
                     if (others.isNotEmpty) ...[
                       const SizedBox(height: 20),
-                      Text('Other branches', style: theme.textTheme.titleSmall),
+                      Text(tr('Other branches'), style: theme.textTheme.titleSmall),
                       for (final b in others)
                         ListTile(
                           dense: true,
@@ -202,7 +202,7 @@ class _PriceDialogState extends State<_PriceDialog> {
   Future<void> _save() async {
     final price = double.tryParse(_price.text);
     if (price == null || price <= 0) {
-      setState(() => _error = 'Enter a price above zero');
+      setState(() => _error = tr('Enter a price above zero'));
       return;
     }
     setState(() {
@@ -217,15 +217,15 @@ class _PriceDialogState extends State<_PriceDialog> {
         _busy = false;
         if (e.code == 'NEGATIVE_MARGIN') {
           _belowCost = true;
-          _error = 'This is below the cost price (${formatRupees(widget.variant.costPrice)}). Save again to confirm.';
+          _error = tr('This is below the cost price ({0}). Save again to confirm.', [formatRupees(widget.variant.costPrice)]);
         } else {
-          _error = e.statusCode == 403 ? 'You don\'t have permission to change prices.' : e.message;
+          _error = e.statusCode == 403 ? tr('You don\'t have permission to change prices.') : e.message;
         }
       });
     } catch (_) {
       setState(() {
         _busy = false;
-        _error = 'Can\'t reach the server.';
+        _error = tr('Can\'t reach the server.');
       });
     }
   }
@@ -233,7 +233,7 @@ class _PriceDialogState extends State<_PriceDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Edit selling price'),
+      title: Text(tr('Edit selling price')),
       content: SizedBox(
         width: 360,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -244,16 +244,16 @@ class _PriceDialogState extends State<_PriceDialog> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: _money,
             onChanged: (_) => setState(() => _belowCost = false),
-            decoration: InputDecoration(labelText: 'New price', prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('New price'), prefixText: '${PosCurrency.symbol} ', border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
           TextField(
             key: const Key('price-reason'),
             controller: _reason,
-            decoration: const InputDecoration(labelText: 'Reason (kept in price history)', border: OutlineInputBorder()),
+            decoration: InputDecoration(labelText: tr('Reason (kept in price history)'), border: const OutlineInputBorder()),
           ),
           const SizedBox(height: 6),
-          Text('Takes effect for new sales. Sales already made keep their price.', style: Theme.of(context).textTheme.bodySmall),
+          Text(tr('Takes effect for new sales. Sales already made keep their price.'), style: Theme.of(context).textTheme.bodySmall),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -262,11 +262,11 @@ class _PriceDialogState extends State<_PriceDialog> {
         ]),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
         FilledButton(
           key: const Key('price-save'),
           onPressed: _busy ? null : _save,
-          child: Text(_belowCost ? 'Save below cost' : 'Save'),
+          child: Text(_belowCost ? tr('Save below cost') : tr('Save')),
         ),
       ],
     );
@@ -311,11 +311,11 @@ class _AdjustDialogState extends State<_AdjustDialog> {
   Future<void> _save() async {
     final q = double.tryParse(_qty.text);
     if (q == null || q <= 0 || _reason.text.trim().isEmpty || (_needsBatch && _batchNo.text.trim().isEmpty)) {
-      setState(() => _error = _needsBatch ? 'Quantity, reason and batch number are required' : 'Quantity and reason are required');
+      setState(() => _error = _needsBatch ? tr('Quantity, reason and batch number are required') : tr('Quantity and reason are required'));
       return;
     }
     if (_needsApprover && (_approverCode.text.trim().isEmpty || _pin.length < 4)) {
-      setState(() => _error = 'Enter the approver\'s employee code and PIN');
+      setState(() => _error = tr('Enter the approver\'s employee code and PIN'));
       return;
     }
     setState(() {
@@ -339,17 +339,17 @@ class _AdjustDialogState extends State<_AdjustDialog> {
         _busy = false;
         if (e.code == 'ADJUSTMENT_NOT_APPROVED') {
           _error = _needsApprover
-              ? 'Approval failed. Check the manager\'s employee code and PIN.'
-              : 'An adjustment this size needs a manager\'s approval.';
+              ? tr('Approval failed. Check the manager\'s employee code and PIN.')
+              : tr('An adjustment this size needs a manager\'s approval.');
           _needsApprover = true;
         } else {
-          _error = e.statusCode == 403 ? 'You don\'t have permission to adjust stock.' : e.message;
+          _error = e.statusCode == 403 ? tr('You don\'t have permission to adjust stock.') : e.message;
         }
       });
     } catch (_) {
       setState(() {
         _busy = false;
-        _error = 'Can\'t reach the server.';
+        _error = tr('Can\'t reach the server.');
       });
     }
   }
@@ -357,15 +357,15 @@ class _AdjustDialogState extends State<_AdjustDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Adjust stock'),
+      title: Text(tr('Adjust stock')),
       content: SizedBox(
         width: 380,
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: false, label: Text('Remove'), icon: Icon(Icons.remove)),
-                ButtonSegment(value: true, label: Text('Add'), icon: Icon(Icons.add)),
+              segments: [
+                ButtonSegment(value: false, label: Text(tr('Remove')), icon: const Icon(Icons.remove)),
+                ButtonSegment(value: true, label: Text(tr('Add')), icon: const Icon(Icons.add)),
               ],
               selected: {_add},
               onSelectionChanged: (v) => setState(() => _add = v.first),
@@ -377,26 +377,26 @@ class _AdjustDialogState extends State<_AdjustDialog> {
               autofocus: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}'))],
-              decoration: const InputDecoration(labelText: 'Quantity', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('Quantity'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 8),
             TextField(
               key: const Key('adjust-reason'),
               controller: _reason,
-              decoration: const InputDecoration(labelText: 'Reason (damaged, found, recount ...)', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('Reason (damaged, found, recount ...)'), border: const OutlineInputBorder()),
             ),
             if (_needsBatch) ...[
               const SizedBox(height: 8),
               TextField(
                 key: const Key('adjust-batch'),
                 controller: _batchNo,
-                decoration: const InputDecoration(labelText: 'Batch number', border: OutlineInputBorder()),
+                decoration: InputDecoration(labelText: tr('Batch number'), border: const OutlineInputBorder()),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: _expiry,
                 keyboardType: TextInputType.datetime,
-                decoration: const InputDecoration(labelText: 'Expiry (YYYY-MM-DD, new batches)', border: OutlineInputBorder()),
+                decoration: InputDecoration(labelText: tr('Expiry (YYYY-MM-DD, new batches)'), border: const OutlineInputBorder()),
               ),
             ],
             if (widget.variant.trackBatch && !_add && widget.batches.isNotEmpty) ...[
@@ -404,9 +404,9 @@ class _AdjustDialogState extends State<_AdjustDialog> {
               DropdownButtonFormField<String?>(
                 isExpanded: true,
                 initialValue: _batchChoice,
-                decoration: const InputDecoration(labelText: 'From batch', border: OutlineInputBorder()),
+                decoration: InputDecoration(labelText: tr('From batch'), border: const OutlineInputBorder()),
                 items: [
-                  const DropdownMenuItem<String?>(value: null, child: Text('Expired first (automatic)')),
+                  DropdownMenuItem<String?>(value: null, child: Text(tr('Expired first (automatic)'))),
                   for (final b in widget.batches)
                     DropdownMenuItem<String?>(value: b.batchId, child: Text('${b.batchNo} · ${formatQty(b.remaining)}', overflow: TextOverflow.ellipsis)),
                 ],
@@ -419,7 +419,7 @@ class _AdjustDialogState extends State<_AdjustDialog> {
                 key: const Key('adjust-approver-code'),
                 controller: _approverCode,
                 textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(labelText: 'Approver employee code', border: OutlineInputBorder()),
+                decoration: InputDecoration(labelText: tr('Approver employee code'), border: const OutlineInputBorder()),
               ),
               const SizedBox(height: 8),
               ApprovalPinPad(onChanged: (pin) => setState(() => _pin = pin)),
@@ -433,8 +433,8 @@ class _AdjustDialogState extends State<_AdjustDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(key: const Key('adjust-save'), onPressed: _busy ? null : _save, child: const Text('Adjust')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
+        FilledButton(key: const Key('adjust-save'), onPressed: _busy ? null : _save, child: Text(tr('Adjust'))),
       ],
     );
   }
@@ -450,10 +450,10 @@ class _LabelDialog extends StatefulWidget {
   State<_LabelDialog> createState() => _LabelDialogState();
 }
 
-const _templates = {
-  'standard': 'Standard · 50×30',
-  'compact': 'Compact · 40×20',
-  'detailed': 'Detailed · 100×50, batch & expiry',
+final _templates = {
+  'standard': tr('Standard · 50×30'),
+  'compact': tr('Compact · 40×20'),
+  'detailed': tr('Detailed · 100×50, batch & expiry'),
   'qr': 'QR · 50×50',
 };
 
@@ -477,12 +477,12 @@ class _LabelDialogState extends State<_LabelDialog> {
     } on ApiException catch (e) {
       setState(() {
         _busy = false;
-        _error = e.code == 'NO_BARCODE' ? 'This item has no barcode yet. Assign one in the back office.' : e.message;
+        _error = e.code == 'NO_BARCODE' ? tr('This item has no barcode yet. Assign one in the back office.') : e.message;
       });
     } catch (e) {
       setState(() {
         _busy = false;
-        _error = e is StateError ? e.message : 'Could not print: $e';
+        _error = e is StateError ? e.message : tr('Could not print: {0}', [e]);
       });
     }
   }
@@ -490,7 +490,7 @@ class _LabelDialogState extends State<_LabelDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Print label'),
+      title: Text(tr('Print label')),
       content: SizedBox(
         width: 380,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -512,33 +512,33 @@ class _LabelDialogState extends State<_LabelDialog> {
             DropdownButtonFormField<String?>(
               isExpanded: true,
               initialValue: _batchId,
-              decoration: const InputDecoration(labelText: 'Batch', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: tr('Batch'), border: const OutlineInputBorder(), isDense: true),
               items: [
-                const DropdownMenuItem<String?>(value: null, child: Text('The one that sells next')),
+                DropdownMenuItem<String?>(value: null, child: Text(tr('The one that sells next'))),
                 for (final b in widget.batches)
                   DropdownMenuItem<String?>(
-                      value: b.batchId, child: Text('${b.batchNo}${b.expiryDate == null ? '' : ' · exp ${b.expiryDate}'}', overflow: TextOverflow.ellipsis)),
+                      value: b.batchId, child: Text('${b.batchNo}${b.expiryDate == null ? '' : ' · ${tr('exp {0}', [b.expiryDate])}'}', overflow: TextOverflow.ellipsis)),
               ],
               onChanged: (v) => setState(() => _batchId = v),
             ),
           const SizedBox(height: 8),
           Row(children: [
-            const Text('Copies'),
+            Text(tr('Copies')),
             const Spacer(),
-            IconButton(onPressed: _copies > 1 ? () => setState(() => _copies--) : null, icon: const Icon(Icons.remove), tooltip: 'Fewer'),
+            IconButton(onPressed: _copies > 1 ? () => setState(() => _copies--) : null, icon: const Icon(Icons.remove), tooltip: tr('Fewer')),
             Text('$_copies', key: const Key('label-copies'), style: Theme.of(context).textTheme.titleMedium),
-            IconButton(onPressed: _copies < 100 ? () => setState(() => _copies++) : null, icon: const Icon(Icons.add), tooltip: 'More'),
+            IconButton(onPressed: _copies < 100 ? () => setState(() => _copies++) : null, icon: const Icon(Icons.add), tooltip: tr('More')),
           ]),
           if (_error != null) Text(_error!, key: const Key('label-error'), style: TextStyle(color: Theme.of(context).colorScheme.error)),
         ]),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
         FilledButton.icon(
           key: const Key('label-print'),
           onPressed: _busy ? null : _print,
           icon: const Icon(Icons.print),
-          label: const Text('Print'),
+          label: Text(tr('Print')),
         ),
       ],
     );

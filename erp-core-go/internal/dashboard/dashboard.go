@@ -34,6 +34,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 )
 
 type Handler struct {
@@ -78,12 +79,10 @@ func isWidget(k string) bool {
 	return false
 }
 
-var ist = time.FixedZone("IST", 5*3600+30*60)
-
 const (
 	maxSpanDays = 366
 	moment      = `COALESCE(so.device_created_at, so.finalized_at)`
-	saleDay     = `((` + moment + `) AT TIME ZONE 'Asia/Kolkata')::date`
+	saleDay     = `((` + moment + `) AT TIME ZONE app_merchant_tz())::date` // the merchant's business day (migrations/064)
 	// $1 branch_id ('' = all), $2 channel ('' = all)
 	completed = `so.status IN ('finalized', 'partially_refunded', 'refunded')
 		AND ($1 = '' OR so.branch_id::text = $1) AND ($2 = '' OR so.channel = $2)`
@@ -98,20 +97,23 @@ type filters struct {
 func (f filters) fromS() string { return f.From.Format("2006-01-02") }
 func (f filters) toS() string   { return f.To.Format("2006-01-02") }
 
-func parseFilters(r *http.Request) (filters, error) {
+// parseFilters reads the date range on loc's clock — the merchant's
+// business time zone (migrations/064). Every later date sum starts from
+// f.From / f.To, so it inherits that location.
+func parseFilters(r *http.Request, loc *time.Location) (filters, error) {
 	q := r.URL.Query()
-	today := time.Now().In(ist)
-	today = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, ist)
+	today := time.Now().In(loc)
+	today = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
 	f := filters{From: today.AddDate(0, 0, -29), To: today, BranchID: q.Get("branch_id"), Channel: q.Get("channel")}
 	if v := q.Get("from"); v != "" {
-		d, err := time.ParseInLocation("2006-01-02", v, ist)
+		d, err := time.ParseInLocation("2006-01-02", v, loc)
 		if err != nil {
 			return f, errors.New("from must be YYYY-MM-DD")
 		}
 		f.From = d
 	}
 	if v := q.Get("to"); v != "" {
-		d, err := time.ParseInLocation("2006-01-02", v, ist)
+		d, err := time.ParseInLocation("2006-01-02", v, loc)
 		if err != nil {
 			return f, errors.New("to must be YYYY-MM-DD")
 		}
@@ -234,7 +236,7 @@ type kpi struct {
 func kpis(ctx context.Context, tx pgx.Tx, f filters) ([]kpi, error) {
 	ref := f.To
 	weekStart := ref.AddDate(0, 0, -((int(ref.Weekday()) + 6) % 7)) // Monday
-	monthStart := time.Date(ref.Year(), ref.Month(), 1, 0, 0, 0, 0, ist)
+	monthStart := time.Date(ref.Year(), ref.Month(), 1, 0, 0, 0, 0, ref.Location())
 	prevMonthStart := monthStart.AddDate(0, -1, 0)
 	// The same days of last month (capped at its length).
 	prevMonthEnd := prevMonthStart.AddDate(0, 0, ref.Day()-1)
@@ -271,7 +273,7 @@ func kpis(ctx context.Context, tx pgx.Tx, f filters) ([]kpi, error) {
 		return s / float64(c)
 	}
 	dayLabel := "Today"
-	if today := time.Now().In(ist).Format("2006-01-02"); d(ref) != today {
+	if today := time.Now().In(ref.Location()).Format("2006-01-02"); d(ref) != today {
 		dayLabel = ref.Format("2 Jan")
 	}
 	return []kpi{
@@ -308,7 +310,7 @@ type cumulativeItem struct {
 
 func salesTracking(ctx context.Context, tx pgx.Tx, f filters) (tracking, error) {
 	ref := f.To
-	monthStart := time.Date(ref.Year(), ref.Month(), 1, 0, 0, 0, 0, ist)
+	monthStart := time.Date(ref.Year(), ref.Month(), 1, 0, 0, 0, 0, ref.Location())
 	daysInMonth := monthStart.AddDate(0, 1, -1).Day()
 	prevStart := monthStart.AddDate(0, -1, 0)
 	prevDays := monthStart.AddDate(0, 0, -1).Day()
@@ -383,7 +385,7 @@ func salesTracking(ctx context.Context, tx pgx.Tx, f filters) (tracking, error) 
 
 	// The Indian financial year (1 April to 31 March) so far, against the
 	// same stretch of the year before.
-	fyStart := time.Date(ref.Year(), time.April, 1, 0, 0, 0, 0, ist)
+	fyStart := time.Date(ref.Year(), time.April, 1, 0, 0, 0, 0, ref.Location())
 	if ref.Before(fyStart) {
 		fyStart = fyStart.AddDate(-1, 0, 0)
 	}
@@ -516,7 +518,7 @@ func buildWidget(ctx context.Context, tx pgx.Tx, key string, f filters) (any, er
 		return series(ctx, tx, `
 			SELECT h::text, lpad(h::text, 2, '0') || ':00', COALESCE(s.sales, 0)::float8, COALESCE(s.orders, 0)
 			FROM generate_series(0, 23) h
-			LEFT JOIN (SELECT extract(hour FROM (`+moment+`) AT TIME ZONE 'Asia/Kolkata')::int AS hr, sum(so.grand_total + so.round_off) sales, count(*) orders
+			LEFT JOIN (SELECT extract(hour FROM (`+moment+`) AT TIME ZONE app_merchant_tz())::int AS hr, sum(so.grand_total + so.round_off) sales, count(*) orders
 			           FROM sales_orders so WHERE `+completed+` AND `+inRange+` GROUP BY 1) s ON s.hr = h
 			ORDER BY h`, args...)
 	}
@@ -538,7 +540,7 @@ func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		unauthorized(w)
 		return
 	}
-	f, err := parseFilters(r)
+	f, err := parseFilters(r, locale.MerchantLocation(r.Context(), h.DB, claims.TenantID))
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return

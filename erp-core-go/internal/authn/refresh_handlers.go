@@ -51,6 +51,11 @@ func (h *RefreshHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "INVALID_TOKEN", "refresh token is invalid or expired")
 		return
 	}
+	// A suspended or cancelled merchant's sessions end at the next refresh.
+	if !MerchantActive(ctx, h.DB, rec.TenantID) {
+		httpx.Error(w, http.StatusUnauthorized, "MERCHANT_INACTIVE", "this business's account is not active")
+		return
+	}
 
 	var resp loginResponse
 	err = h.DB.WithTenant(ctx, rec.TenantID, func(ctx context.Context, tx pgx.Tx) error {

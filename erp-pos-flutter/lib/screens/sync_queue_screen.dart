@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
+import '../l10n/l10n.dart';
 import '../local/offline_store.dart';
 import '../state/session.dart';
 import '../ui/format.dart';
@@ -55,9 +56,9 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
     final waiting = _items.where((i) => !i.synced).length;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(session.offlineMode
-          ? 'Still offline. Sales are safe on this device.'
+          ? tr('Still offline. Sales are safe on this device.')
           : waiting == 0
-              ? 'Everything is synced'
+              ? tr('Everything is synced')
               : '$waiting sale(s) still waiting'),
     ));
   }
@@ -79,17 +80,17 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
         );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Sync queue')),
+      appBar: AppBar(title: Text(tr('Sync queue'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(padding: const EdgeInsets.all(16), children: [
                 Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-                  chip('Waiting', waiting.length - failed, theme.colorScheme.onSecondaryContainer, theme.colorScheme.secondaryContainer,
+                  chip(tr('Waiting'), waiting.length - failed, theme.colorScheme.onSecondaryContainer, theme.colorScheme.secondaryContainer,
                       const Key('count-waiting')),
-                  chip('Failed', failed, theme.colorScheme.onErrorContainer, theme.colorScheme.errorContainer, const Key('count-failed')),
-                  chip('Needs review', session.offlineMode ? flaggedHere : _review.length, theme.colorScheme.onTertiaryContainer,
+                  chip(tr('Failed'), failed, theme.colorScheme.onErrorContainer, theme.colorScheme.errorContainer, const Key('count-failed')),
+                  chip(tr('Needs review'), session.offlineMode ? flaggedHere : _review.length, theme.colorScheme.onTertiaryContainer,
                       theme.colorScheme.tertiaryContainer, const Key('count-review')),
                   FilledButton.icon(
                     key: const Key('sync-now'),
@@ -97,22 +98,22 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
                     icon: _syncing
                         ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.sync),
-                    label: Text(failed > 0 ? 'Retry now' : 'Sync now'),
+                    label: Text(failed > 0 ? tr('Retry now') : tr('Sync now')),
                   ),
                 ]),
                 if (session.offlineMode)
                   Padding(
                     padding: const EdgeInsets.only(top: 12),
-                    child: Text('Offline. Sales sync by themselves when the connection is back.', style: theme.textTheme.bodySmall),
+                    child: Text(tr('Offline. Sales sync by themselves when the connection is back.'), style: theme.textTheme.bodySmall),
                   ),
                 const SizedBox(height: 16),
-                _heading(theme, 'Waiting to sync', waiting.length),
-                if (waiting.isEmpty) _empty(theme, 'Nothing waiting.'),
+                _heading(theme, tr('Waiting to sync'), waiting.length),
+                if (waiting.isEmpty) _empty(theme, tr('Nothing waiting.')),
                 for (final i in waiting) _saleTile(theme, i),
                 if (_review.isNotEmpty) ...[
                   const SizedBox(height: 16),
-                  _heading(theme, 'Needs review (sold more than was in stock)', _review.length),
-                  Text('Nothing to do at the till. A manager checks the stock and resolves these under Inventory → Stock Review.',
+                  _heading(theme, tr('Needs review (sold more than was in stock)'), _review.length),
+                  Text(tr('Nothing to do at the till. A manager checks the stock and resolves these under Inventory → Stock Review.'),
                       style: theme.textTheme.bodySmall),
                   const SizedBox(height: 4),
                   for (final r in _review)
@@ -122,13 +123,13 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
                       child: ListTile(
                         leading: Icon(Icons.inventory_2_outlined, color: theme.colorScheme.tertiary),
                         title: Text(r.productName),
-                        subtitle: Text('${r.sku} · sold ${formatQty(r.quantity)} on ${r.orderNumber} · stock now ${formatQty(r.onHandNow)}'),
+                        subtitle: Text(tr('{0} · sold {1} on {2} · stock now {3}', [r.sku, formatQty(r.quantity), r.orderNumber, formatQty(r.onHandNow)])),
                       ),
                     ),
                 ],
                 const SizedBox(height: 16),
-                _heading(theme, 'Synced recently', synced.length),
-                if (synced.isEmpty) _empty(theme, 'No offline sales yet.'),
+                _heading(theme, tr('Synced recently'), synced.length),
+                if (synced.isEmpty) _empty(theme, tr('No offline sales yet.')),
                 for (final i in synced) _saleTile(theme, i),
               ]),
             ),
@@ -147,10 +148,10 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
 
   Widget _saleTile(ThemeData theme, SyncQueueItem i) {
     final (IconData icon, Color color, String status) = switch (i.state) {
-      'failed' => (Icons.sync_problem, theme.colorScheme.error, 'Failed: ${i.syncError}. Retries on the next sync.'),
-      'queued' => (Icons.cloud_upload_outlined, theme.colorScheme.onSurfaceVariant, 'Waiting to sync'),
-      'needs_review' => (Icons.flag_outlined, theme.colorScheme.tertiary, 'Synced · needs review: sold more than was in stock'),
-      _ => (Icons.cloud_done_outlined, theme.colorScheme.primary, 'Synced${i.syncedAt == null ? '' : ' at ${_hm(i.syncedAt!)}'}'),
+      'failed' => (Icons.sync_problem, theme.colorScheme.error, tr('Failed: {0}. Retries on the next sync.', [i.syncError])),
+      'queued' => (Icons.cloud_upload_outlined, theme.colorScheme.onSurfaceVariant, tr('Waiting to sync')),
+      'needs_review' => (Icons.flag_outlined, theme.colorScheme.tertiary, tr('Synced · needs review: sold more than was in stock')),
+      _ => (Icons.cloud_done_outlined, theme.colorScheme.primary, i.syncedAt == null ? tr('Synced') : tr('Synced at {0}', [_hm(i.syncedAt!)])),
     };
     return Card(
       key: Key('sync-${i.id}'),
@@ -158,7 +159,7 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
       child: ListTile(
         leading: Icon(icon, color: color),
         title: Text(i.orderNumber),
-        subtitle: Text('${formatQty(i.itemCount.toString())} item(s) · sold ${_hm(i.createdAt)}\n$status'),
+        subtitle: Text(tr('{0} item(s) · sold {1}\n{2}', [formatQty(i.itemCount.toString()), _hm(i.createdAt), status])),
         isThreeLine: true,
         trailing: Text(formatRupeesNum(i.grandTotal), style: theme.textTheme.titleSmall),
       ),
@@ -166,9 +167,9 @@ class _SyncQueueScreenState extends State<SyncQueueScreen> {
   }
 
   static String _hm(String iso) {
-    final t = DateTime.tryParse(iso)?.toLocal();
+    final t = PosClock.parse(iso);
     if (t == null) return '';
-    final now = DateTime.now();
+    final now = PosClock.now();
     final hm = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     return t.year == now.year && t.month == now.month && t.day == now.day ? hm : '${t.day}/${t.month} $hm';
   }

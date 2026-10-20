@@ -192,7 +192,7 @@ type ledgerLine struct {
 	RunningBalance string `json:"running_balance"`
 }
 
-// PartyLedger: GET /accounting/party-ledger?party_type=customer|supplier&party_id=&from=&to=
+// PartyLedger: GET /accounting/party-ledger?party_type=customer|supplier|employee|bank_account&party_id=&from=&to=
 // Receivables (customer) or payables (supplier) tracking per FRD §8: every
 // posted line naming the party, oldest first, with a running balance
 // (debit − credit). from/to (YYYY-MM-DD, optional) narrow the lines; what
@@ -207,8 +207,8 @@ func (h *Handler) PartyLedger(w http.ResponseWriter, r *http.Request) {
 	partyType := q.Get("party_type")
 	partyID := q.Get("party_id")
 	from, to := q.Get("from"), q.Get("to")
-	if (partyType != "customer" && partyType != "supplier") || partyID == "" {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "party_type (customer|supplier) and party_id are required")
+	if !PartyTypes[partyType] || partyID == "" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "party_type (customer|supplier|employee|bank_account) and party_id are required")
 		return
 	}
 	for _, d := range []string{from, to} {
@@ -222,8 +222,8 @@ func (h *Handler) PartyLedger(w http.ResponseWriter, r *http.Request) {
 	var opening, balance, totalDr, totalCr float64
 	var partyName *string
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT CASE $1 WHEN 'customer' THEN (SELECT name FROM customers WHERE id::text = $2)
-			ELSE (SELECT name FROM suppliers WHERE id::text = $2) END`, partyType, partyID).Scan(&partyName); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT `+partyNameSQL+` FROM (SELECT $1::text AS party_type, $2::uuid AS party_id) l`,
+			partyType, partyID).Scan(&partyName); err != nil {
 			return err
 		}
 		if from != "" {
@@ -426,7 +426,7 @@ func (h *Handler) CashBook(w http.ResponseWriter, r *http.Request) {
 			JOIN journal_entries je ON je.id = jl.journal_entry_id
 			JOIN chart_of_accounts coa ON coa.id = jl.account_id
 			WHERE je.branch_id = $1 AND je.entry_date = $2::date AND je.status = 'posted'
-			  AND coa.code IN ($3, $4, $5, $6)`, branchID, date, AccountCash, AccountBank, AccountCardClearing, AccountUPIClearing).
+			  AND (coa.code IN ($3, $4, $5, $6) OR coa.code LIKE $4 || '-%')`, branchID, date, AccountCash, AccountBank, AccountCardClearing, AccountUPIClearing).
 			Scan(&totalDebit, &totalCredit, &net); err != nil {
 			return err
 		}
@@ -437,7 +437,7 @@ func (h *Handler) CashBook(w http.ResponseWriter, r *http.Request) {
 			JOIN journal_entries je ON je.id = jl.journal_entry_id
 			JOIN chart_of_accounts coa ON coa.id = jl.account_id
 			WHERE je.branch_id = $1 AND je.entry_date = $2::date AND je.status = 'posted'
-			  AND coa.code IN ($3, $4, $5, $6)
+			  AND (coa.code IN ($3, $4, $5, $6) OR coa.code LIKE $4 || '-%') -- a bank account's own ledger (migrations/066)
 			ORDER BY je.created_at`, branchID, date, AccountCash, AccountBank, AccountCardClearing, AccountUPIClearing)
 		if err != nil {
 			return err

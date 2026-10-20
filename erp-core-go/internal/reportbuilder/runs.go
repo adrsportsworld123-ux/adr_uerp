@@ -15,6 +15,7 @@ import (
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
+	"erp-core-go/internal/locale"
 	"erp-core-go/internal/subscriptions"
 )
 
@@ -155,6 +156,7 @@ func (rn *Runner) execute(ctx context.Context, merchantID, runID string) {
 		fail("the custom report builder isn't part of the current plan")
 		return
 	}
+	spec.clock = locale.MerchantLocation(ctx, rn.DB, merchantID)
 	c, err := Compile(spec, ent.RetentionHorizon(time.Now()), ExportRows)
 	if err != nil {
 		fail(strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))

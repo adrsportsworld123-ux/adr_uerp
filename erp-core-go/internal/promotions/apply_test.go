@@ -148,3 +148,50 @@ func TestSamePlan(t *testing.T) {
 		t.Error("nothing applied and nothing to apply is unchanged")
 	}
 }
+
+// migrations/065: a promotion on MRP is worked out on the MRP and applies
+// only where the promotional price comes out below the selling price.
+func TestEvaluatePromotionOnMRP(t *testing.T) {
+	line := []cartLine{{lineID: "bat", qty: 1, unitPrice: 900, mrp: 1000}}
+	pct := func(applyOn string, v float64) promotionDef {
+		return promotionDef{promoType: "percent", applicationLevel: "order", applyOn: applyOn, config: promoConfig{ValuePercent: v}}
+	}
+	for _, tc := range []struct {
+		name string
+		p    promotionDef
+		want float64
+		ok   bool
+	}{
+		{"20% off selling price: 900 → 720", pct("selling_price", 20), 180, true},
+		{"20% off MRP: 1000 → 800, below 900", pct("mrp", 20), 100, true},
+		{"5% off MRP: 950 is not below 900", pct("mrp", 5), 0, false},
+		{"10% off MRP: exactly 900, nothing to give", pct("mrp", 10), 0, false},
+		{"₹150 off MRP: 850", promotionDef{promoType: "fixed", applyOn: "mrp", config: promoConfig{ValueAmount: 150}}, 50, true},
+		{"default (empty) is selling price", pct("", 20), 180, true},
+	} {
+		got, ok := evaluatePromotion(tc.p, line, 900)
+		if ok != tc.ok || math.Abs(got-tc.want) > 0.001 {
+			t.Errorf("%s: got %.2f %v, want %.2f %v", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+
+	// Two units, one with no MRP above its price: the gap is only the first's.
+	lines := []cartLine{
+		{lineID: "a", qty: 2, unitPrice: 900, mrp: 1000}, // MRP 2000, SP 1800
+		{lineID: "b", qty: 1, unitPrice: 500, mrp: 500},  // no gap
+	}
+	got, ok := evaluatePromotion(pct("mrp", 20), lines, 2300) // 20% of 2500 = 500, gap 200
+	if !ok || math.Abs(got-300) > 0.001 {
+		t.Errorf("mixed lines: got %.2f %v, want 300", got, ok)
+	}
+
+	// min_value on MRP: threshold on what is spent, percentage on MRP value.
+	mv := promotionDef{promoType: "min_value", applyOn: "mrp", config: promoConfig{MinPurchaseAmount: 2000, DiscountPct: 20}}
+	got, ok = evaluatePromotion(mv, lines, 2300)
+	if !ok || math.Abs(got-300) > 0.001 {
+		t.Errorf("min_value on MRP: got %.2f %v, want 300", got, ok)
+	}
+	if _, ok := evaluatePromotion(mv, lines[:1], 1800); ok {
+		t.Error("min_value on MRP: below the spend threshold must not apply")
+	}
+}

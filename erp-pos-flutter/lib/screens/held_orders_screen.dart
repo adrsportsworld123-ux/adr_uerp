@@ -1,3 +1,4 @@
+import '../l10n/l10n.dart';
 import '../ui/format.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -73,7 +74,7 @@ class _HeldOrdersScreenState extends State<HeldOrdersScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(ok ? 'Held order ${order.orderNumber} voided — its items are back on sale' : (session.lastError ?? 'Could not void'))),
+      SnackBar(content: Text(ok ? tr('Held order {0} voided — its items are back on sale', [order.orderNumber]) : (session.lastError ?? tr('Could not void')))),
     );
     if (ok) _load();
   }
@@ -81,11 +82,11 @@ class _HeldOrdersScreenState extends State<HeldOrdersScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Held Orders')),
+      appBar: AppBar(title: Text(tr('Held Orders'))),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _held.isEmpty
-              ? const Center(child: Text('No carts are currently on hold'))
+              ? Center(child: Text(tr('No carts are currently on hold')))
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView.builder(
@@ -109,7 +110,7 @@ class _HeldOrdersScreenState extends State<HeldOrdersScreen> {
                             const SizedBox(width: 8),
                             IconButton(
                               key: Key('void-held-${o.orderId}'),
-                              tooltip: 'Void this held order',
+                              tooltip: tr('Void this held order'),
                               icon: const Icon(Icons.delete_outline),
                               onPressed: _busy ? null : () => _void(o),
                             ),
@@ -147,32 +148,32 @@ class _VoidHeldDialogState extends State<_VoidHeldDialog> {
   Widget build(BuildContext context) {
     final reason = _reason.text.trim();
     return AlertDialog(
-      title: Text('Void held order ${widget.order.orderNumber}?'),
+      title: Text(tr('Void held order {0}?', [widget.order.orderNumber])),
       content: SizedBox(
         width: 360,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("${widget.order.lineCount} item(s) · ${formatRupees(widget.order.grandTotal)}. The items go back on sale; it can't be recalled afterwards."),
+            Text(tr('{0} item(s) · {1}. The items go back on sale; it can\'t be recalled afterwards.', [widget.order.lineCount, formatRupees(widget.order.grandTotal)])),
             const SizedBox(height: 12),
             TextField(
               key: const Key('void-held-reason'),
               controller: _reason,
               autofocus: true,
-              decoration: const InputDecoration(labelText: 'Reason', hintText: 'e.g. Customer left', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('Reason'), hintText: tr('e.g. Customer left'), border: const OutlineInputBorder()),
               onChanged: (_) => setState(() {}),
             ),
           ],
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('Cancel'))),
         FilledButton(
           key: const Key('void-held-confirm'),
           style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
           onPressed: reason.isEmpty ? null : () => Navigator.pop(context, reason),
-          child: const Text('Void'),
+          child: Text(tr('Void')),
         ),
       ],
     );
