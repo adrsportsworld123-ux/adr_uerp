@@ -304,6 +304,16 @@ func planPromotions(promos []promotionDef, lines []cartLine, subtotal float64) [
 			if dropped[p.id] {
 				continue
 			}
+			if p.promoType == "buy_x_get_y" {
+				// The bought items are counted on the whole cart; only the
+				// rewarded ones are the promotion's lines.
+				p.cartBuyQty = 0
+				for _, l := range lines {
+					if p.buyProducts[l.productID] {
+						p.cartBuyQty += l.qty
+					}
+				}
+			}
 			matched := matchLines(p, lines)
 			if len(matched) == 0 {
 				continue
@@ -422,7 +432,7 @@ func lineShares(matched []cartLine, amount float64) map[string]float64 {
 func moreSpecific(a, b promotionDef) bool {
 	rank := func(p promotionDef) int {
 		switch {
-		case p.applicationLevel == "product":
+		case p.applicationLevel == "product" || p.promoType == "buy_x_get_y":
 			return 4
 		case p.applicationLevel == "category":
 			return 3
@@ -481,11 +491,15 @@ type promotionDef struct {
 	// limited that way: scopeCategories holds the chosen categories and
 	// every category beneath them.
 	scopeCategories, scopeBrands, scopeProducts map[string]bool
+	// buy_x_get_y (migrations/070): the products bought and rewarded, and
+	// how many of the bought ones are in this cart (set by planPromotions).
+	buyProducts, getProducts map[string]bool
+	cartBuyQty               float64
 }
 
 // scoped: a whole-order promotion limited by category, brand or product.
 func (p promotionDef) scoped() bool {
-	return p.applicationLevel == "order" && (p.scopeCategories != nil || p.scopeBrands != nil || p.scopeProducts != nil)
+	return p.applicationLevel == "order" && p.promoType != "buy_x_get_y" && (p.scopeCategories != nil || p.scopeBrands != nil || p.scopeProducts != nil)
 }
 
 func setOf(ids []string) map[string]bool {
@@ -525,7 +539,9 @@ func loadEligiblePromotionDefs(ctx context.Context, tx pgx.Tx) ([]promotionDef, 
 			return nil, err
 		}
 		_ = json.Unmarshal(rawConfig, &d.config)
-		if d.applicationLevel == "order" {
+		if d.promoType == "buy_x_get_y" {
+			d.buyProducts, d.getProducts = setOf(d.config.BuyProductIDs), setOf(d.config.GetProductIDs)
+		} else if d.applicationLevel == "order" {
 			d.scopeBrands, d.scopeProducts = setOf(brands), setOf(prods)
 			if len(cats) > 0 {
 				scopeCats[len(defs)] = cats
@@ -567,6 +583,15 @@ func loadEligiblePromotionDefs(ctx context.Context, tx pgx.Tx) ([]promotionDef, 
 }
 
 func matchLines(p promotionDef, lines []cartLine) []cartLine {
+	if p.promoType == "buy_x_get_y" {
+		var out []cartLine
+		for _, l := range lines {
+			if p.getProducts[l.productID] {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
 	switch p.applicationLevel {
 	case "order":
 		if !p.scoped() {
@@ -700,19 +725,48 @@ func evaluateOn(p promotionDef, matched []cartLine, threshold, base float64) (am
 		return amt, amt > 0
 
 	case "volume":
-		var best *volumeTier
-		for i := range p.config.Tiers {
-			t := &p.config.Tiers[i]
+		// The tier the quantity falls in that takes the most off: a tier
+		// may be a percentage, an amount off each piece or an amount off
+		// the lot (migrations/070).
+		var amt float64
+		found := false
+		for _, t := range p.config.Tiers {
 			if matchedQty >= t.MinQty && (t.MaxQty == 0 || matchedQty <= t.MaxQty) {
-				if best == nil || t.DiscountPct > best.DiscountPct {
-					best = t
+				if a := t.amount(matchedQty, matchedRemaining); !found || a > amt {
+					amt, found = a, true
 				}
 			}
 		}
-		if best == nil {
+		return amt, found && amt > 0
+
+	case "buy_x_get_y":
+		if p.config.BuyQty <= 0 {
 			return 0, false
 		}
-		amt := round2(matchedRemaining * best.DiscountPct / 100)
+		sets := math.Floor(p.cartBuyQty / p.config.BuyQty)
+		if p.config.MaxSets > 0 && sets > p.config.MaxSets {
+			sets = p.config.MaxSets
+		}
+		units := sets * p.config.GetQty
+		if units <= 0 {
+			return 0, false
+		}
+		// The cheapest rewarded items first.
+		byPrice := append([]cartLine(nil), matched...)
+		sort.SliceStable(byPrice, func(i, j int) bool { return byPrice[i].unitPrice < byPrice[j].unitPrice })
+		var amt float64
+		for _, l := range byPrice {
+			if units <= 0 {
+				break
+			}
+			take := math.Min(units, l.qty)
+			amt += take * l.unitPrice * p.config.GetDiscountPct / 100
+			units -= take
+		}
+		amt = round2(amt)
+		if amt > matchedRemaining {
+			amt = matchedRemaining
+		}
 		return amt, amt > 0
 	}
 	return 0, false

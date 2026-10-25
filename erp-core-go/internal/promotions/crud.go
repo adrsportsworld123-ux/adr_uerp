@@ -55,6 +55,10 @@ type promotionResponse struct {
 	ScopeCategories []scopeRef `json:"scope_categories"`
 	ScopeBrands     []scopeRef `json:"scope_brands"`
 	ScopeProducts   []scopeRef `json:"scope_products"`
+	// buy_x_get_y: the products in config.buy_product_ids and
+	// get_product_ids, named (migrations/070).
+	BuyProducts []scopeRef `json:"buy_products"`
+	GetProducts []scopeRef `json:"get_products"`
 }
 
 type scopeRef struct {
@@ -80,16 +84,20 @@ const promotionColumns = `
 	pr.apply_on, ` + promotionStateSQL + `,
 	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name) ORDER BY c.name), '[]') FROM categories c WHERE c.id = ANY(pr.scope_category_ids)),
 	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', b.id, 'name', b.name) ORDER BY b.name), '[]') FROM brands b WHERE b.id = ANY(pr.scope_brand_ids)),
-	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name) ORDER BY p.name), '[]') FROM products p WHERE p.id = ANY(pr.scope_product_ids))
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name) ORDER BY p.name), '[]') FROM products p WHERE p.id = ANY(pr.scope_product_ids)),
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name) ORDER BY p.name), '[]') FROM products p
+	 WHERE p.id::text IN (SELECT jsonb_array_elements_text(COALESCE(pr.config->'buy_product_ids', '[]')))),
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', p.id, 'name', p.name) ORDER BY p.name), '[]') FROM products p
+	 WHERE p.id::text IN (SELECT jsonb_array_elements_text(COALESCE(pr.config->'get_product_ids', '[]'))))
 `
 
 func scanPromotion(row pgx.Row) (promotionResponse, error) {
 	var p promotionResponse
-	var rawConfig, cats, brands, prods []byte
+	var rawConfig, cats, brands, prods, buys, gets []byte
 	err := row.Scan(&p.PromotionID, &p.Name, &p.PromoType, &p.ApplicationLevel, &p.ProductID, &p.CategoryID,
 		&p.TargetSegment, &rawConfig, &p.Stacking, &p.StartsAt, &p.EndsAt,
 		&p.DaysOfWeek, &p.TimeStart, &p.TimeEnd, &p.Active, &p.ProductName, &p.CategoryName, &p.TimesUsed,
-		&p.ApplyOn, &p.State, &cats, &brands, &prods)
+		&p.ApplyOn, &p.State, &cats, &brands, &prods, &buys, &gets)
 	if err != nil {
 		return p, err
 	}
@@ -98,6 +106,9 @@ func scanPromotion(row pgx.Row) (promotionResponse, error) {
 	_ = json.Unmarshal(cats, &p.ScopeCategories)
 	_ = json.Unmarshal(brands, &p.ScopeBrands)
 	_ = json.Unmarshal(prods, &p.ScopeProducts)
+	p.BuyProducts, p.GetProducts = []scopeRef{}, []scopeRef{}
+	_ = json.Unmarshal(buys, &p.BuyProducts)
+	_ = json.Unmarshal(gets, &p.GetProducts)
 	return p, nil
 }
 
@@ -153,7 +164,8 @@ func checkScope(ctx context.Context, tx pgx.Tx, req *createPromotionRequest) (st
 	for _, s := range []struct {
 		table, what string
 		ids         []string
-	}{{"categories", "categories", req.ScopeCategoryIDs}, {"brands", "brands", req.ScopeBrandIDs}, {"products", "products", req.ScopeProductIDs}} {
+	}{{"categories", "categories", req.ScopeCategoryIDs}, {"brands", "brands", req.ScopeBrandIDs}, {"products", "products", req.ScopeProductIDs},
+		{"products", "products to buy", req.Config.BuyProductIDs}, {"products", "products to get", req.Config.GetProductIDs}} {
 		if len(s.ids) == 0 {
 			continue
 		}
@@ -175,6 +187,23 @@ func validatePromotion(req *createPromotionRequest) string {
 	req.Name = strings.TrimSpace(req.Name)
 	if req.ApplicationLevel == "" {
 		req.ApplicationLevel = "order"
+	}
+	if req.PromoType == "buy_x_get_y" {
+		// It names its own products (config), so it is stored order-level
+		// with no filters (migrations/070).
+		req.ApplicationLevel = "order"
+		req.ScopeCategoryIDs, req.ScopeBrandIDs, req.ScopeProductIDs = nil, nil, nil
+		req.Config.BuyProductIDs, req.Config.GetProductIDs = cleanIDs(req.Config.BuyProductIDs), cleanIDs(req.Config.GetProductIDs)
+		for _, id := range append(append([]string{}, req.Config.BuyProductIDs...), req.Config.GetProductIDs...) {
+			if !uuidRE.MatchString(id) {
+				return "product ids must be UUIDs"
+			}
+		}
+		if req.ApplyOn == "mrp" {
+			return "a Buy X Get Y promotion applies on the selling price"
+		}
+	} else {
+		req.Config.BuyProductIDs, req.Config.GetProductIDs, req.Config.MaxSets = nil, nil, 0
 	}
 	if req.Stacking == "" {
 		req.Stacking = "exclusive"
@@ -222,6 +251,12 @@ func validatePromotion(req *createPromotionRequest) string {
 		return "time_start and time_end go together"
 	}
 	if validateConfig(req.PromoType, req.ApplicationLevel, req.Config) != nil {
+		if req.PromoType == "volume" && req.ApplicationLevel != "order" {
+			return "each volume tier needs a min qty, a max qty of 0 (no limit) or at least the min, and its discount (a percentage up to 100, or an amount)"
+		}
+		if req.PromoType == "buy_x_get_y" {
+			return "Buy X Get Y needs the products to buy and to get (different ones), how many of each, and the discount on the free items (1–100%)"
+		}
 		return "config does not match promo_type's required fields"
 	}
 	for _, d := range req.DaysOfWeek {
@@ -465,8 +500,11 @@ func (h *Handler) UpdatePromotion(w http.ResponseWriter, r *http.Request) {
 			return errPromotionInvalid
 		}
 		// Only ids being added must exist; ones already stored may have gone.
-		if req.ScopeCategoryIDs != nil || req.ScopeBrandIDs != nil || req.ScopeProductIDs != nil {
+		if req.ScopeCategoryIDs != nil || req.ScopeBrandIDs != nil || req.ScopeProductIDs != nil || req.Config != nil {
 			check := createPromotionRequest{}
+			if req.Config != nil {
+				check.Config.BuyProductIDs, check.Config.GetProductIDs = m.Config.BuyProductIDs, m.Config.GetProductIDs
+			}
 			if req.ScopeCategoryIDs != nil {
 				check.ScopeCategoryIDs = added(m.ScopeCategoryIDs, cur.ScopeCategories)
 			}

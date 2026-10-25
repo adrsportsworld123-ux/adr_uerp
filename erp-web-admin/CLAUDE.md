@@ -81,6 +81,8 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 
 **Promotion filters (2026-10-20, erp-core-go §3.75).** A "Whole order" promotion has optional "Limit to" filters: categories, brands and products, each a multi-select of chips (`components/data/multi-pick.tsx`). An item must match every filled list; all empty means every item. A spec that creates an active promotion must switch it off in `finally`, or other specs' carts pick it up. Tests: `e2e/promotion-order-scope.spec.ts`.
 
+**Volume tiers and Buy X Get Y (2026-10-21, erp-core-go §3.76).** A volume tier's "Discount as" is a percentage, ₹ off each piece or ₹ off the lot. "Buy X get Y — different products" picks the products bought and rewarded with `MultiProductPick`. The old "Buy X get Y (BOGO)" is the same-product type, unchanged. Tests: `e2e/promotion-tiers-bxgy.spec.ts`.
+
 **Reporting round (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60–§3.63):** the sales dashboard (`/dashboard`, recharts; widgets per role under `/dashboard/settings`), X & Z reports (`/reports/x-z`), the Report Library (`/reports/library`) and Saved Reports (`/reports/saved`). `e2e/reports-round10.spec.ts` covers them. The app shell puts focus back at the top after a navigation that left nothing focused (recharts' focusable charts otherwise sent the next Tab past the end of the new page).
 
 ## Working conventions to keep

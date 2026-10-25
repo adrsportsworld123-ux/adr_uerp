@@ -151,6 +151,7 @@ const PROMO_TYPES = [
   { value: "percent", label: "% off" },
   { value: "fixed", label: "Flat amount off" },
   { value: "bogo", label: "Buy X get Y (BOGO)" },
+  { value: "buy_x_get_y", label: "Buy X get Y — different products" },
   { value: "volume", label: "Volume tiers" },
   { value: "min_value", label: "Minimum purchase" },
 ] as const;
@@ -184,13 +185,25 @@ function offerSummary(p: Promotion): string {
     case "bogo":
       return `Buy ${c.buy_qty} get ${c.get_qty} at ${c.get_discount_pct}% off`;
     case "volume":
-      return (c.tiers ?? []).map((t) => `${t.min_qty}${t.max_qty ? `–${t.max_qty}` : "+"}: ${t.discount_pct}%`).join(", ");
+      return (c.tiers ?? []).map((t) => `${t.min_qty}${t.max_qty ? `–${t.max_qty}` : "+"}: ${tierOffer(t)}`).join(", ");
+    case "buy_x_get_y":
+      return `Buy ${c.buy_qty} get ${c.get_qty} ${c.get_discount_pct === 100 ? "free" : `at ${c.get_discount_pct}% off`}${c.max_sets ? ` (up to ${c.max_sets}×)` : ""}`;
     case "min_value":
       return `${c.discount_pct ? `${c.discount_pct}%` : rupees(c.discount_amount ?? 0)} off over ${rupees(c.min_purchase_amount ?? 0)}`;
   }
 }
 
+function tierOffer(t: VolumeTier): string {
+  if (t.discount_type === "amount_per_unit") return `${rupees(t.discount_amount ?? 0)} off each`;
+  if (t.discount_type === "amount") return `${rupees(t.discount_amount ?? 0)} off`;
+  return `${t.discount_pct}%`;
+}
+
 function scopeSummary(p: Promotion): string {
+  if (p.promo_type === "buy_x_get_y") {
+    const names = (refs?: { name: string }[]) => (refs ?? []).map((r) => r.name).join(" / ") || "—";
+    return `Buy ${names(p.buy_products)} → get ${names(p.get_products)}`;
+  }
   if (p.application_level === "product") return p.product_name ?? "One product";
   if (p.application_level === "category") return `Category: ${p.category_name ?? "—"}`;
   const names = (refs?: { name: string }[]) => (refs ?? []).map((r) => r.name).join(", ");
@@ -373,6 +386,10 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
   const [scopeBrands, setScopeBrands] = useState<PickedRef[]>(p?.scope_brands ?? []);
   const [scopeProducts, setScopeProducts] = useState<PickedRef[]>(p?.scope_products ?? []);
   const [brands, setBrands] = useState<{ brand_id: string; name: string }[]>([]);
+  // Buy X Get Y across products: what is bought, what is rewarded.
+  const [buyProducts, setBuyProducts] = useState<PickedRef[]>(p?.buy_products ?? []);
+  const [getProducts, setGetProducts] = useState<PickedRef[]>(p?.get_products ?? []);
+  const [maxSets, setMaxSets] = useState(p?.config.max_sets ? String(p.config.max_sets) : "");
   const [targetSegment, setTargetSegment] = useState<string>(p?.target_segment ?? "");
   const [stacking, setStacking] = useState<"exclusive" | "stackable">(p?.stacking ?? "exclusive");
   const [applyOn, setApplyOn] = useState<"selling_price" | "mrp">(p?.apply_on ?? "selling_price");
@@ -422,6 +439,11 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
     const next = (v as PromoType) || "percent";
     setPromoType(next);
     if ((next === "bogo" || next === "volume") && applicationLevel === "order") setApplicationLevel("product");
+    // It names its own products: stored order-level (the API does the same).
+    if (next === "buy_x_get_y") {
+      setApplicationLevel("order");
+      setApplyOn("selling_price");
+    }
   }
 
   function buildConfig(): PromotionConfig {
@@ -434,6 +456,15 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
         return { buy_qty: Number(buyQty), get_qty: Number(getQty), get_discount_pct: Number(getDiscountPct) };
       case "volume":
         return { tiers };
+      case "buy_x_get_y":
+        return {
+          buy_product_ids: buyProducts.map((x) => x.id),
+          buy_qty: Number(buyQty),
+          get_product_ids: getProducts.map((x) => x.id),
+          get_qty: Number(getQty),
+          get_discount_pct: Number(getDiscountPct),
+          max_sets: maxSets ? Number(maxSets) : undefined,
+        };
       case "min_value":
         return {
           min_purchase_amount: Number(minPurchaseAmount),
@@ -448,6 +479,9 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
     setError(null);
     if (applicationLevel === "product" && !product) return setError("Choose the product this promotion applies to.");
     if (applicationLevel === "category" && !categoryId) return setError("Choose the category this promotion applies to.");
+    if (promoType === "buy_x_get_y" && (!buyProducts.length || !getProducts.length)) return setError("Choose the products to buy and the products the customer gets.");
+    if (promoType === "buy_x_get_y" && buyProducts.some((b) => getProducts.some((g) => g.id === b.id)))
+      return setError("A product can't be both bought and given; use Buy X get Y (BOGO) for the same product.");
     if ((timeStart === "") !== (timeEnd === "")) return setError("Give both a start and an end time, or neither.");
     setBusy(true);
     const body = {
@@ -525,6 +559,7 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
         </div>
 
         <div className="grid gap-4 sm:grid-cols-3">
+          {promoType !== "buy_x_get_y" && (
           <div className="flex flex-col gap-2">
             <Label>Applies to</Label>
             <Select
@@ -544,6 +579,7 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
               </SelectContent>
             </Select>
           </div>
+          )}
           {applicationLevel === "product" && (
             <div className="flex flex-col gap-2">
               <Label htmlFor="promoProduct">Product *</Label>
@@ -557,7 +593,7 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
               <p className="text-xs text-muted-foreground">Includes its sub-categories.</p>
             </div>
           )}
-          {applicationLevel === "order" && (
+          {applicationLevel === "order" && promoType !== "buy_x_get_y" && (
             <fieldset className="flex flex-col gap-3 rounded-lg border p-3 sm:col-span-3" data-testid="promo-order-scope">
               <legend className="px-1 text-sm font-medium">Limit to (optional)</legend>
               <p className="text-xs text-muted-foreground">
@@ -639,11 +675,23 @@ function PromotionDialog({ promotion, onClose, onSaved }: { promotion: Promotion
           setMinValueMode={setMinValueMode}
           minValueAmount={minValueAmount}
           setMinValueAmount={setMinValueAmount}
+          buyProducts={buyProducts}
+          setBuyProducts={setBuyProducts}
+          getProducts={getProducts}
+          setGetProducts={setGetProducts}
+          maxSets={maxSets}
+          setMaxSets={setMaxSets}
         />
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="promoApplyOn">Apply on</Label>
-          <select id="promoApplyOn" value={applyOn} onChange={(e) => setApplyOn(e.target.value as typeof applyOn)} className={`${selectClass} w-64`}>
+          <select
+            id="promoApplyOn"
+            value={applyOn}
+            disabled={promoType === "buy_x_get_y"}
+            onChange={(e) => setApplyOn(e.target.value as typeof applyOn)}
+            className={`${selectClass} w-64`}
+          >
             <option value="selling_price">Selling price</option>
             <option value="mrp">MRP</option>
           </select>
@@ -723,6 +771,12 @@ interface PromoTypeFieldsProps {
   setMinValueMode: (v: "discount_amount" | "discount_pct") => void;
   minValueAmount: string;
   setMinValueAmount: (v: string) => void;
+  buyProducts: PickedRef[];
+  setBuyProducts: (v: PickedRef[]) => void;
+  getProducts: PickedRef[];
+  setGetProducts: (v: PickedRef[]) => void;
+  maxSets: string;
+  setMaxSets: (v: string) => void;
 }
 
 function PromoTypeFields(p: PromoTypeFieldsProps) {
@@ -760,10 +814,54 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
       </div>
     );
   }
+  if (p.promoType === "buy_x_get_y") {
+    return (
+      <div className="flex flex-col gap-4" data-testid="promo-bxgy">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-2 rounded-lg border p-3">
+            <span className="text-sm font-medium">Customer buys</span>
+            <div className="flex w-28 flex-col gap-2">
+              <Label htmlFor="buyQty">Quantity *</Label>
+              <Input id="buyQty" type="number" min="1" step="1" required value={p.buyQty} onChange={(e) => p.setBuyQty(e.target.value)} />
+            </div>
+            <label htmlFor="bxgyBuy" className="text-sm">
+              Of any of these products *
+            </label>
+            <MultiProductPick id="bxgyBuy" value={p.buyProducts} onChange={p.setBuyProducts} emptyText="Choose at least one product" />
+          </div>
+          <div className="flex flex-col gap-2 rounded-lg border p-3">
+            <span className="text-sm font-medium">Customer gets</span>
+            <div className="flex flex-wrap gap-4">
+              <div className="flex w-28 flex-col gap-2">
+                <Label htmlFor="getQty">Quantity *</Label>
+                <Input id="getQty" type="number" min="1" step="1" required value={p.getQty} onChange={(e) => p.setGetQty(e.target.value)} />
+              </div>
+              <div className="flex w-36 flex-col gap-2">
+                <Label htmlFor="getDiscountPct">Discount (%) *</Label>
+                <Input id="getDiscountPct" type="number" min="0.01" max="100" step="0.01" required value={p.getDiscountPct} onChange={(e) => p.setGetDiscountPct(e.target.value)} />
+              </div>
+            </div>
+            <label htmlFor="bxgyGet" className="text-sm">
+              Of these products *
+            </label>
+            <MultiProductPick id="bxgyGet" value={p.getProducts} onChange={p.setGetProducts} emptyText="Choose at least one product" />
+          </div>
+        </div>
+        <div className="flex w-56 flex-col gap-2">
+          <Label htmlFor="bxgyMaxSets">At most (times per bill)</Label>
+          <Input id="bxgyMaxSets" type="number" min="1" step="1" placeholder="No limit" value={p.maxSets} onChange={(e) => p.setMaxSets(e.target.value)} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          100% makes them free. The rewarded items must be in the bill too; the cheapest of them are discounted first. Every full set of bought items earns
+          one reward, up to the limit.
+        </p>
+      </div>
+    );
+  }
   if (p.promoType === "volume") {
-    function updateTier(i: number, field: keyof VolumeTier, value: number) {
+    function updateTier(i: number, patch: Partial<VolumeTier>) {
       const next = [...p.tiers];
-      next[i] = { ...next[i], [field]: value };
+      next[i] = { ...next[i], ...patch };
       p.setTiers(next);
     }
     return (
@@ -773,16 +871,46 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
           <div key={i} className="flex flex-wrap items-end gap-2">
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               Min qty
-              <Input type="number" min="1" step="1" className="w-24" value={t.min_qty} onChange={(e) => updateTier(i, "min_qty", Number(e.target.value))} />
+              <Input type="number" min="1" step="1" className="w-24" value={t.min_qty} onChange={(e) => updateTier(i, { min_qty: Number(e.target.value) })} />
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               Max qty (0 = no limit)
-              <Input type="number" min="0" step="1" className="w-32" value={t.max_qty} onChange={(e) => updateTier(i, "max_qty", Number(e.target.value))} />
+              <Input type="number" min="0" step="1" className="w-32" value={t.max_qty} onChange={(e) => updateTier(i, { max_qty: Number(e.target.value) })} />
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              Discount %
-              <Input type="number" min="0.01" max="100" step="0.01" className="w-24" value={t.discount_pct} onChange={(e) => updateTier(i, "discount_pct", Number(e.target.value))} />
+              Discount as
+              <select
+                aria-label={`Tier ${i + 1} discount as`}
+                className={`${selectClass} w-44`}
+                value={t.discount_type ?? "percent"}
+                onChange={(e) => {
+                  const type = e.target.value as NonNullable<VolumeTier["discount_type"]>;
+                  updateTier(i, type === "percent" ? { discount_type: "percent", discount_amount: undefined } : { discount_type: type, discount_pct: 0, discount_amount: t.discount_amount ?? 10 });
+                }}
+              >
+                <option value="percent">Percent off</option>
+                <option value="amount_per_unit">{currencySymbol()} off each piece</option>
+                <option value="amount">{currencySymbol()} off the lot</option>
+              </select>
             </label>
+            {(t.discount_type ?? "percent") === "percent" ? (
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                Discount %
+                <Input type="number" min="0.01" max="100" step="0.01" className="w-24" value={t.discount_pct} onChange={(e) => updateTier(i, { discount_pct: Number(e.target.value) })} />
+              </label>
+            ) : (
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                Amount ({currencySymbol()})
+                <Input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  className="w-24"
+                  value={t.discount_amount ?? ""}
+                  onChange={(e) => updateTier(i, { discount_amount: Number(e.target.value) })}
+                />
+              </label>
+            )}
             {p.tiers.length > 1 && (
               <Button type="button" size="sm" variant="ghost" onClick={() => p.setTiers(p.tiers.filter((_, idx) => idx !== i))}>
                 Remove
@@ -793,6 +921,10 @@ function PromoTypeFields(p: PromoTypeFieldsProps) {
         <Button type="button" size="sm" variant="outline" className="w-fit" onClick={() => p.setTiers([...p.tiers, { min_qty: 1, max_qty: 0, discount_pct: 5 }])}>
           Add tier
         </Button>
+        <p className="text-xs text-muted-foreground">
+          Each tier can be a percentage, an amount off each piece, or an amount off the lot. When several tiers fit the quantity, the one that saves the
+          customer most applies.
+        </p>
       </fieldset>
     );
   }

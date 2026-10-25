@@ -2607,6 +2607,53 @@ Verified:
 - `TestMatchLinesOrderScope`.
 - `e2e/promotion-order-scope.spec.ts` and `promotions.spec.ts`.
 
+### 3.76 Volume tiers with a fixed discount; Buy X Get Y across products (2026-10-21)
+
+Migration 070 widens `promotions_promo_type_check` with `buy_x_get_y`; `internal/promotions/handlers.go`, `crud.go`, `apply.go`.
+
+**Not changed by default:**
+- An existing volume tier has no `discount_type` and is still a percentage.
+- The same-product `bogo` works as before.
+- No existing promotion is a `buy_x_get_y`.
+
+- **Volume tiers.**
+  - Each tier takes `discount_type`:
+    - `percent`, the default, with `discount_pct`;
+    - `amount_per_unit`: `discount_amount` off each piece, so 6 pieces at ₹10 each is ₹60;
+    - `amount`: `discount_amount` off the lot, so 6 pieces is a flat ₹10.
+  - Tiers can mix types. Of the tiers the quantity falls in, the one that saves the customer most applies. With percentages only, that is the highest percentage, as before.
+  - The discount is never more than the lines' value.
+- **Buy X Get Y** (`promo_type: buy_x_get_y`).
+  - `config` holds:
+    - `buy_product_ids` with `buy_qty`: buy that many of any of these;
+    - `get_product_ids` with `get_qty`;
+    - `get_discount_pct`, where 100 means free;
+    - optional `max_sets`, the most times per bill.
+  - Every full set of bought items earns `get_qty` rewarded items, cheapest first. The rewarded items must be in the bill.
+  - The discount sits on the rewarded lines only. The bought lines stay free for their own promotions; a 10% bat promotion and "buy 2 bats get a ball free" both apply.
+  - It is stored order-level with no category/brand/product filters, since it names its own products.
+  - Refused (400 with the reason):
+    - the same product on both sides (that is `bogo`);
+    - either list empty or holding an unknown product;
+    - quantities under 1;
+    - a discount outside 1–100%;
+    - `apply_on: mrp`.
+  - It ranks with product promotions when breaking ties.
+  - The response adds `buy_products` and `get_products` (`[{id, name}]`). Copy keeps them, and changing the type drops them.
+- **Web.**
+  - Promotion type "Buy X get Y — different products": "Customer buys" (quantity, products) and "Customer gets" (quantity, discount %, products), with chip product pickers and "At most (times per bill)". "Applies to" and "Apply on" step aside for this type.
+  - Each volume tier has "Discount as": percent off, ₹ off each piece, or ₹ off the lot.
+  - The list describes them: "6+: ₹10.00 off each"; "Buy 2 get 1 free" with "Buy ABC → get LKG".
+
+Verified:
+- `bxgy_flow.py`, 33 checks.
+  - Volume: an old-shape percent tier; flat ₹10 and ₹10-each; mixed tiers, where the bigger saving wins; validation.
+  - Buy X Get Y: 2 ABC + 1 LKG free; short of a set; no LKG in the bill; 2 sets with the cheapest free; `max_sets`; 50% off; alongside a bat promotion; validation; Copy; changing the type.
+  - The same-product BOGO is unchanged.
+- All earlier API scripts on one fresh database: 471 checks, plus the PO/GRN delete script.
+- `TestVolumeTierTypes`, `TestBuyXGetY`.
+- `e2e/promotion-tiers-bxgy.spec.ts`, `promotion-order-scope.spec.ts`, `promotions.spec.ts`.
+
 ## 4. What Phase 0 concretely delivers against this design
 
 1. Run `migrations/001_schema.sql` against your local Postgres (already verified to execute cleanly, RLS included).

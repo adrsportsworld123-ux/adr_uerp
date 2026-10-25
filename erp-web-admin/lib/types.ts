@@ -483,6 +483,10 @@ export interface VolumeTier {
   min_qty: number;
   max_qty: number; // 0 = unbounded ("11+")
   discount_pct: number;
+  // erp-core-go migrations/070: "percent" (or absent) uses discount_pct;
+  // "amount_per_unit" is discount_amount off each piece, "amount" off the lot.
+  discount_type?: "percent" | "amount_per_unit" | "amount";
+  discount_amount?: number;
 }
 
 export interface PromotionConfig {
@@ -495,12 +499,16 @@ export interface PromotionConfig {
   min_purchase_amount?: number;
   discount_amount?: number;
   discount_pct?: number;
+  // buy_x_get_y (erp-core-go migrations/070)
+  buy_product_ids?: string[];
+  get_product_ids?: string[];
+  max_sets?: number;
 }
 
 export interface Promotion {
   promotion_id: string;
   name: string;
-  promo_type: "percent" | "fixed" | "bogo" | "volume" | "min_value";
+  promo_type: "percent" | "fixed" | "bogo" | "volume" | "min_value" | "buy_x_get_y";
   application_level: "order" | "product" | "category";
   product_id: string | null;
   category_id: string | null;
@@ -526,6 +534,9 @@ export interface Promotion {
   scope_categories?: { id: string; name: string }[];
   scope_brands?: { id: string; name: string }[];
   scope_products?: { id: string; name: string }[];
+  // buy_x_get_y: the products bought and rewarded, named.
+  buy_products?: { id: string; name: string }[];
+  get_products?: { id: string; name: string }[];
 }
 
 export interface Coupon {

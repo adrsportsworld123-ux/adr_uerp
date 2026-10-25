@@ -247,3 +247,79 @@ func TestMatchLinesOrderScope(t *testing.T) {
 		t.Error("specificity: category > scoped order > order")
 	}
 }
+
+// Volume tiers may be a percentage, an amount off each piece or an amount
+// off the lot (migrations/070); the tier the quantity falls in that takes
+// the most off wins. Tiers made before carry no type and stay percentages.
+func TestVolumeTierTypes(t *testing.T) {
+	lines := []cartLine{{lineID: "g", productID: "grip", qty: 6, unitPrice: 50}} // ₹300
+	vol := func(tiers ...volumeTier) promotionDef {
+		return promotionDef{id: "v", promoType: "volume", applicationLevel: "product", productID: "grip", config: promoConfig{Tiers: tiers}}
+	}
+	cases := []struct {
+		name string
+		p    promotionDef
+		want float64
+	}{
+		{"old percent tier (no type)", vol(volumeTier{MinQty: 6, DiscountPct: 20}), 60},
+		{"₹10 off each piece", vol(volumeTier{MinQty: 6, DiscountType: "amount_per_unit", DiscountAmount: 10}), 60},
+		{"flat ₹10 off the lot", vol(volumeTier{MinQty: 6, DiscountType: "amount", DiscountAmount: 10}), 10},
+		{"best of the tiers that fit", vol(volumeTier{MinQty: 3, DiscountType: "amount", DiscountAmount: 40},
+			volumeTier{MinQty: 6, DiscountPct: 10}, volumeTier{MinQty: 10, DiscountPct: 50}), 40},
+		{"never more than the lines", vol(volumeTier{MinQty: 1, DiscountType: "amount_per_unit", DiscountAmount: 80}), 300},
+	}
+	for _, c := range cases {
+		amt, ok := evaluatePromotion(c.p, lines, 300)
+		if !ok || math.Abs(amt-c.want) > 0.001 {
+			t.Errorf("%s: got %v %v, want %v", c.name, amt, ok, c.want)
+		}
+	}
+	if _, ok := evaluatePromotion(vol(volumeTier{MinQty: 7, DiscountType: "amount", DiscountAmount: 10}), lines, 300); ok {
+		t.Error("6 pieces don't reach a 7+ tier")
+	}
+	if validateConfig("volume", "product", promoConfig{Tiers: []volumeTier{{MinQty: 2, DiscountType: "amount"}}}) == nil {
+		t.Error("an amount tier needs its amount")
+	}
+}
+
+// Buy X Get Y across products (migrations/070): the bought items are
+// counted on the whole cart, the discount lands on the rewarded items only,
+// cheapest first.
+func TestBuyXGetY(t *testing.T) {
+	bxgy := promotionDef{id: "bx", promoType: "buy_x_get_y", applicationLevel: "order", stacking: "exclusive",
+		buyProducts: map[string]bool{"abc": true}, getProducts: map[string]bool{"lkg": true, "lkg2": true},
+		config: promoConfig{BuyQty: 2, GetQty: 1, GetDiscountPct: 100}}
+	cart := []cartLine{
+		{lineID: "x", productID: "abc", qty: 4, unitPrice: 500},
+		{lineID: "y1", productID: "lkg", qty: 3, unitPrice: 100},
+		{lineID: "y2", productID: "lkg2", qty: 1, unitPrice: 60},
+		{lineID: "z", productID: "other", qty: 1, unitPrice: 999},
+	}
+	plan := planPromotions([]promotionDef{bxgy}, cart, 3359)
+	// 4 ABC = 2 sets → 2 free: the ₹60 one and one ₹100 one.
+	if len(plan) != 1 || math.Abs(plan[0].amount-160) > 0.001 {
+		t.Fatalf("2 sets, cheapest 2 free = ₹160: %+v", plan)
+	}
+	for _, id := range plan[0].lineIDs {
+		if id == "x" || id == "z" {
+			t.Errorf("the discount belongs on the rewarded lines only: %v", plan[0].lineIDs)
+		}
+	}
+	bxgy.config.MaxSets = 1
+	if plan := planPromotions([]promotionDef{bxgy}, cart, 3359); len(plan) != 1 || math.Abs(plan[0].amount-60) > 0.001 {
+		t.Errorf("max 1 set: ₹60: %+v", plan)
+	}
+	bxgy.config.MaxSets, bxgy.config.GetDiscountPct = 0, 50
+	if plan := planPromotions([]promotionDef{bxgy}, cart, 3359); len(plan) != 1 || math.Abs(plan[0].amount-80) > 0.001 {
+		t.Errorf("50%% off the 2 rewarded: ₹80: %+v", plan)
+	}
+	if plan := planPromotions([]promotionDef{bxgy}, cart[:1], 2000); len(plan) != 0 {
+		t.Errorf("no Y in the cart: nothing: %+v", plan)
+	}
+	if plan := planPromotions([]promotionDef{bxgy}, []cartLine{{lineID: "x", productID: "abc", qty: 1, unitPrice: 500}, cart[1]}, 800); len(plan) != 0 {
+		t.Errorf("1 ABC is short of a set: nothing: %+v", plan)
+	}
+	if validateConfig("buy_x_get_y", "order", promoConfig{BuyProductIDs: []string{"a"}, GetProductIDs: []string{"a"}, BuyQty: 1, GetQty: 1, GetDiscountPct: 100}) == nil {
+		t.Error("the same product on both sides is refused")
+	}
+}

@@ -43,12 +43,40 @@ type promoConfig struct {
 	MinPurchaseAmount float64      `json:"min_purchase_amount,omitempty"`
 	DiscountAmount    float64      `json:"discount_amount,omitempty"`
 	DiscountPct       float64      `json:"discount_pct,omitempty"`
+	// buy_x_get_y (migrations/070): buy BuyQty of any BuyProductIDs, get
+	// GetQty of the GetProductIDs at GetDiscountPct off (100 = free), the
+	// cheapest first; MaxSets caps how often (0 = every complete set).
+	BuyProductIDs []string `json:"buy_product_ids,omitempty"`
+	GetProductIDs []string `json:"get_product_ids,omitempty"`
+	MaxSets       float64  `json:"max_sets,omitempty"`
 }
 
 type volumeTier struct {
 	MinQty      float64 `json:"min_qty"`
 	MaxQty      float64 `json:"max_qty"` // 0 = unbounded ("11+")
 	DiscountPct float64 `json:"discount_pct"`
+	// DiscountType (migrations/070): "percent" (or empty, every tier made
+	// before it) takes DiscountPct; "amount_per_unit" is DiscountAmount off
+	// each piece, "amount" DiscountAmount off the lot.
+	DiscountType   string  `json:"discount_type,omitempty"`
+	DiscountAmount float64 `json:"discount_amount,omitempty"`
+}
+
+// tierAmount: what one volume tier takes off qty pieces worth remaining.
+func (t volumeTier) amount(qty, remaining float64) float64 {
+	var amt float64
+	switch t.DiscountType {
+	case "amount_per_unit":
+		amt = round2(t.DiscountAmount * qty)
+	case "amount":
+		amt = t.DiscountAmount
+	default:
+		amt = round2(remaining * t.DiscountPct / 100)
+	}
+	if amt > remaining {
+		amt = remaining
+	}
+	return amt
 }
 
 var errInvalidPromoConfig = errors.New("config does not match promo_type's required fields")
@@ -83,8 +111,34 @@ func validateConfig(promoType, applicationLevel string, cfg promoConfig) error {
 			return errInvalidPromoConfig
 		}
 		for _, t := range cfg.Tiers {
-			if t.MinQty <= 0 || t.DiscountPct <= 0 || t.DiscountPct > 100 || (t.MaxQty != 0 && t.MaxQty < t.MinQty) {
+			if t.MinQty <= 0 || (t.MaxQty != 0 && t.MaxQty < t.MinQty) {
 				return errInvalidPromoConfig
+			}
+			switch t.DiscountType {
+			case "", "percent":
+				if t.DiscountPct <= 0 || t.DiscountPct > 100 {
+					return errInvalidPromoConfig
+				}
+			case "amount_per_unit", "amount":
+				if t.DiscountAmount <= 0 {
+					return errInvalidPromoConfig
+				}
+			default:
+				return errInvalidPromoConfig
+			}
+		}
+	case "buy_x_get_y":
+		if len(cfg.BuyProductIDs) == 0 || len(cfg.GetProductIDs) == 0 || cfg.BuyQty < 1 || cfg.GetQty < 1 ||
+			cfg.GetDiscountPct <= 0 || cfg.GetDiscountPct > 100 || cfg.MaxSets < 0 {
+			return errInvalidPromoConfig
+		}
+		buy := map[string]bool{}
+		for _, id := range cfg.BuyProductIDs {
+			buy[id] = true
+		}
+		for _, id := range cfg.GetProductIDs {
+			if buy[id] {
+				return errInvalidPromoConfig // the same product on both sides is a bogo
 			}
 		}
 	case "min_value":
