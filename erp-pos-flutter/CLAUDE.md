@@ -146,6 +146,8 @@ Tested in `test/product_grid_test.dart` (own SQLite folder, so the billing golde
 - **Layout:** `MaterialApp`'s builder applies `PosLocale.direction`. The wide billing layout puts the cart on `PosLocale.cartOnLeft`, which is physical, the same in RTL.
 - **Times and cash:** show times with `PosClock.parse` / `PosClock.now()` (the merchant's zone), not `toLocal()`. The shift close counts `localization.denominations`.
 
+**On-screen keyboard (2026-10-25, erp-core-go §3.77).** When the terminal has it switched on (POS Terminals › Screen layout, `PosLocalization.virtualKeyboard` from `/settings/localization/terminal`, applied to `PosKeyboard.enabled` in `AppSession.applyLocalization`), `VirtualKeyboardHost` (`lib/ui/virtual_keyboard.dart`, wrapped in `MaterialApp.builder`) shows a QWERTY or number pad below whatever field has focus, and types through `EditableTextState.userUpdateTextEditingValue`, so the field's formatters and onChanged/onSubmitted run. Keys are `GestureDetector`s and never take focus, so the scan field keeps it. Give a key's `Semantics` `container: true`, or its label merges into the screen. "Hide" tucks the keyboard away for that field, and a small button brings it back. Nothing in a screen needs to know about it. Tested in `test/virtual_keyboard_test.dart`.
+
 **Shifts (Phase 13).** `lib/screens/shift_screen.dart` has three parts:
 - `ShiftScreen`: open with a float, the X report, and cash in/out via `CashMovementDialog`, which keeps one idempotency key across retries
 - `CloseShiftScreen`: a denomination count with live variance. When the count doesn't match, it asks for a reason and a manager's code and PIN. It syncs offline sales before counting.

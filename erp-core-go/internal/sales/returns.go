@@ -54,16 +54,20 @@ type salesSettings struct {
 	// migrations/063: the POS grid lists open-price items first (the
 	// merchant's default; branches may override it).
 	OpenPriceFirst bool `json:"open_price_first"`
+	// migrations/071: which price a POS line gets: standard (as before),
+	// customer (the lowest of MRP, selling, markup and price-rule prices)
+	// or shop (the highest). The merchant's default; branches may override.
+	PriceBenefit string `json:"price_benefit"`
 }
 
 func loadSalesSettings(ctx context.Context, tx pgx.Tx) (salesSettings, error) {
-	s := salesSettings{ReturnsRequireApproval: true, RoundOffMax: "0.00", OpenPriceDiscounts: true} // the safe default when never configured
+	s := salesSettings{ReturnsRequireApproval: true, RoundOffMax: "0.00", OpenPriceDiscounts: true, PriceBenefit: "standard"} // the safe default when never configured
 	err := tx.QueryRow(ctx, `
 		SELECT returns_require_approval, return_window_days, shifts_required, round_off_max::text, round_off_auto, round_off_max::float8,
-		       open_price_discounts, open_price_first
+		       open_price_discounts, open_price_first, price_benefit
 		FROM sales_settings`).
 		Scan(&s.ReturnsRequireApproval, &s.ReturnWindowDays, &s.ShiftsRequired, &s.RoundOffMax, &s.RoundOffAuto, &s.roundOffMax,
-			&s.OpenPriceDiscounts, &s.OpenPriceFirst)
+			&s.OpenPriceDiscounts, &s.OpenPriceFirst, &s.PriceBenefit)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, nil
 	}
@@ -109,9 +113,14 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		RoundOffAuto           *bool    `json:"round_off_auto"`
 		OpenPriceDiscounts     *bool    `json:"open_price_discounts"`
 		OpenPriceFirst         *bool    `json:"open_price_first"`
+		PriceBenefit           *string  `json:"price_benefit"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	if req.PriceBenefit != nil && !validBenefit(*req.PriceBenefit) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "price_benefit must be standard, customer or shop")
 		return
 	}
 	if req.ReturnWindowDays != nil && *req.ReturnWindowDays <= 0 {
@@ -143,6 +152,11 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.OpenPriceFirst != nil {
 			if _, err := tx.Exec(ctx, `UPDATE sales_settings SET open_price_first = $1`, *req.OpenPriceFirst); err != nil {
+				return err
+			}
+		}
+		if req.PriceBenefit != nil {
+			if _, err := tx.Exec(ctx, `UPDATE sales_settings SET price_benefit = $1`, *req.PriceBenefit); err != nil {
 				return err
 			}
 		}

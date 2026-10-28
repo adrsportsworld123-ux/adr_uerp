@@ -48,9 +48,17 @@ func ResolvePrice(ctx context.Context, tx pgx.Tx, customerID, variantID string) 
 // price rule (if any) produced it — persisted on sales_order_lines.
 type LinePrice struct {
 	UnitPrice   float64
-	Source      string  // "price_list" | "price_rule" | "base"
-	PriceRuleID *string // set when Source == "price_rule"
+	Source      string  // "price_list" | "price_rule" | "markup_rule" | "mrp" | "base"
+	PriceRuleID *string // set when a price rule priced the line
 	RuleName    string
+	// migrations/071: the markup rule the line's price came from or was
+	// worked on (MarkupRuleID), and which price it is (Basis:
+	// price_list | price_rule | markup | selling_price | mrp).
+	MarkupRuleID   *string
+	MarkupRuleName string
+	Basis          string
+	// Benefit: the branch's price benefit (standard | customer | shop).
+	Benefit string
 }
 
 // ResolveLinePriceAt is ResolvePrice plus Phase 10's dynamic pricing, for
@@ -64,30 +72,55 @@ type LinePrice struct {
 //     own timezone at `at`.
 //  3. Otherwise the base selling_price.
 //
+// Markup rules and the branch's price benefit (migrations/071) come in at
+// 2–3. A live markup rule gives a markup price (cost + markup).
+//   - standard (the default): as above, with the markup price, when there
+//     is one, standing in for the selling price.
+//   - customer / shop: the lowest / highest of MRP, the selling price, the
+//     markup price and the price rule's price (worked on the selling
+//     price). A tie keeps the earlier of selling price, price rule,
+//     markup, MRP.
+//
 // at is normally time.Now(); GET /pricing/variants/{id}/effective-price
 // passes a caller-chosen instant so a rule can be previewed ("what will
 // this cost Saturday at 3 PM?").
 func ResolveLinePriceAt(ctx context.Context, tx pgx.Tx, customerID, variantID, branchID string, at time.Time) (LinePrice, error) {
 	var listPrice *float64
-	var base, mrp float64
+	var base, mrp, cost, taxRate float64
 	var categoryID *string
+	var inclusive bool
+	var benefit string
 	if err := tx.QueryRow(ctx, `
 		SELECT (SELECT pli.price FROM customers c
 		        JOIN price_list_items pli ON pli.price_list_id = c.price_list_id
 		        WHERE c.id = NULLIF($1,'')::uuid AND pli.variant_id = pv.id),
-		       pv.selling_price, pv.mrp, p.category_id::text
+		       pv.selling_price, pv.mrp, p.category_id::text, pv.cost_price, p.price_includes_tax,
+		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0),
+		       app_price_benefit(NULLIF($3,'')::uuid)
 		FROM product_variants pv
 		JOIN products p ON p.id = pv.product_id
-		WHERE pv.id = $2`, customerID, variantID).Scan(&listPrice, &base, &mrp, &categoryID); err != nil {
+		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+		WHERE pv.id = $2`, customerID, variantID, branchID).Scan(&listPrice, &base, &mrp, &categoryID, &cost, &inclusive, &taxRate, &benefit); err != nil {
 		return LinePrice{}, err
 	}
 	if listPrice != nil {
-		return LinePrice{UnitPrice: *listPrice, Source: "price_list"}, nil
+		return LinePrice{UnitPrice: *listPrice, Source: "price_list", Basis: "price_list", Benefit: benefit}, nil
+	}
+
+	mID, mName, mType, mValue, mFound, err := liveMarkup(ctx, tx, variantID, deref(categoryID), branchID, at)
+	if err != nil {
+		return LinePrice{}, err
+	}
+	var markup *candidate
+	if mFound {
+		if p, ok := markupPrice(cost, mrp, taxRate, inclusive, mType, mValue); ok {
+			markup = &candidate{price: p, basis: "markup"}
+		}
 	}
 
 	var ruleID, ruleName, ruleType string
 	var value float64
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		WITH local AS (
 			SELECT $4::timestamptz AT TIME ZONE COALESCE(
 				(SELECT timezone FROM branches WHERE id = NULLIF($3,'')::uuid), app_merchant_tz()) AS ts
@@ -106,13 +139,74 @@ func ResolveLinePriceAt(ctx context.Context, tx pgx.Tx, customerID, variantID, b
 		       END)
 		ORDER BY (r.variant_id IS NOT NULL) DESC, r.priority DESC, r.created_at DESC
 		LIMIT 1`, variantID, deref(categoryID), branchID, at).Scan(&ruleID, &ruleName, &ruleType, &value)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return LinePrice{UnitPrice: base, Source: "base"}, nil
-	}
-	if err != nil {
+	ruleFound := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return LinePrice{}, err
 	}
-	return LinePrice{UnitPrice: applyRule(base, mrp, ruleType, value), Source: "price_rule", PriceRuleID: &ruleID, RuleName: ruleName}, nil
+	withMarkup := func(lp LinePrice) LinePrice {
+		lp.MarkupRuleID, lp.MarkupRuleName, lp.Benefit = &mID, mName, benefit
+		return lp
+	}
+
+	if benefit != "customer" && benefit != "shop" {
+		// standard: the markup price stands in for the selling price.
+		start := base
+		if markup != nil {
+			start = markup.price
+		}
+		switch {
+		case ruleFound && markup != nil:
+			return withMarkup(LinePrice{UnitPrice: applyRule(start, mrp, ruleType, value), Source: "price_rule", PriceRuleID: &ruleID, RuleName: ruleName, Basis: "price_rule"}), nil
+		case ruleFound:
+			return LinePrice{UnitPrice: applyRule(start, mrp, ruleType, value), Source: "price_rule", PriceRuleID: &ruleID, RuleName: ruleName, Basis: "price_rule", Benefit: benefit}, nil
+		case markup != nil:
+			return withMarkup(LinePrice{UnitPrice: markup.price, Source: "markup_rule", Basis: "markup"}), nil
+		}
+		return LinePrice{UnitPrice: base, Source: "base", Basis: "selling_price", Benefit: benefit}, nil
+	}
+
+	// customer / shop: compare the prices this line could be sold at.
+	cands := []candidate{{price: base, basis: "selling_price"}}
+	if ruleFound {
+		cands = append(cands, candidate{price: applyRule(base, mrp, ruleType, value), basis: "price_rule"})
+	}
+	if markup != nil {
+		cands = append(cands, *markup)
+	}
+	if mrp > 0 {
+		cands = append(cands, candidate{price: mrp, basis: "mrp"})
+	}
+	best := pickPrice(cands, benefit == "shop")
+	lp := LinePrice{UnitPrice: best.price, Basis: best.basis, Benefit: benefit}
+	switch best.basis {
+	case "price_rule":
+		lp.Source, lp.PriceRuleID, lp.RuleName = "price_rule", &ruleID, ruleName
+	case "markup":
+		lp = withMarkup(lp)
+		lp.Source = "markup_rule"
+	case "mrp":
+		lp.Source = "mrp"
+	default:
+		lp.Source = "base"
+	}
+	return lp, nil
+}
+
+type candidate struct {
+	price float64
+	basis string
+}
+
+// pickPrice: the lowest (customer benefit) or highest (shop benefit)
+// price; on a tie the earlier candidate.
+func pickPrice(cands []candidate, highest bool) candidate {
+	best := cands[0]
+	for _, c := range cands[1:] {
+		if (highest && c.price > best.price+0.0001) || (!highest && c.price < best.price-0.0001) {
+			best = c
+		}
+	}
+	return best
 }
 
 // applyRule computes a rule's price from the base selling price: a fixed

@@ -30,6 +30,18 @@ var systemAccounts = [][3]string{
 	{"5001", "Inventory Shrinkage", "expense"}, {"5002", "Cash Over/Short", "expense"}, {"5003", "Payment Gateway Fees", "expense"},
 	{"5004", "Petty Cash Expenses", "expense"}, {"5005", "Round Off", "expense"},
 	{"1150", "Employee Loans & Advances", "asset"}, {"2150", "Salaries Payable", "liability"}, {"4050", "Interest Income", "income"},
+	// migrations/074: expenses and partners' capital.
+	{"1300", "Deposits & Advances", "asset"}, {"1400", "Furniture & Fixtures", "asset"}, {"2200", "Expenses Payable", "liability"},
+	{"3000", "Partners' Capital", "equity"}, {"5100", "Rent", "expense"}, {"5110", "Advertising & Promotion", "expense"},
+	{"5120", "Freight & Transport", "expense"}, {"5130", "Electricity", "expense"}, {"5140", "Repairs & Maintenance", "expense"},
+	{"5150", "Telephone & Internet", "expense"}, {"5190", "General Expenses", "expense"},
+}
+
+// systemExpenseHeads: the expense heads a new merchant starts with
+// (migrations/074 seeded the same for existing ones): head → account code.
+var systemExpenseHeads = [][2]string{
+	{"Shop Advance", "1300"}, {"Interior", "1400"}, {"Shop Rent", "5100"}, {"Flex & Banner", "5110"}, {"Transport", "5120"},
+	{"Electricity", "5130"}, {"Repairs", "5140"}, {"Phone & Internet", "5150"}, {"Other", "5190"},
 }
 
 var merchantCodeRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,39}$`)
@@ -123,6 +135,12 @@ func (h *PlatformHandler) CreateMerchant(w http.ResponseWriter, r *http.Request)
 		for _, a := range systemAccounts {
 			if _, err := tx.Exec(ctx, `INSERT INTO chart_of_accounts (merchant_id, code, name, account_type, is_system)
 				VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, true)`, a[0], a[1], a[2]); err != nil {
+				return err
+			}
+		}
+		for _, h := range systemExpenseHeads {
+			if _, err := tx.Exec(ctx, `INSERT INTO expense_heads (merchant_id, name, account_id)
+				SELECT current_setting('app.tenant_id')::uuid, $1, id FROM chart_of_accounts WHERE code = $2`, h[0], h[1]); err != nil {
 				return err
 			}
 		}

@@ -538,4 +538,10 @@ const Map<String, String> stringsTa = {
   'Changed mind': 'மனம் மாறியது',
   'Damaged in transit': 'போக்குவரத்தில் சேதமடைந்தது',
   'Other': 'மற்றவை',
+  'Show keyboard': 'விசைப்பலகையைக் காட்டு',
+  'Hide keyboard': 'விசைப்பலகையை மறை',
+  'Shift': 'ஷிஃப்ட்',
+  'Backspace': 'பின்நீக்கு',
+  'Space': 'இடைவெளி',
+  'Enter': 'உள்ளிடு',
 };

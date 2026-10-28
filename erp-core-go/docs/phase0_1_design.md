@@ -254,6 +254,10 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `INVALID_STATE` | 409 | `/cheques/*`, `/employee-loans/*` (§3.73) | The cheque or loan is not in a state the action can happen from (a cleared cheque bounced, a used leaf, a post-dated cheque deposited early, more than a loan's balance) |
 | `PAYROLL_RECOMPUTE_NEEDED` | 409 | `POST /payroll/runs/{id}/finalize` (§3.73) | A loan instalment a payslip deducts was repaid by hand since the run was computed: run the period again, then finalize |
 | `PAYMENT_EXCEEDS_BALANCE` | 409 | `POST /customers/{id}/payments`, `POST /cheques/received/{id}/deposit` | More than the credit invoice still owes |
+| `MARKUP_RULE_IN_USE` | 409 | `PUT/DELETE /pricing/markup-rules/{id}` (§3.77) | The rule has priced sale lines: switch it off and make a new one |
+| `PARTNER_EXISTS` | 409 | `POST/PATCH /partners` (§3.77) | Another partner has that name |
+| `PARTNER_RETIRED` | 409 | partner pay-in/out, expenses and bill payments paid by a partner (§3.77) | The partner has retired; their history stays, no new entries |
+| `HEAD_EXISTS` | 409 | `POST/PATCH /expense-heads` (§3.77) | An expense head with that name exists |
 
 ### 3.1 Auth
 
@@ -2653,6 +2657,74 @@ Verified:
 - All earlier API scripts on one fresh database: 471 checks, plus the PO/GRN delete script.
 - `TestVolumeTierTypes`, `TestBuyXGetY`.
 - `e2e/promotion-tiers-bxgy.spec.ts`, `promotion-order-scope.spec.ts`, `promotions.spec.ts`.
+
+### 3.77 Markup rules and customer price; credit outstanding; on-screen keyboard; approvals list; POs from reorder suggestions; expenses; partners (2026-10-25)
+
+Migrations 071–074. `internal/pricing/markup.go` and `resolve.go`, `internal/reportbuilder`, `internal/terminals`, `internal/approvals/requests.go`, `internal/ai/reorder.go`, `internal/expenses`, `internal/partners`, `internal/accounting/profit.go`.
+
+**Not changed by default:**
+- Every branch's price benefit is `standard`, and with no markup rule a line is priced exactly as before.
+- Every till's on-screen keyboard is off.
+- A bill payment, a PO and a voucher without a partner are as before.
+- Quotations are priced as before.
+
+- **Markup rules (071).**
+  - `markup_rules`: a variant, a category (with its sub-categories, unlike price rules) or every product; optionally one branch.
+  - `markup_type` is `percent` (cost + %) or `fixed` (cost + ₹), with priority and the same dates/days/hours as a price rule.
+  - The most specific live rule wins (variant > category > all), then priority, then the newest.
+  - Markup price = cost × (1 + %) or cost + ₹; GST is added for a tax-inclusive product; never above MRP; none without a cost.
+  - API: `GET/POST /pricing/markup-rules`, `PUT/PATCH/DELETE /pricing/markup-rules/{id}` (`pricing.manage`). Soft delete, Recycle Bin. A rule that priced a line can't be edited or deleted (`MARKUP_RULE_IN_USE`).
+- **Customer price (071).**
+  - `sales_settings.price_benefit` (merchant default) and `branch_sales_settings.price_benefit` (override); `app_price_benefit(branch)` resolves them.
+  - `standard`: price rule, else the markup price standing in for the selling price, else the selling price. A price rule works on the markup price.
+  - `customer` / `shop`: the lowest / highest of MRP, selling price, markup price and price-rule price (worked on the selling price). A tie keeps the earlier of selling price, price rule, markup, MRP.
+  - A customer's price list still wins.
+  - `sales_order_lines.markup_rule_id` and `price_basis` record what priced the line. `GET /pricing/variants/{id}/effective-price` adds `markup_rule_*`, `price_basis` and `price_benefit`.
+- **Credit outstanding, party-wise.** Report builder datasets `receivables` (open credit sales: customer, phone, limit, terms, sale, due date, days overdue, outstanding) and `payables` (open supplier bills), both "as of now", with ageing buckets matching the customer credit card (not yet due, 0–30, 31–60, 61–90, over 90). Library reports under **Outstanding**:
+  - `credit_outstanding_by_customer`
+  - `credit_outstanding_invoices`
+  - `payables_outstanding_by_supplier`
+- **On-screen keyboard (072).**
+  - `pos_terminals.virtual_keyboard`: `PATCH /pos-terminals/{id} {virtual_keyboard}`. `GET /settings/localization/terminal` returns it to the till.
+  - In the POS app (`lib/ui/virtual_keyboard.dart`), `VirtualKeyboardHost` in `MaterialApp.builder` shows a QWERTY or number pad for whichever field is focused, typing through the field's own formatters and actions. Keys never take focus; "hide" tucks it away until the next field.
+- **Approvals (073).**
+  - `GET /approvals/waiting`: branch transfers pending approval, submitted journal vouchers and open stock-review items. Each has `can_act`, from the permission the item's own endpoint needs; a voucher's author can't approve it.
+  - `GET /approvals/given?from=&to=&kind=&branch_id=`: manual discounts, returns, open prices, cash and stock-count variances, stock adjustments, cash in/out, payment corrections, approved transfers and vouchers, and loans, each with who asked and who approved.
+  - Both need `approvals.view` (Branch Manager, Merchant Admin, and the Branch Manager role template).
+  - `stock_movements.approved_by` now keeps a stock adjustment's approver; it was checked before but not stored.
+- **Reorder → PO.** `GET /ai/reorder-suggestions` adds `last_supplier_id` and `last_supplier_name`, `last_unit_cost` (latest completed GRN line) and `cost_price`. The web turns ticked suggestions into one draft PO per supplier and branch through `POST /purchase/orders`.
+- **Expenses (074).**
+  - New accounts 1300 Deposits & Advances, 1400 Furniture & Fixtures, 2200 Expenses Payable, 3000 Partners' Capital (equity), and 5100–5190 expense accounts (also in `systemAccounts`).
+  - `expense_heads` map a head to an asset or expense account. Seeded: Shop Advance → 1300, Interior → 1400, Shop Rent → 5100, Flex & Banner → 5110, Transport → 5120, Electricity, Repairs, Phone & Internet, Other.
+  - `POST /expenses` books one expense: Dr the head's account; Cr cash, bank (an account), a partner's capital, or 2200 for unpaid.
+  - `/expenses/{id}/pay` books Dr 2200, Cr what paid it. `/expenses/{id}/cancel` posts mirror entries; nothing is deleted.
+  - Import: `/expenses/import/preview` and `/commit` take a CSV. Columns: date (several formats), head, amount (₹ and commas allowed), paid_by (cash, bank or `bank: <name/digits>`, a partner's name or `partner: <name>`, unpaid), plus optional description, vendor, reference and branch. Booking is all or nothing; the same file is refused twice (hash); a likely duplicate row is flagged.
+  - `expenses.manage`.
+- **Partners (074).**
+  - `partners` each have a `3000-NN` capital account, a share ratio (%) and a status.
+  - Pay-in (Dr cash/bank, Cr capital) and pay-out (Dr capital, Cr cash/bank): `POST /partners/{id}/pay-in|pay-out`.
+  - A partner paying from their own money: expenses (`paid_by: partner`) and supplier bills (`method: partner` + `partner_id`; Dr Payables, Cr capital).
+  - `partner_transactions` is each partner's register.
+  - A PO may name `funded_by_partner_id` (`PUT /purchase/orders/{id}/funding`); its bills default to "paid by" that partner.
+  - `GET /partners/{id}/statement` gives opening, entries, closing capital, the period's net profit (`accounting.NetProfit`, the same figure as the P&L dataset) and their share. `GET /partners/summary` lists every partner and flags shares that don't add to 100%.
+  - Shares are worked out, not posted.
+  - `party_type` adds `partner` (vouchers, party ledger, party search). `partners.manage`.
+- **Web:**
+  - Pricing › Markup Rules.
+  - Sales Policy › Customer price, with a merchant default and per branch.
+  - Report Library › Outstanding. The library page now also shows any group it doesn't list.
+  - POS Terminals › Screen layout › On-screen keyboard.
+  - Overview › Approvals (Waiting / Given).
+  - AI Insights reorder table with tick, quantity, supplier and "Create purchase orders"; Purchase Orders › "From reorder suggestions".
+  - Finance › Expenses (list / import / heads) and Partners (summary, pay-in/out, statement).
+  - Bill payment adds "Paid by a partner". PO new/detail add "Funded by".
+
+Verified:
+- `markup_flow.py` 39, `outstanding_flow.py` 21, `approvals_flow.py` 37, `partners_flow.py` 61.
+- All earlier API scripts on one fresh database: 629 checks with round 9, plus PO/GRN delete.
+- Go: `TestMarkupPrice`, `TestPickPrice`.
+- POS: `test/virtual_keyboard_test.dart`; the full suite of 79 passes, goldens unchanged.
+- `e2e/round12.spec.ts` (6), and `purchase-orders`, `users-open-price`, `pos-grid`, `localization`, `ai-insights`, `reports-round10`, `multi-branch`.
 
 ## 4. What Phase 0 concretely delivers against this design
 

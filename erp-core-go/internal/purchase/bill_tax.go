@@ -76,9 +76,15 @@ func billTaxRows(s taxes.Settings, cgst, sgst, igst, cess, total string) []taxes
 func fillBillTax(ctx context.Context, tx pgx.Tx, resp *billResponse) error {
 	var branchID string
 	if err := tx.QueryRow(ctx, `
-		SELECT branch_id::text, cgst_amount::text, sgst_amount::text, igst_amount::text, cess_amount::text, inter_state
-		FROM purchase_bills WHERE id::text = $1`, resp.BillID,
-	).Scan(&branchID, &resp.CGSTAmount, &resp.SGSTAmount, &resp.IGSTAmount, &resp.CessAmount, &resp.InterState); err != nil {
+		SELECT pb.branch_id::text, pb.cgst_amount::text, pb.sgst_amount::text, pb.igst_amount::text, pb.cess_amount::text, pb.inter_state,
+		       po.funded_by_partner_id::text, pa.name
+		FROM purchase_bills pb
+		LEFT JOIN goods_receipt_notes g ON g.id = pb.grn_id
+		LEFT JOIN purchase_orders po ON po.id = g.purchase_order_id
+		LEFT JOIN partners pa ON pa.id = po.funded_by_partner_id
+		WHERE pb.id::text = $1`, resp.BillID,
+	).Scan(&branchID, &resp.CGSTAmount, &resp.SGSTAmount, &resp.IGSTAmount, &resp.CessAmount, &resp.InterState,
+		&resp.FundedByPartnerID, &resp.FundedByPartner); err != nil {
 		return err
 	}
 	s, err := taxes.Load(ctx, tx, branchID)

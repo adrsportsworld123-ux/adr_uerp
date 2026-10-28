@@ -82,6 +82,27 @@ var (
 
 const saleTime = "COALESCE(so.finalized_at, so.created_at)"
 
+// Ageing of what is still owed (§3.77), the same buckets as a customer's
+// credit card (customers.GetCustomerCredit): not yet due (or no due date),
+// then 0–30, 31–60, 61–90 and over 90 days past the due date, counted on
+// the merchant's own calendar.
+const merchantToday = "(now() AT TIME ZONE app_merchant_tz())::date"
+
+func ageingFields(due, owed string) []Field {
+	days := merchantToday + " - " + due
+	bucket := func(cond string) string { return "CASE WHEN " + cond + " THEN " + owed + " ELSE 0 END" }
+	return []Field{
+		{"due_date", "Due date", TDate, due},
+		{"days_overdue", "Days overdue", TNumber, "GREATEST(" + days + ", 0)"},
+		{"overdue", "Overdue", TBool, "COALESCE(" + days + " > 0, false)"},
+		{"not_due", "Not yet due", TMoney, bucket(due + " IS NULL OR " + days + " < 0")},
+		{"days_0_30", "0–30 days", TMoney, bucket(days + " BETWEEN 0 AND 30")},
+		{"days_31_60", "31–60 days", TMoney, bucket(days + " BETWEEN 31 AND 60")},
+		{"days_61_90", "61–90 days", TMoney, bucket(days + " BETWEEN 61 AND 90")},
+		{"days_90_plus", "Over 90 days", TMoney, bucket(days + " > 90")},
+	}
+}
+
 const productJoins = `
 	JOIN product_variants v ON v.id = %s
 	JOIN products p ON p.id = v.product_id
@@ -304,6 +325,86 @@ var Datasets = []Dataset{
 			{"landed_unit_cost", "Landed unit cost", TMoney, "COALESCE(gl.landed_unit_cost, gl.unit_cost)"},
 			{"line_total", "Line total", TMoney, "gl.line_total"},
 			{"landed_total", "Landed total", TMoney, "round(gl.quantity * COALESCE(gl.landed_unit_cost, gl.unit_cost), 2)"},
+		},
+	},
+	{
+		// What customers still owe on credit sales, as of now (§3.77).
+		Key: "receivables", Label: "Customer credit outstanding", Description: "One row per credit sale not yet fully paid, with what is still owed and how overdue it is. No date range: it's now.",
+		from: `sales_orders so
+			JOIN branches b ON b.id = so.branch_id
+			JOIN customers c ON c.id = so.customer_id`,
+		where: "so.status = 'finalized' AND so.credit_amount > so.credit_paid",
+		Fields: append([]Field{
+			{"customer", "Customer", TText, "c.name"},
+			{"phone", "Phone", TText, "c.phone"},
+			{"customer_gstin", "Customer GSTIN", TText, "c.gstin"},
+			{"customer_type", "Customer type", TText, "c.customer_type"},
+			{"payment_terms", "Payment terms", TText, "c.payment_terms"},
+			{"credit_limit", "Credit limit", TMoney, "c.credit_limit"},
+			{"credit_hold", "On credit hold", TBool, "c.credit_hold"},
+			fBranch,
+			{"invoice", "Sale number", TText, "so.order_number"},
+			{"date", "Sale date", TDate, "(" + saleTime + " " + istDate},
+			{"credit_amount", "On credit", TMoney, "so.credit_amount"},
+			{"credit_paid", "Paid", TMoney, "so.credit_paid"},
+			{"outstanding", "Outstanding", TMoney, "so.credit_amount - so.credit_paid"},
+		}, ageingFields("so.due_date", "(so.credit_amount - so.credit_paid)")...),
+	},
+	{
+		// What is still owed to suppliers, as of now (§3.77).
+		Key: "payables", Label: "Supplier payables outstanding", Description: "One row per supplier bill not yet fully paid, with what is still owed and how overdue it is. No date range: it's now.",
+		from: `purchase_bills pb
+			JOIN branches b ON b.id = pb.branch_id
+			LEFT JOIN suppliers s ON s.id = pb.supplier_id`,
+		where: "pb.status <> 'paid' AND pb.grand_total > pb.amount_paid",
+		Fields: append([]Field{
+			{"supplier", "Supplier", TText, "s.name"},
+			{"supplier_phone", "Phone", TText, "s.phone"},
+			{"supplier_gstin", "Supplier GSTIN", TText, "s.gstin"},
+			fBranch,
+			{"bill_number", "Bill number", TText, "pb.bill_number"},
+			{"supplier_invoice", "Supplier invoice", TText, "pb.supplier_invoice_number"},
+			{"date", "Bill date", TDate, "pb.bill_date"},
+			{"grand_total", "Total", TMoney, "pb.grand_total"},
+			{"amount_paid", "Paid", TMoney, "pb.amount_paid"},
+			{"outstanding", "Outstanding", TMoney, "pb.grand_total - pb.amount_paid"},
+		}, ageingFields("pb.due_date", "(pb.grand_total - pb.amount_paid)")...),
+	},
+	{
+		// Expenses recorded or imported (§3.77, §3.78). A cancelled one is
+		// kept with its status; the library's reports leave it out.
+		Key: "expenses", Label: "Expenses", Description: "One row per expense, with its head, branch, who paid it and whether it is still unpaid.",
+		HasDateRange: true, date: "e.expense_date",
+		from: `expenses e
+			JOIN branches b ON b.id = e.branch_id
+			JOIN expense_heads h ON h.id = e.head_id
+			JOIN chart_of_accounts a ON a.id = e.account_id
+			LEFT JOIN bank_accounts ba ON ba.id = e.bank_account_id
+			LEFT JOIN partners pt ON pt.id = e.partner_id
+			LEFT JOIN partners ppt ON ppt.id = e.paid_partner_id
+			LEFT JOIN users u ON u.id = e.created_by`,
+		Fields: []Field{
+			{"date", "Date", TDate, "e.expense_date"},
+			{"month", "Month", TText, "to_char(e.expense_date, 'YYYY-MM')"},
+			{"expense_number", "Expense number", TText, "e.expense_number"},
+			{"head", "Head", TText, "h.name"},
+			{"account", "Account", TText, "a.code || ' ' || a.name"},
+			{"account_type", "Booked as", TText, "CASE a.account_type WHEN 'asset' THEN 'Asset' ELSE 'Expense' END"},
+			fBranch,
+			{"description", "Description", TText, "e.description"},
+			{"vendor", "Vendor", TText, "e.vendor"},
+			{"reference", "Reference", TText, "e.reference"},
+			{"amount", "Amount", TMoney, "e.amount"},
+			{"paid_by", "Paid by", TText, "CASE e.paid_by WHEN 'cash' THEN 'Cash' WHEN 'bank' THEN 'Bank' WHEN 'partner' THEN 'Partner' ELSE 'Unpaid' END"},
+			{"bank_account", "Bank account", TText, "ba.account_name || ' (' || ba.bank_name || ')'"},
+			{"partner", "Partner", TText, "COALESCE(pt.name, ppt.name)"},
+			{"payment_status", "Payment", TText, "CASE WHEN e.paid_by <> 'unpaid' THEN 'Paid' WHEN e.paid_at IS NOT NULL THEN 'Paid later' ELSE 'Unpaid' END"},
+			{"paid_on", "Paid on", TDate, "COALESCE(e.paid_at, CASE WHEN e.paid_by <> 'unpaid' THEN e.expense_date END)"},
+			{"unpaid_amount", "Unpaid", TMoney, "CASE WHEN e.paid_by = 'unpaid' AND e.paid_at IS NULL THEN e.amount ELSE 0 END"},
+			{"partner_amount", "Paid by partners", TMoney, "CASE WHEN e.partner_id IS NOT NULL OR e.paid_partner_id IS NOT NULL THEN e.amount ELSE 0 END"},
+			{"imported", "Imported", TBool, "e.import_batch IS NOT NULL"},
+			{"status", "Status", TText, "e.status"},
+			{"entered_by", "Entered by", TText, "u.name"},
 		},
 	},
 	{

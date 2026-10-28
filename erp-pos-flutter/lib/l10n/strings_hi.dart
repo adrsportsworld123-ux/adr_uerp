@@ -538,4 +538,10 @@ const Map<String, String> stringsHi = {
   'Changed mind': 'मन बदल गया',
   'Damaged in transit': 'ढुलाई में क्षतिग्रस्त',
   'Other': 'अन्य',
+  'Show keyboard': 'कीबोर्ड दिखाएँ',
+  'Hide keyboard': 'कीबोर्ड छिपाएँ',
+  'Shift': 'शिफ़्ट',
+  'Backspace': 'बैकस्पेस',
+  'Space': 'स्पेस',
+  'Enter': 'एंटर',
 };

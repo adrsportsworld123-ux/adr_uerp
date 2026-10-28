@@ -538,4 +538,10 @@ const Map<String, String> stringsAr = {
   'Changed mind': 'غيّر رأيه',
   'Damaged in transit': 'تلف أثناء الشحن',
   'Other': 'أخرى',
+  'Show keyboard': 'إظهار لوحة المفاتيح',
+  'Hide keyboard': 'إخفاء لوحة المفاتيح',
+  'Shift': 'تبديل',
+  'Backspace': 'مسح',
+  'Space': 'مسافة',
+  'Enter': 'إدخال',
 };

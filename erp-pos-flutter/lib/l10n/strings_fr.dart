@@ -538,4 +538,10 @@ const Map<String, String> stringsFr = {
   'Changed mind': 'Changement d’avis',
   'Damaged in transit': 'Endommagé pendant le transport',
   'Other': 'Autre',
+  'Show keyboard': 'Afficher le clavier',
+  'Hide keyboard': 'Masquer le clavier',
+  'Shift': 'Majuscule',
+  'Backspace': 'Retour arrière',
+  'Space': 'Espace',
+  'Enter': 'Entrée',
 };

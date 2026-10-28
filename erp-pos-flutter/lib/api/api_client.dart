@@ -368,6 +368,10 @@ class PosLocalization {
   /// Largest first; the INR set from an older server.
   final List<double> denominations;
 
+  /// This till shows its on-screen keyboard (migrations/072); false from
+  /// an older server.
+  final bool virtualKeyboard;
+
   static const inrDenominations = [2000.0, 500.0, 200.0, 100.0, 50.0, 20.0, 10.0, 5.0, 2.0, 1.0];
 
   const PosLocalization({
@@ -377,6 +381,7 @@ class PosLocalization {
     this.timezone = 'Asia/Kolkata',
     this.utcOffsetMinutes,
     this.denominations = inrDenominations,
+    this.virtualKeyboard = false,
   });
 
   factory PosLocalization.fromJson(Map<String, dynamic> j) {
@@ -388,6 +393,7 @@ class PosLocalization {
       timezone: j['timezone'] as String? ?? 'Asia/Kolkata',
       utcOffsetMinutes: (j['utc_offset_minutes'] as num?)?.toInt(),
       denominations: denoms.isEmpty ? inrDenominations : denoms,
+      virtualKeyboard: j['virtual_keyboard'] as bool? ?? false,
     );
   }
 
@@ -398,6 +404,7 @@ class PosLocalization {
         'timezone': timezone,
         'utc_offset_minutes': utcOffsetMinutes,
         'denominations': [for (final d in denominations) d.toStringAsFixed(2)],
+        'virtual_keyboard': virtualKeyboard,
       };
 }
 

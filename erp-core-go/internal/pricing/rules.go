@@ -348,9 +348,13 @@ func (h *Handler) GetEffectivePrice(w http.ResponseWriter, r *http.Request) {
 			"variant_id": variantID, "at": at.Format(time.RFC3339),
 			"unit_price": strconv.FormatFloat(lp.UnitPrice, 'f', 2, 64), "base_selling_price": base,
 			"source": lp.Source, "price_rule_id": lp.PriceRuleID,
+			"markup_rule_id": lp.MarkupRuleID, "price_basis": lp.Basis, "price_benefit": lp.Benefit,
 		}
 		if lp.RuleName != "" {
 			resp["price_rule_name"] = lp.RuleName
+		}
+		if lp.MarkupRuleName != "" {
+			resp["markup_rule_name"] = lp.MarkupRuleName
 		}
 		httpx.JSON(w, http.StatusOK, resp)
 	}

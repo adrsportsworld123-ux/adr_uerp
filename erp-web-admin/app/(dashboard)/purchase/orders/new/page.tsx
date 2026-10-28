@@ -15,6 +15,7 @@ import { PageHeader } from "@/components/data/page-header";
 import { Field, Panel, selectClass } from "@/components/data/panel";
 import { BranchSelect, useMyBranches } from "@/components/data/branch-select";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
+import { PartnerSelect, usePartners } from "@/components/partners/use-partners";
 
 import { currencySymbol } from "@/lib/currency";
 type DraftLine = { option: VariantOption | null; quantity: string; unitCost: string };
@@ -28,6 +29,9 @@ export default function NewPurchaseOrderPage() {
   const [branchId, setBranchId] = useState("");
   const [expectedDate, setExpectedDate] = useState("");
   const [notes, setNotes] = useState("");
+  // erp-core-go migrations/074: the partner putting up the money, if any.
+  const partners = usePartners();
+  const [fundedBy, setFundedBy] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +56,7 @@ export default function NewPurchaseOrderPage() {
         branch_id: branch,
         expected_date: expectedDate || undefined,
         notes,
+        ...(fundedBy ? { funded_by_partner_id: fundedBy } : {}),
         lines: ready.map((l) => ({ variant_id: l.option!.variantId, quantity: Number(l.quantity), unit_cost: Number(l.unitCost) })),
       });
       router.push(`/purchase/orders/${po.po_id}`);
@@ -87,6 +92,11 @@ export default function NewPurchaseOrderPage() {
         <Field label="Notes for the supplier" htmlFor="poNotes">
           <Textarea id="poNotes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
+        {partners.length > 0 && (
+          <Field label="Funded by partner (optional)" htmlFor="poFundedBy" className="sm:max-w-xs">
+            <PartnerSelect id="poFundedBy" partners={partners} value={fundedBy} onChange={setFundedBy} noneLabel="The shop" />
+          </Field>
+        )}
       </Panel>
 
       <Panel title="Items" description="Quantity and the agreed unit cost before GST. The PO's total is worked out when you save.">

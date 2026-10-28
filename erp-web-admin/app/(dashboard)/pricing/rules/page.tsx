@@ -253,7 +253,14 @@ export default function PriceRulesPage() {
                 ? `— rule "${checkResult.price_rule_name}" (base ${rupees(checkResult.base_selling_price)})`
                 : checkResult.source === "price_list"
                   ? "— customer price list"
-                  : "— base price, no rule applies"}
+                  : checkResult.source === "markup_rule"
+                    ? `— markup rule "${checkResult.markup_rule_name}" (selling price ${rupees(checkResult.base_selling_price)})`
+                    : checkResult.source === "mrp"
+                      ? `— MRP (selling price ${rupees(checkResult.base_selling_price)})`
+                      : "— base price, no rule applies"}
+              {checkResult.price_benefit && checkResult.price_benefit !== "standard" && (
+                <span className="text-muted-foreground"> · {checkResult.price_benefit === "customer" ? "Customer benefit: the lowest price" : "Shop benefit: the highest price"}</span>
+              )}
             </p>
           )}
         </CardContent>

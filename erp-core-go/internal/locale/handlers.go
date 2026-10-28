@@ -281,7 +281,8 @@ func (h *Handler) UpdateMine(w http.ResponseWriter, r *http.Request) {
 // ForTerminal: GET /settings/localization/terminal?pos_terminal_id= — what
 // one till uses: the merchant's settings with the terminal's text
 // direction and cart side, the branch currency (internal/taxes) and its
-// denominations. Any signed-in user.
+// denominations, and whether it shows its on-screen keyboard
+// (migrations/072). Any signed-in user.
 func (h *Handler) ForTerminal(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -290,6 +291,7 @@ func (h *Handler) ForTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	termID := r.URL.Query().Get("pos_terminal_id")
 	var eff Effective
+	var keyboard bool
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		s, err := Load(ctx, tx)
 		if err != nil {
@@ -297,8 +299,8 @@ func (h *Handler) ForTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		var branchID string
 		var dir, side *string
-		if err := tx.QueryRow(ctx, `SELECT branch_id::text, text_direction, cart_side FROM pos_terminals WHERE id::text = $1`, termID).
-			Scan(&branchID, &dir, &side); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT branch_id::text, text_direction, cart_side, virtual_keyboard FROM pos_terminals WHERE id::text = $1`, termID).
+			Scan(&branchID, &dir, &side, &keyboard); err != nil {
 			return err
 		}
 		ts, err := taxes.Load(ctx, tx, branchID)
@@ -317,7 +319,10 @@ func (h *Handler) ForTerminal(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not load localization settings")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, eff)
+	httpx.JSON(w, http.StatusOK, struct {
+		Effective
+		VirtualKeyboard bool `json:"virtual_keyboard"`
+	}{eff, keyboard})
 }
 
 // Timezones offered by the settings screen (any IANA name is accepted).

@@ -181,6 +181,9 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		// approverID: who approved an adjustment above the policy's limit,
+		// kept on the stock movement (migrations/073).
+		var approverID string
 		if policy.StockAdjustApprovalAbove != nil {
 			var cost float64
 			if err := tx.QueryRow(ctx, `SELECT cost_price FROM product_variants WHERE id = $1`, req.VariantID).Scan(&cost); err != nil {
@@ -194,6 +197,7 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 				if id == "" {
 					return errAdjustNotApproved
 				}
+				approverID = id
 			}
 		}
 		// Best-effort "before" value for the audit log only — if no row exists
@@ -220,10 +224,10 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 
 		var movementID string
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reason, performed_by)
-			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'adjustment', $3, 'adjustment', $4, $5)
+			INSERT INTO stock_movements (merchant_id, branch_id, variant_id, movement_type, quantity_delta, reference_type, reason, performed_by, approved_by)
+			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 'adjustment', $3, 'adjustment', $4, $5, NULLIF($6, '')::uuid)
 			RETURNING id`,
-			req.BranchID, req.VariantID, req.QuantityDelta, req.Reason, claims.UserID).Scan(&movementID); err != nil {
+			req.BranchID, req.VariantID, req.QuantityDelta, req.Reason, claims.UserID, approverID).Scan(&movementID); err != nil {
 			return err
 		}
 

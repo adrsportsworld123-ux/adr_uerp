@@ -538,4 +538,10 @@ const Map<String, String> stringsEs = {
   'Changed mind': 'Cambió de opinión',
   'Damaged in transit': 'Dañado en el transporte',
   'Other': 'Otro',
+  'Show keyboard': 'Mostrar teclado',
+  'Hide keyboard': 'Ocultar teclado',
+  'Shift': 'Mayúsculas',
+  'Backspace': 'Retroceso',
+  'Space': 'Espacio',
+  'Enter': 'Intro',
 };

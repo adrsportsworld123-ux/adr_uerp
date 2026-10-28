@@ -35,7 +35,8 @@ type LibraryReport = {
 type Period = { key: string; label: string };
 type Filter = { field: string; op: string; value?: unknown };
 
-const GROUP_ORDER = ["Sales", "Items", "Payments", "Stock", "Products", "Purchases", "Accounts", "Audit"];
+// Outstanding: credit owed by customers and to suppliers, party-wise (erp-core-go §3.77).
+const GROUP_ORDER = ["Sales", "Items", "Payments", "Stock", "Products", "Purchases", "Outstanding", "Expenses", "Accounts", "Audit"];
 const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
 // Fixed choices for some filters (the values the server stores).
 const CHOICES: Record<string, { value: string; label: string }[]> = {
@@ -95,7 +96,9 @@ export default function ReportLibraryPage() {
   const groups = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const hit = (r: LibraryReport) => words.every((w) => `${r.name} ${r.description} ${r.group}`.toLowerCase().includes(w));
-    return GROUP_ORDER.map((g) => ({ g, items: reports.filter((r) => r.group === g && hit(r)) })).filter((x) => x.items.length);
+    // A group the server adds later still shows, after the known ones.
+    const order = [...GROUP_ORDER, ...reports.map((r) => r.group).filter((g, i, all) => !GROUP_ORDER.includes(g) && all.indexOf(g) === i)];
+    return order.map((g) => ({ g, items: reports.filter((r) => r.group === g && hit(r)) })).filter((x) => x.items.length);
   }, [reports, q]);
 
   const choose = (r: LibraryReport) => {

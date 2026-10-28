@@ -17,11 +17,14 @@ import (
 	"erp-core-go/internal/banking"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/locale"
+	"erp-core-go/internal/partners"
 	"erp-core-go/internal/taxes"
 )
 
 var errGRNNotCompleted = errors.New("grn must be completed before billing")
 var errBillOverpaid = errors.New("payment would exceed the bill's grand total")
+
+var errPartnerRequired = errors.New("a payment by a partner names the partner")
 var errGRNAlreadyBilled = errors.New("grn already has a purchase bill")
 
 type billResponse struct {
@@ -45,6 +48,10 @@ type billResponse struct {
 	CessAmount string      `json:"cess_amount"`
 	InterState bool        `json:"inter_state"`
 	TaxRows    []taxes.Row `json:"tax_rows"`
+	// The partner funding the bill's purchase order, if any (migrations/074):
+	// the payment form offers "paid by" them first.
+	FundedByPartnerID *string `json:"funded_by_partner_id"`
+	FundedByPartner   *string `json:"funded_by_partner"`
 }
 
 // ---------------------------------------------------------------------
@@ -248,6 +255,9 @@ type billPaymentRequest struct {
 	ChequeNumber string `json:"cheque_number"`
 	ChequeDate   string `json:"cheque_date"`
 	AccountPayee *bool  `json:"account_payee"`
+	// PartnerID (migrations/074): with method "partner", the partner who
+	// paid the supplier from their own money; it adds to their capital.
+	PartnerID string `json:"partner_id"`
 }
 
 func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
@@ -289,23 +299,40 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 			return errBillOverpaid
 		}
 
-		ledger, err := accounting.PaymentLedgerCode(ctx, tx, req.Method, req.BankAccountID)
-		if err != nil {
-			return err
+		var ledger string
+		var err error
+		if req.Method == "partner" {
+			// Paid by a partner from their own money (migrations/074): Cr
+			// their capital instead of cash or bank.
+			if req.PartnerID == "" {
+				return errPartnerRequired
+			}
+			req.BankAccountID = ""
+			if ledger, _, err = partners.Capital(ctx, tx, req.PartnerID); err != nil {
+				return err
+			}
+		} else {
+			req.PartnerID = ""
+			if ledger, err = accounting.PaymentLedgerCode(ctx, tx, req.Method, req.BankAccountID); err != nil {
+				return err
+			}
 		}
 		var paymentID string
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO purchase_bill_payments (id, purchase_bill_id, amount, method, reference_no, performed_by, paid_at, bank_account_id)
+			INSERT INTO purchase_bill_payments (id, purchase_bill_id, amount, method, reference_no, performed_by, paid_at, bank_account_id, partner_id)
 			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5,
-			        COALESCE(($6::date + time '12:00') AT TIME ZONE app_merchant_tz(), now()), NULLIF($7, '')::uuid)
+			        COALESCE(($6::date + time '12:00') AT TIME ZONE app_merchant_tz(), now()), NULLIF($7, '')::uuid, NULLIF($8, '')::uuid)
 			RETURNING id`,
-			billID, req.Amount, req.Method, req.ReferenceNo, claims.UserID, paidOn, req.BankAccountID).Scan(&paymentID); err != nil {
+			billID, req.Amount, req.Method, req.ReferenceNo, claims.UserID, paidOn, req.BankAccountID, req.PartnerID).Scan(&paymentID); err != nil {
 			return err
 		}
 		paidDate := dateOrToday(paidOn, locale.Location(ctx, tx))
 		credit := accounting.JournalLine{AccountCode: ledger, Credit: req.Amount}
 		if req.BankAccountID != "" && (req.Method == "bank_transfer" || req.Method == "cheque") {
 			credit.PartyType, credit.PartyID = "bank_account", req.BankAccountID
+		}
+		if req.Method == "partner" {
+			credit.PartyType, credit.PartyID = "partner", req.PartnerID
 		}
 		if req.Method == "cheque" && req.BankAccountID != "" {
 			chequeDate := req.ChequeDate
@@ -324,11 +351,23 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if _, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "bill_payment", billID, "Payment against bill", claims.UserID, paidDate, []accounting.JournalLine{
+		desc := "Payment against bill"
+		if req.Method == "partner" {
+			desc = "Bill paid by a partner"
+		}
+		entryNo, err := accounting.PostJournalEntryOnDate(ctx, tx, branchID, "bill_payment", billID, desc, claims.UserID, paidDate, []accounting.JournalLine{
 			{AccountCode: accounting.AccountPayable, Debit: req.Amount, PartyType: "supplier", PartyID: supplierID},
 			credit,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		if req.Method == "partner" {
+			if err := partners.Record(ctx, tx, partners.Txn{PartnerID: req.PartnerID, Type: "paid_bill", Date: paidDate, Amount: req.Amount, Method: "own_funds",
+				BranchID: branchID, Reference: req.ReferenceNo, BillPaymentID: paymentID, JournalEntryID: partners.EntryID(ctx, tx, entryNo),
+				CreatedBy: claims.UserID}); err != nil {
+				return err
+			}
 		}
 
 		newPaid := amountPaid + req.Amount
@@ -350,6 +389,12 @@ func (h *Handler) RecordBillPayment(w http.ResponseWriter, r *http.Request) {
 	})
 
 	switch {
+	case errors.Is(err, errPartnerRequired):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "choose the partner who paid (partner_id)")
+	case errors.Is(err, partners.ErrNoPartner):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "partner not found")
+	case errors.Is(err, partners.ErrPartnerRetired):
+		httpx.Error(w, http.StatusConflict, "PARTNER_RETIRED", "that partner has retired")
 	case errors.Is(err, errBillOverpaid):
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "payment would exceed the bill's grand total")
 	case errors.Is(err, errPaidBeforeBill):

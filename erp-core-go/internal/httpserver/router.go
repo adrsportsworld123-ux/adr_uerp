@@ -22,6 +22,7 @@ import (
 	"erp-core-go/internal/dependencies"
 	"erp-core-go/internal/documents"
 	"erp-core-go/internal/einvoice"
+	"erp-core-go/internal/expenses"
 	"erp-core-go/internal/gst"
 	"erp-core-go/internal/hr"
 	"erp-core-go/internal/inventory"
@@ -30,6 +31,7 @@ import (
 	"erp-core-go/internal/loyalty"
 	"erp-core-go/internal/merchants"
 	"erp-core-go/internal/notifications"
+	"erp-core-go/internal/partners"
 	"erp-core-go/internal/payroll"
 	"erp-core-go/internal/pharmacy"
 	"erp-core-go/internal/pricing"
@@ -432,6 +434,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Post("/purchase/orders/{id}/lines", pur.AddPurchaseOrderLine)
 			protected.Delete("/purchase/orders/{id}/lines/{line_id}", pur.DeletePurchaseOrderLine)
 			protected.Post("/purchase/orders/{id}/issue", pur.IssuePurchaseOrder)
+			protected.Put("/purchase/orders/{id}/funding", pur.SetFunding)
 			protected.Post("/purchase/orders/{id}/cancel", pur.CancelPurchaseOrder)
 			protected.Post("/purchase/orders/{id}/close", pur.ClosePurchaseOrder)
 			protected.Post("/purchase/orders/{id}/grn", pur.ReceivePurchaseOrder)
@@ -510,6 +513,29 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(loansManage).Post("/employee-loans/{id}/repayments", loansH.Repay)
 			protected.With(loansManage).Post("/employee-loans/{id}/foreclose", loansH.Foreclose)
 			protected.Get("/me/loans", loansH.Mine)
+
+			// Partners' capital and expenses (migrations/074).
+			partnersH := &partners.Handler{DB: database}
+			partnersManage := authn.RequirePermission(database, "partners.manage")
+			protected.Get("/partners", partnersH.List)
+			protected.With(partnersManage).Post("/partners", partnersH.Create)
+			protected.With(partnersManage).Get("/partners/summary", partnersH.Summary)
+			protected.With(partnersManage).Patch("/partners/{id}", partnersH.Update)
+			protected.With(partnersManage).Post("/partners/{id}/pay-in", partnersH.PayIn)
+			protected.With(partnersManage).Post("/partners/{id}/pay-out", partnersH.PayOut)
+			protected.With(partnersManage).Get("/partners/{id}/statement", partnersH.Statement)
+			expH := &expenses.Handler{DB: database}
+			expensesManage := authn.RequirePermission(database, "expenses.manage")
+			protected.Get("/expense-heads", expH.ListHeads)
+			protected.With(expensesManage).Post("/expense-heads", expH.SaveHead)
+			protected.With(expensesManage).Patch("/expense-heads/{id}", expH.SaveHead)
+			protected.With(expensesManage).Get("/expenses", expH.ListExpenses)
+			protected.With(expensesManage).Post("/expenses", expH.CreateExpense)
+			protected.With(expensesManage).Get("/expenses/import/template", expH.ImportTemplate)
+			protected.With(expensesManage).Post("/expenses/import/preview", expH.PreviewImport)
+			protected.With(expensesManage).Post("/expenses/import/commit", expH.CommitImport)
+			protected.With(expensesManage).Post("/expenses/{id}/pay", expH.PayExpense)
+			protected.With(expensesManage).Post("/expenses/{id}/cancel", expH.CancelExpense)
 			protected.Get("/accounting/day-book", acct.DayBook)
 			protected.Get("/accounting/cash-book", acct.CashBook)
 
@@ -686,6 +712,17 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Put("/pricing/rules/{id}", prc.UpdatePriceRule)
 			protected.Get("/pricing/variants/{id}/effective-price", prc.GetEffectivePrice)
+			// Markup rules (migrations/071): cost + markup, used per the
+			// branch's price benefit.
+			protected.Get("/pricing/markup-rules", prc.ListMarkupRules)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/pricing/markup-rules", prc.CreateMarkupRule)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Put("/pricing/markup-rules/{id}", prc.UpdateMarkupRule)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Patch("/pricing/markup-rules/{id}", prc.SetMarkupRuleActive)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Delete("/pricing/markup-rules/{id}", prc.DeleteMarkupRule)
 
 			protected.With(authn.RequirePermission(database, "hr.manage")).
 				Get("/hr/roles", hrH.ListRoles)
@@ -783,6 +820,11 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/settings/approval-policies", apprH.Get)
 			protected.With(authn.RequirePermission(database, "approvals.manage")).
 				Put("/settings/approval-policies", apprH.Put)
+			// What is waiting for approval, and what was approved (migrations/073).
+			protected.With(authn.RequirePermission(database, "approvals.view")).
+				Get("/approvals/waiting", apprH.Waiting)
+			protected.With(authn.RequirePermission(database, "approvals.view")).
+				Get("/approvals/given", apprH.Given)
 
 			protected.Get("/ai/reorder-suggestions", aiH.GetReorderSuggestions)
 			protected.Get("/ai/recommendations/{variant_id}", aiH.GetRecommendations)

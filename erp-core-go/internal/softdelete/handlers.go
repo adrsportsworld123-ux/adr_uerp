@@ -34,6 +34,7 @@ var binEntities = map[string]binEntity{
 	"attribute_value":  {Table: "attribute_values", Label: "COALESCE((SELECT a.name FROM attributes a WHERE a.id = t.attribute_id), '') || ': ' || t.value"},
 	"price_list":       {Table: "price_lists", Label: "t.name", Children: [2]string{"price_list_items", "price_list_id"}},
 	"price_rule":       {Table: "price_rules", Label: "t.name"},
+	"markup_rule":      {Table: "markup_rules", Label: "t.name"},
 	"scheduled_change": {Table: "scheduled_price_changes", Label: "'Price change for ' || to_char(t.effective_at, 'DD Mon YYYY HH24:MI')"},
 	"promotion":        {Table: "promotions", Label: "t.name"},
 	"coupon":           {Table: "coupons", Label: "t.code"},

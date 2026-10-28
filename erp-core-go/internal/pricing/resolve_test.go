@@ -56,3 +56,44 @@ func TestValidatePriceRule(t *testing.T) {
 		t.Errorf("overnight window rejected: %s", msg)
 	}
 }
+
+// migrations/071: cost + markup, GST added for a tax-inclusive product,
+// never above MRP, none without a cost.
+func TestMarkupPrice(t *testing.T) {
+	cases := []struct {
+		name           string
+		cost, mrp, tax float64
+		inclusive      bool
+		typ            string
+		value, want    float64
+		ok             bool
+	}{
+		{"40% on 100", 100, 300, 0, false, "percent", 40, 140, true},
+		{"₹40 on 105", 105, 300, 0, false, "fixed", 40, 145, true},
+		{"inclusive adds GST", 100, 300, 18, true, "percent", 40, 165.2, true},
+		{"capped at MRP", 100, 120, 0, false, "percent", 40, 120, true},
+		{"no cost, no markup price", 0, 300, 0, false, "percent", 40, 0, false},
+	}
+	for _, c := range cases {
+		got, ok := markupPrice(c.cost, c.mrp, c.tax, c.inclusive, c.typ, c.value)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("%s: got %v %v, want %v %v", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// Customer benefit takes the lowest price, shop benefit the highest; a
+// tie keeps the earlier candidate (selling price first).
+func TestPickPrice(t *testing.T) {
+	cands := []candidate{{250, "selling_price"}, {225, "price_rule"}, {140, "markup"}, {300, "mrp"}}
+	if got := pickPrice(cands, false); got.basis != "markup" || got.price != 140 {
+		t.Errorf("customer benefit: %+v", got)
+	}
+	if got := pickPrice(cands, true); got.basis != "mrp" || got.price != 300 {
+		t.Errorf("shop benefit: %+v", got)
+	}
+	tie := []candidate{{250, "selling_price"}, {250, "markup"}}
+	if pickPrice(tie, false).basis != "selling_price" || pickPrice(tie, true).basis != "selling_price" {
+		t.Error("a tie keeps the selling price")
+	}
+}

@@ -297,6 +297,9 @@ export interface PurchaseOrder {
   lines: PurchaseOrderLine[];
   grns: PurchaseOrderGRN[];
   unplanned?: PurchaseOrderUnplanned[];
+  /** The partner funding the order (erp-core-go migrations/074). */
+  funded_by_partner_id?: string | null;
+  funded_by_partner?: string | null;
 }
 
 export interface PurchaseOrderSummary {
@@ -334,6 +337,63 @@ export interface Bill {
   cess_amount?: string;
   inter_state?: boolean;
   tax_rows?: TaxRow[];
+  /** The partner funding the bill's purchase order (migrations/074). */
+  funded_by_partner_id?: string | null;
+  funded_by_partner?: string | null;
+}
+
+/** A partner (erp-core-go migrations/074). capital only for partners.manage. */
+export interface Partner {
+  partner_id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  pan: string | null;
+  share_ratio: string;
+  status: "active" | "retired";
+  joined_on: string | null;
+  left_on: string | null;
+  notes: string | null;
+  account_code: string;
+  capital?: string;
+}
+
+/** An expense head and the account it posts to (migrations/074). */
+export interface ExpenseHead {
+  head_id: string;
+  name: string;
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  account_type: "asset" | "expense" | string;
+  status: "active" | "inactive";
+}
+
+export interface Expense {
+  expense_id: string;
+  expense_number: string;
+  branch_id: string;
+  branch: string;
+  expense_date: string;
+  head_id: string;
+  head: string;
+  account_code: string;
+  account_name: string;
+  description: string | null;
+  vendor: string | null;
+  reference: string | null;
+  amount: string;
+  paid_by: "cash" | "bank" | "partner" | "unpaid";
+  bank_account_id: string | null;
+  bank_account: string | null;
+  partner_id: string | null;
+  partner: string | null;
+  status: "posted" | "cancelled";
+  paid_at: string | null;
+  paid_with: string | null;
+  cancel_reason: string | null;
+  import_batch: string | null;
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------
@@ -1355,6 +1415,11 @@ export interface ReorderSuggestion {
   days_of_stock_remaining: string | null;
   suggested_reorder_qty: string;
   reason: string;
+  // erp-core-go §3.77: who supplied it last and at what cost (null if never received), and its cost price.
+  last_supplier_id?: string | null;
+  last_supplier_name?: string | null;
+  last_unit_cost?: string | null;
+  cost_price?: string;
 }
 
 export interface Recommendation {
@@ -1505,9 +1570,38 @@ export interface EffectivePrice {
   at: string;
   unit_price: string;
   base_selling_price: string;
-  source: "price_list" | "price_rule" | "base";
+  source: "price_list" | "price_rule" | "markup_rule" | "mrp" | "base";
   price_rule_id: string | null;
   price_rule_name?: string;
+  // erp-core-go migrations/071
+  markup_rule_id?: string | null;
+  markup_rule_name?: string;
+  price_basis?: "price_list" | "price_rule" | "markup" | "selling_price" | "mrp";
+  price_benefit?: "standard" | "customer" | "shop";
+}
+
+/** A markup rule (erp-core-go migrations/071): cost + percent or amount. */
+export interface MarkupRule {
+  markup_rule_id: string;
+  name: string;
+  variant_id: string | null;
+  sku: string | null;
+  product_name: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  branch_id: string | null;
+  branch_name: string | null;
+  markup_type: "percent" | "fixed";
+  value: string;
+  priority: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  days_of_week: number[] | null;
+  time_start: string | null;
+  time_end: string | null;
+  active: boolean;
+  created_at: string;
+  times_used: number;
 }
 
 // GET /products/{id} (erp-core-go internal/catalog/products_edit.go) —

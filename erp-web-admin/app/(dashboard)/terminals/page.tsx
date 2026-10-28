@@ -35,6 +35,8 @@ type Terminal = {
   // direction and cart side; null = the merchant's (Organization → Localization).
   text_direction: "auto" | "ltr" | "rtl" | null;
   cart_side: "left" | "right" | null;
+  // erp-core-go migrations/072: the till shows its own on-screen keyboard.
+  virtual_keyboard?: boolean;
 };
 
 const DIRECTION_LABEL: Record<string, string> = { auto: "Automatic", ltr: "Left to right", rtl: "Right to left" };
@@ -44,6 +46,7 @@ function layoutSummary(t: Terminal): string | null {
   const parts = [
     t.text_direction ? tr(DIRECTION_LABEL[t.text_direction]) : null,
     t.cart_side ? (t.cart_side === "left" ? tr("Cart on the left") : tr("Cart on the right")) : null,
+    t.virtual_keyboard ? tr("On-screen keyboard") : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : null;
 }
@@ -51,11 +54,12 @@ function layoutSummary(t: Terminal): string | null {
 function LayoutDialog({ terminal, onClose, onSaved }: { terminal: Terminal; onClose: () => void; onSaved: () => void }) {
   const [direction, setDirection] = useState(terminal.text_direction ?? "");
   const [cartSide, setCartSide] = useState(terminal.cart_side ?? "");
+  const [keyboard, setKeyboard] = useState(terminal.virtual_keyboard ?? false);
   const [saving, setSaving] = useState(false);
   async function save() {
     setSaving(true);
     try {
-      await api.patch(`/api/v1/pos-terminals/${terminal.terminal_id}`, { text_direction: direction, cart_side: cartSide });
+      await api.patch(`/api/v1/pos-terminals/${terminal.terminal_id}`, { text_direction: direction, cart_side: cartSide, virtual_keyboard: keyboard });
       toast.success(tr("Layout saved for {0}", [terminal.name]));
       onSaved();
       onClose();
@@ -100,6 +104,15 @@ function LayoutDialog({ terminal, onClose, onSaved }: { terminal: Terminal; onCl
             <option value="right">{tr("Cart on the right")}</option>
             <option value="left">{tr("Cart on the left")}</option>
           </select>
+        </label>
+        <label className="flex items-start gap-3 text-sm">
+          <input type="checkbox" className="mt-1" checked={keyboard} onChange={(e) => setKeyboard(e.target.checked)} />
+          <span>
+            <span className="font-medium">{tr("On-screen keyboard")}</span>
+            <span className="block text-muted-foreground">
+              {tr("The till shows its own keyboard whenever a text field is selected, for a touch screen with no keyboard. It takes effect the next time the till loads its settings (sign-in or shift).")}
+            </span>
+          </span>
         </label>
       </div>
     </Modal>

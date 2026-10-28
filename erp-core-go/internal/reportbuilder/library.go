@@ -122,6 +122,17 @@ func asc(i ...int) []Sort {
 
 func desc(c int) []Sort { return []Sort{{Column: c, Desc: true}} }
 
+// named gives columns their own headings, in order ("" keeps the
+// generated one).
+func named(cs []Column, labels ...string) []Column {
+	for i, l := range labels {
+		if i < len(cs) && l != "" {
+			cs[i].Label = l
+		}
+	}
+	return cs
+}
+
 // Library is the catalogue. A report's spec is fixed here; the person
 // running it adds dates and filters.
 var Library = []LibraryReport{
@@ -222,6 +233,45 @@ var Library = []LibraryReport{
 		Spec: Spec{Dataset: "purchases", Columns: cols("supplier", "bill_number", "date", "due_date", "overdue", "grand_total", "outstanding"), Sort: asc(3),
 			Filters: []Filter{{Field: "status", Op: "ne", Value: "paid"}}},
 		DefaultPeriod: "this_fy", QuickFilters: []string{"branch", "supplier"}},
+	// Outstanding, party-wise (§3.77): as of now, no period.
+	{Key: "credit_outstanding_by_customer", Group: "Outstanding", Name: "Credit outstanding by customer",
+		Description: "What each customer still owes on credit sales, with their credit limit and how overdue it is (not yet due, 0–30, 31–60, 61–90, over 90 days).",
+		Spec: Spec{Dataset: "receivables", Columns: named(cols("customer", "phone", "credit_limit:max", "invoice:count", "outstanding:sum",
+			"not_due:sum", "days_0_30:sum", "days_31_60:sum", "days_61_90:sum", "days_90_plus:sum"),
+			"", "", "Credit limit", "Open sales", "Outstanding", "Not yet due", "0–30 days", "31–60 days", "61–90 days", "Over 90 days"), Sort: desc(4)},
+		QuickFilters: []string{"branch", "customer", "customer_type", "overdue"}},
+	{Key: "credit_outstanding_invoices", Group: "Outstanding", Name: "Open credit sales",
+		Description: "Every credit sale not yet fully paid: customer, sale, due date, days overdue and what is still owed.",
+		Spec: Spec{Dataset: "receivables", Columns: cols("customer", "phone", "invoice", "date", "due_date", "days_overdue", "credit_amount", "credit_paid", "outstanding"),
+			Sort: []Sort{{Column: 0}, {Column: 4}}},
+		QuickFilters: []string{"branch", "customer", "overdue"}},
+	{Key: "payables_outstanding_by_supplier", Group: "Outstanding", Name: "Payables outstanding by supplier",
+		Description: "What is still owed to each supplier, and how overdue it is (not yet due, 0–30, 31–60, 61–90, over 90 days).",
+		Spec: Spec{Dataset: "payables", Columns: named(cols("supplier", "supplier_gstin", "bill_number:count", "outstanding:sum",
+			"not_due:sum", "days_0_30:sum", "days_31_60:sum", "days_61_90:sum", "days_90_plus:sum"),
+			"", "", "Open bills", "Outstanding", "Not yet due", "0–30 days", "31–60 days", "61–90 days", "Over 90 days"), Sort: desc(3)},
+		QuickFilters: []string{"branch", "supplier", "overdue"}},
+	// Expenses (§3.78): recorded and imported expenses, cancelled ones left out.
+	{Key: "expense_register", Group: "Expenses", Name: "Expense register",
+		Description: "Every expense with its head, branch, vendor, who paid it and whether it is still unpaid.",
+		Spec: Spec{Dataset: "expenses", Columns: cols("date", "expense_number", "head", "branch", "description", "vendor", "reference", "paid_by", "partner", "payment_status", "amount"), Sort: asc(0, 1),
+			Filters: []Filter{{Field: "status", Op: "eq", Value: "posted"}}},
+		DefaultPeriod: "this_month", QuickFilters: []string{"branch", "head", "paid_by", "partner", "payment_status"}},
+	{Key: "expense_head_monthly", Group: "Expenses", Name: "Expenses by head and month",
+		Description: "What was spent on each head, month by month.",
+		Spec: Spec{Dataset: "expenses", Columns: named(cols("month", "head", "expense_number:count", "amount:sum"), "", "", "Expenses", "Amount"), Sort: asc(0, 1),
+			Filters: []Filter{{Field: "status", Op: "eq", Value: "posted"}}},
+		DefaultPeriod: "this_fy", QuickFilters: []string{"branch", "head", "account_type"}},
+	{Key: "expense_by_branch", Group: "Expenses", Name: "Expenses by branch",
+		Description: "Each branch's expenses: total, paid, still unpaid and paid by partners.",
+		Spec: Spec{Dataset: "expenses", Columns: named(cols("branch", "expense_number:count", "amount:sum", "unpaid_amount:sum", "partner_amount:sum"), "", "Expenses", "Amount", "Unpaid", "Paid by partners"), Sort: desc(2),
+			Filters: []Filter{{Field: "status", Op: "eq", Value: "posted"}}},
+		DefaultPeriod: "this_fy", QuickFilters: []string{"head", "account_type"}},
+	{Key: "expense_unpaid_partner", Group: "Expenses", Name: "Unpaid and partner-paid expenses",
+		Description: "Expenses still to be paid, and expenses a partner paid from their own money (which went to their capital).",
+		Spec: Spec{Dataset: "expenses", Columns: cols("date", "expense_number", "head", "branch", "vendor", "payment_status", "partner", "unpaid_amount", "partner_amount"), Sort: asc(0, 1),
+			Filters: []Filter{{Field: "status", Op: "eq", Value: "posted"}, {Field: "paid_by", Op: "in", Value: []any{"Unpaid", "Partner"}}}},
+		DefaultPeriod: "this_fy", QuickFilters: []string{"branch", "partner", "payment_status"}},
 	{Key: "purchase_items", Group: "Purchases", Name: "Items purchased", Description: "Every line received on a completed GRN, at its cost.",
 		Spec:          Spec{Dataset: "purchase_items", Columns: cols("date", "grn_number", "supplier", "product", "sku", "quantity", "unit_cost", "landed_unit_cost", "landed_total"), Sort: asc(0, 1)},
 		DefaultPeriod: "this_month", QuickFilters: []string{"branch", "supplier", "category", "product"}},

@@ -11,9 +11,15 @@ import { api } from "@/lib/api-client";
 import { Customer, Supplier } from "@/lib/types";
 import { SearchSelect, SearchOption } from "@/components/data/search-select";
 
-export type PartyType = "customer" | "supplier" | "employee" | "bank_account";
+export type PartyType = "customer" | "supplier" | "employee" | "bank_account" | "partner";
 
-export const PARTY_LABEL: Record<PartyType, string> = { customer: "Customer", supplier: "Supplier", employee: "Employee", bank_account: "Bank account" };
+export const PARTY_LABEL: Record<PartyType, string> = {
+  customer: "Customer",
+  supplier: "Supplier",
+  employee: "Employee",
+  bank_account: "Bank account",
+  partner: "Partner", // migrations/074
+};
 
 export function PartyPicker({
   type,
@@ -68,7 +74,13 @@ export function PartyPicker({
       selectedLabel={initialLabel ?? undefined}
       placeholder={`Choose ${type === "employee" ? "an employee" : `a ${PARTY_LABEL[type].toLowerCase()}`}`}
       searchPlaceholder={
-        { customer: "Name, phone or GSTIN", supplier: "Name or GSTIN", employee: "Name or employee code", bank_account: "Bank, name or account number" }[type]
+        {
+          customer: "Name, phone or GSTIN",
+          supplier: "Name or GSTIN",
+          employee: "Name or employee code",
+          bank_account: "Bank, name or account number",
+          partner: "Name or phone",
+        }[type]
       }
       ariaLabel={ariaLabel}
     />

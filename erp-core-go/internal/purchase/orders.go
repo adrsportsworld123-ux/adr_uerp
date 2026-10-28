@@ -69,20 +69,24 @@ type poGRN struct {
 }
 
 type poResponse struct {
-	POID         string       `json:"po_id"`
-	PONumber     string       `json:"po_number"`
-	Status       string       `json:"status"`
-	BranchID     string       `json:"branch_id"`
-	SupplierID   string       `json:"supplier_id"`
-	SupplierName string       `json:"supplier_name"`
-	OrderDate    string       `json:"order_date"`
-	ExpectedDate *string      `json:"expected_date"`
-	Subtotal     string       `json:"subtotal"`
-	Notes        string       `json:"notes"`
-	CloseReason  string       `json:"close_reason"`
-	CreatedAt    string       `json:"created_at"`
-	Lines        []poLineResp `json:"lines"`
-	GRNs         []poGRN      `json:"grns"`
+	POID         string  `json:"po_id"`
+	PONumber     string  `json:"po_number"`
+	Status       string  `json:"status"`
+	BranchID     string  `json:"branch_id"`
+	SupplierID   string  `json:"supplier_id"`
+	SupplierName string  `json:"supplier_name"`
+	OrderDate    string  `json:"order_date"`
+	ExpectedDate *string `json:"expected_date"`
+	Subtotal     string  `json:"subtotal"`
+	Notes        string  `json:"notes"`
+	CloseReason  string  `json:"close_reason"`
+	CreatedAt    string  `json:"created_at"`
+	// FundedByPartnerID: the partner putting up the money for this order
+	// (migrations/074); its bills default to "paid by" that partner.
+	FundedByPartnerID *string      `json:"funded_by_partner_id"`
+	FundedByPartner   *string      `json:"funded_by_partner"`
+	Lines             []poLineResp `json:"lines"`
+	GRNs              []poGRN      `json:"grns"`
 	// Unplanned: items received against the PO that weren't ordered.
 	Unplanned []poUnplanned `json:"unplanned"`
 }
@@ -161,6 +165,8 @@ type createPORequest struct {
 	ExpectedDate string          `json:"expected_date"` // YYYY-MM-DD, optional
 	Notes        string          `json:"notes"`
 	Lines        []poLineRequest `json:"lines"`
+	// FundedByPartnerID: optional (migrations/074).
+	FundedByPartnerID string `json:"funded_by_partner_id"`
 }
 
 func (h *Handler) CreatePurchaseOrder(w http.ResponseWriter, r *http.Request) {
@@ -198,13 +204,22 @@ func (h *Handler) CreatePurchaseOrder(w http.ResponseWriter, r *http.Request) {
 		if err := tx.QueryRow(ctx, `SELECT status FROM suppliers WHERE id = $1`, req.SupplierID).Scan(&supplierStatus); err != nil {
 			return err
 		}
+		if req.FundedByPartnerID != "" {
+			var ok bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM partners WHERE id::text = $1 AND status = 'active')`, req.FundedByPartnerID).Scan(&ok); err != nil {
+				return err
+			}
+			if !ok {
+				return pgx.ErrNoRows // 404 "…not found"
+			}
+		}
 		var poID string
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO purchase_orders (merchant_id, branch_id, supplier_id, po_number, expected_date, notes, created_by, order_date)
+			INSERT INTO purchase_orders (merchant_id, branch_id, supplier_id, po_number, expected_date, notes, created_by, order_date, funded_by_partner_id)
 			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, NULLIF($4,'')::date, NULLIF($5,''), $6,
-			        (now() AT TIME ZONE app_merchant_tz())::date)
+			        (now() AT TIME ZONE app_merchant_tz())::date, NULLIF($7,'')::uuid)
 			RETURNING id`,
-			req.BranchID, req.SupplierID, poNumber, req.ExpectedDate, req.Notes, claims.UserID,
+			req.BranchID, req.SupplierID, poNumber, req.ExpectedDate, req.Notes, claims.UserID, req.FundedByPartnerID,
 		).Scan(&poID); err != nil {
 			return err
 		}
@@ -335,12 +350,14 @@ func (h *Handler) GetPurchaseOrder(w http.ResponseWriter, r *http.Request) {
 func loadPO(ctx context.Context, tx pgx.Tx, poID string, resp *poResponse) error {
 	if err := tx.QueryRow(ctx, `
 		SELECT po.id, po.po_number, po.status, po.branch_id, po.supplier_id, s.name, po.order_date::text, po.expected_date::text,
-		       po.subtotal::text, COALESCE(po.notes, ''), COALESCE(po.close_reason, ''), po.created_at::text
+		       po.subtotal::text, COALESCE(po.notes, ''), COALESCE(po.close_reason, ''), po.created_at::text,
+		       po.funded_by_partner_id::text, (SELECT pa.name FROM partners pa WHERE pa.id = po.funded_by_partner_id)
 		FROM purchase_orders po
 		JOIN suppliers s ON s.id = po.supplier_id
 		WHERE po.id::text = $1`, poID,
 	).Scan(&resp.POID, &resp.PONumber, &resp.Status, &resp.BranchID, &resp.SupplierID, &resp.SupplierName, &resp.OrderDate,
-		&resp.ExpectedDate, &resp.Subtotal, &resp.Notes, &resp.CloseReason, &resp.CreatedAt); err != nil {
+		&resp.ExpectedDate, &resp.Subtotal, &resp.Notes, &resp.CloseReason, &resp.CreatedAt,
+		&resp.FundedByPartnerID, &resp.FundedByPartner); err != nil {
 		return err
 	}
 
@@ -485,6 +502,47 @@ func (h *Handler) DeletePurchaseOrderLine(w http.ResponseWriter, r *http.Request
 		return loadPO(ctx, tx, poID, &resp)
 	})
 	respondPO(w, err, http.StatusOK, &resp, "remove purchase order line")
+}
+
+// SetFunding: PUT /purchase/orders/{id}/funding {partner_id | ""} (open
+// to the same users as the rest of a PO's routes) — which partner is funding the
+// order (migrations/074), at any stage; "" clears it. Nothing is posted:
+// the money moves when a bill is paid "by partner".
+func (h *Handler) SetFunding(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	var req struct {
+		PartnerID string `json:"partner_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
+		return
+	}
+	poID := chi.URLParam(r, "id")
+	var resp poResponse
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := lockPO(ctx, tx, poID); err != nil {
+			return err
+		}
+		if req.PartnerID != "" {
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM partners WHERE id::text = $1 AND status = 'active')`, req.PartnerID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return pgx.ErrNoRows
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE purchase_orders SET funded_by_partner_id = NULLIF($2,'')::uuid, updated_at = now() WHERE id::text = $1`,
+			poID, req.PartnerID); err != nil {
+			return err
+		}
+		return loadPO(ctx, tx, poID, &resp)
+	})
+	respondPO(w, err, http.StatusOK, &resp, "set who funds the purchase order")
 }
 
 // ---------------------------------------------------------------------

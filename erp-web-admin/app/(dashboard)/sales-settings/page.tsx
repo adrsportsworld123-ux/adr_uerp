@@ -30,6 +30,8 @@ type SalesSettings = {
   open_price_discounts?: boolean;
   /** migrations/063: the POS grid lists open-price items first (the default for every branch). */
   open_price_first?: boolean;
+  /** migrations/071: which price a POS line gets (the default for every branch). */
+  price_benefit?: PriceBenefit;
   branches?: {
     branch_id: string;
     branch_name: string;
@@ -37,7 +39,15 @@ type SalesSettings = {
     effective_open_price_discounts: boolean;
     open_price_first?: boolean | null;
     effective_open_price_first?: boolean;
+    price_benefit?: PriceBenefit | null;
+    effective_price_benefit?: PriceBenefit;
   }[];
+};
+type PriceBenefit = "standard" | "customer" | "shop";
+const BENEFIT_LABEL: Record<PriceBenefit, string> = {
+  standard: "As today (price rule, else markup, else selling price)",
+  customer: "Customer benefit (the lowest price)",
+  shop: "Shop benefit (the highest price)",
 };
 /** The most a merchant may allow (erp-core-go sales.MaxRoundOff). */
 const MAX_ROUND_OFF = 5;
@@ -55,6 +65,7 @@ export default function SalesSettingsPage() {
   const [roundOffAuto, setRoundOffAuto] = useState(false);
   const [openPriceDiscounts, setOpenPriceDiscounts] = useState(true);
   const [openPriceFirst, setOpenPriceFirst] = useState(false);
+  const [priceBenefit, setPriceBenefit] = useState<PriceBenefit>("standard");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,6 +83,7 @@ export default function SalesSettingsPage() {
         setRoundOffAuto(s.round_off_auto);
         setOpenPriceDiscounts(s.open_price_discounts ?? true);
         setOpenPriceFirst(s.open_price_first ?? false);
+        setPriceBenefit(s.price_benefit ?? "standard");
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : "Could not load the sales policy"));
   }, []);
@@ -88,6 +100,7 @@ export default function SalesSettingsPage() {
     round_off_auto: roundOff && roundOffAuto,
     open_price_discounts: openPriceDiscounts,
     open_price_first: openPriceFirst,
+    price_benefit: priceBenefit,
   };
   const dirty =
     saved != null &&
@@ -97,10 +110,15 @@ export default function SalesSettingsPage() {
       Number(saved.round_off_max) !== next.round_off_max ||
       saved.round_off_auto !== next.round_off_auto ||
       (saved.open_price_discounts ?? true) !== next.open_price_discounts ||
-      (saved.open_price_first ?? false) !== next.open_price_first);
+      (saved.open_price_first ?? false) !== next.open_price_first ||
+      (saved.price_benefit ?? "standard") !== next.price_benefit);
 
   // A branch's own rule for open-price discounts: saved at once.
-  async function setBranchRule(branchId: string, value: boolean | null, field: "open_price_discounts" | "open_price_first" = "open_price_discounts") {
+  async function setBranchRule(
+    branchId: string,
+    value: boolean | string | null,
+    field: "open_price_discounts" | "open_price_first" | "price_benefit" = "open_price_discounts",
+  ) {
     try {
       const s = await api.put<SalesSettings>(`/api/v1/sales/settings/branches/${branchId}`, { [field]: value });
       setSaved(s);
@@ -319,6 +337,52 @@ export default function SalesSettingsPage() {
                       </select>
                       <span className="text-xs text-muted-foreground" data-testid="branch-grid-order">
                         {b.effective_open_price_first ? "open-price first" : "usual order"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </fieldset>
+
+            <fieldset className="space-y-3" data-testid="price-benefit">
+              <legend className="mb-1 text-sm font-semibold">Customer price</legend>
+              <p className="text-sm text-muted-foreground">
+                Which price the till charges. Customer benefit and Shop benefit compare the MRP, the selling price, the markup price (Pricing › Markup
+                Rules) and a price rule&apos;s price, and take the lowest or the highest. A customer&apos;s wholesale price list always wins; promotions and
+                coupons still apply on top. Quotations are not affected.
+              </p>
+              <div className="flex flex-col gap-1.5 sm:max-w-md">
+                <label htmlFor="priceBenefit" className="text-sm font-medium">
+                  Default for every branch
+                </label>
+                <select id="priceBenefit" value={priceBenefit} onChange={(e) => setPriceBenefit(e.target.value as PriceBenefit)} className="h-9 rounded-lg border bg-card px-2 text-sm">
+                  {(Object.keys(BENEFIT_LABEL) as PriceBenefit[]).map((k) => (
+                    <option key={k} value={k}>
+                      {BENEFIT_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {(saved.branches ?? []).length > 0 && (
+                <ul className="space-y-2" aria-label="Customer price by branch">
+                  {(saved.branches ?? []).map((b) => (
+                    <li key={b.branch_id} className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="min-w-40 font-medium">{b.branch_name}</span>
+                      <select
+                        aria-label={`Customer price at ${b.branch_name}`}
+                        value={b.price_benefit ?? ""}
+                        onChange={(e) => setBranchRule(b.branch_id, e.target.value === "" ? null : e.target.value, "price_benefit")}
+                        className="h-9 rounded-lg border bg-card px-2 text-sm"
+                      >
+                        <option value="">Same as the default</option>
+                        {(Object.keys(BENEFIT_LABEL) as PriceBenefit[]).map((k) => (
+                          <option key={k} value={k}>
+                            {BENEFIT_LABEL[k]}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-xs text-muted-foreground" data-testid="branch-price-benefit">
+                        {BENEFIT_LABEL[b.effective_price_benefit ?? "standard"].split(" (")[0]}
                       </span>
                     </li>
                   ))}

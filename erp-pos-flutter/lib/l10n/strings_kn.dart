@@ -538,4 +538,10 @@ const Map<String, String> stringsKn = {
   'Changed mind': 'ಮನಸ್ಸು ಬದಲಾಯಿತು',
   'Damaged in transit': 'ಸಾಗಣೆಯಲ್ಲಿ ಹಾನಿಯಾಗಿದೆ',
   'Other': 'ಇತರೆ',
+  'Show keyboard': 'ಕೀಬೋರ್ಡ್ ತೋರಿಸು',
+  'Hide keyboard': 'ಕೀಬೋರ್ಡ್ ಮರೆಮಾಡು',
+  'Shift': 'ಶಿಫ್ಟ್',
+  'Backspace': 'ಬ್ಯಾಕ್‌ಸ್ಪೇಸ್',
+  'Space': 'ಸ್ಪೇಸ್',
+  'Enter': 'ಎಂಟರ್',
 };

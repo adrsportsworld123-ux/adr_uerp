@@ -143,6 +143,10 @@ The merchant's business clock is `app_merchant_tz()` in SQL and `locale.Location
 
 Use `accounting.PaymentLedgerCode(ctx, tx, method, bankAccountID)` / `BankLedgerCode` for any new payment that can go through a bank account: "" stays on Bank (1002). Cheques are written through `banking.Issue`, and receivable payments through `customers.ApplyReceivablePayment` (§3.73). Audit `Action` must be `create`/`update`/`delete` (a CHECK on `audit_logs`); put the detail in `Reason`.
 
+## Expenses and partners (2026-10-25)
+
+An expense posts through `expenses.Create` (Dr the head's account, Cr cash/bank/partner/2200). Money a partner pays for the shop credits their capital through `partners.Capital` + `partners.Record`; never post to a `3000-NN` account directly. A partner's profit share is `accounting.NetProfit` × ratio, worked out, not posted (§3.77).
+
 ## Repo layout
 
 ```

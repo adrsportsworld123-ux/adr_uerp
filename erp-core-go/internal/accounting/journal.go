@@ -31,7 +31,7 @@ type JournalLine struct {
 	AccountCode string
 	Debit       float64
 	Credit      float64
-	PartyType   string // "" | "customer" | "supplier" | "employee" | "bank_account"
+	PartyType   string // "" | "customer" | "supplier" | "employee" | "bank_account" | "partner"
 	PartyID     string // "" if this line isn't tied to a specific party
 }
 
@@ -59,6 +59,8 @@ const (
 	AccountEmployeeLoans      = "1150" // employee loans and salary advances (migrations/067)
 	AccountSalariesPayable    = "2150" // payroll recoveries net off against it (migrations/067)
 	AccountInterestIncome     = "4050" // interest on employee loans (migrations/067)
+	AccountExpensesPayable    = "2200" // an expense recorded unpaid (migrations/074)
+	AccountPartnersCapital    = "3000" // the parent of each partner's 3000-NN capital account (migrations/074)
 )
 
 // AccountCodeForPaymentMethod maps a sales/bill payment method to the

@@ -26,6 +26,7 @@ import { PO_TONE, StatusChip } from "@/components/data/status-chip";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 import { DeleteDocumentButton } from "@/components/purchase/delete-document-dialog";
+import { PartnerSelect, usePartners } from "@/components/partners/use-partners";
 
 import { currencySymbol } from "@/lib/currency";
 type ReceiveRow = { quantity: string; unitCost: string; batchNo: string; expiryDate: string };
@@ -38,6 +39,7 @@ export default function PurchaseOrderPage() {
   const [busy, setBusy] = useState(false);
   const [receiving, setReceiving] = useState(false);
   const [ending, setEnding] = useState<"cancel" | "close" | null>(null);
+  const partners = usePartners();
 
   const load = useCallback(() => {
     api
@@ -140,6 +142,22 @@ export default function PurchaseOrderPage() {
           <Stat label="Order value (before GST)" value={rupees(po.subtotal)} strong testId="po-subtotal" />
         </div>
         {po.notes && <p className="text-sm text-muted-foreground">{po.notes}</p>}
+        {(partners.length > 0 || po.funded_by_partner_id) && (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <label htmlFor="po-funded-by" className="font-medium">
+              Funded by
+            </label>
+            <PartnerSelect
+              id="po-funded-by"
+              partners={partners}
+              value={po.funded_by_partner_id ?? ""}
+              onChange={(v) => run(() => api.put<PurchaseOrder>(`${base}/funding`, { partner_id: v }), v ? "Funding partner saved" : "Funded by the shop")}
+              noneLabel="The shop"
+              className="w-56"
+            />
+            <span className="text-xs text-muted-foreground">Its bills are paid by this partner unless you choose otherwise; it adds to their capital.</span>
+          </div>
+        )}
         {po.close_reason && (
           <p className="text-sm">
             <span className="font-medium">{po.status === "closed" ? "Closed short" : "Cancelled"}:</span> {po.close_reason}

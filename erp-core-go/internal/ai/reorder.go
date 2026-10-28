@@ -44,6 +44,13 @@ type reorderSuggestion struct {
 	DaysOfStockRemaining *string `json:"days_of_stock_remaining"` // null = velocity is 0, can't estimate a runway
 	SuggestedReorderQty  string  `json:"suggested_reorder_qty"`
 	Reason               string  `json:"reason"` // "below reorder point" | "will run out before lead time" | "both"
+	// For turning suggestions into purchase orders (§3.77): who supplied it
+	// last (the latest completed GRN line for it, any branch) and at what
+	// cost, and its current cost price. Null when it was never received.
+	LastSupplierID   *string `json:"last_supplier_id"`
+	LastSupplierName *string `json:"last_supplier_name"`
+	LastUnitCost     *string `json:"last_unit_cost"`
+	CostPrice        string  `json:"cost_price"`
 }
 
 // GetReorderSuggestions: GET /ai/reorder-suggestions?branch_id=&velocity_window_days=&lead_time_days=
@@ -104,12 +111,22 @@ func (h *Handler) GetReorderSuggestions(w http.ResponseWriter, r *http.Request) 
 			)
 			SELECT sl.branch_id::text, sl.variant_id::text, p.name, pv.sku,
 			       sl.on_hand::text, sl.reserved::text, (sl.on_hand - sl.reserved)::text, sl.reorder_point::text,
-			       COALESCE(v.total_qty, 0)::float8 / params.window_days::float8
+			       COALESCE(v.total_qty, 0)::float8 / params.window_days::float8,
+			       last.supplier_id::text, last.supplier_name, last.unit_cost::text, pv.cost_price::text
 			FROM stock_levels sl
 			CROSS JOIN params
 			JOIN product_variants pv ON pv.id = sl.variant_id
 			JOIN products p ON p.id = pv.product_id
 			LEFT JOIN velocity v ON v.branch_id = sl.branch_id AND v.variant_id = sl.variant_id
+			LEFT JOIN LATERAL (
+				SELECT g.supplier_id, s.name AS supplier_name, gl.unit_cost
+				FROM goods_receipt_lines gl
+				JOIN goods_receipt_notes g ON g.id = gl.grn_id
+				LEFT JOIN suppliers s ON s.id = g.supplier_id
+				WHERE gl.variant_id = sl.variant_id AND g.status = 'completed'
+				ORDER BY g.completed_at DESC NULLS LAST
+				LIMIT 1
+			) last ON true
 			WHERE (params.branch_filter IS NULL OR sl.branch_id = params.branch_filter)
 			ORDER BY p.name`, windowDays, branchID)
 		if err != nil {
@@ -123,7 +140,8 @@ func (h *Handler) GetReorderSuggestions(w http.ResponseWriter, r *http.Request) 
 			var velocity float64
 			var onHandStr, reservedStr, availableStr, reorderPointStr string
 			if err := rows.Scan(&s.BranchID, &s.VariantID, &s.ProductName, &s.SKU,
-				&onHandStr, &reservedStr, &availableStr, &reorderPointStr, &velocity); err != nil {
+				&onHandStr, &reservedStr, &availableStr, &reorderPointStr, &velocity,
+				&s.LastSupplierID, &s.LastSupplierName, &s.LastUnitCost, &s.CostPrice); err != nil {
 				return err
 			}
 			available, _ = strconv.ParseFloat(availableStr, 64)

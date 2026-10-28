@@ -13,6 +13,7 @@ import 'screens/login_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/pos_screen.dart';
 import 'ui/theme.dart';
+import 'ui/virtual_keyboard.dart';
 
 /// Points at erp-core-go running via `docker compose up` per that repo's
 /// README. Android emulators reach the host machine at 10.0.2.2, not
@@ -118,7 +119,9 @@ class _PosAppState extends State<PosApp> {
   // The till's language and text direction (migrations/064): Material's own
   // texts (date pickers, tooltips) follow [PosLocale.locale], and the
   // builder's Directionality applies the terminal's direction, which may
-  // differ from the language's (Arabic left-to-right, say).
+  // differ from the language's (Arabic left-to-right, say). The builder also
+  // hosts the till's on-screen keyboard (migrations/072), below every screen
+  // and dialog; it shows only when the terminal has it switched on.
   MaterialApp _app(Widget home, {bool paired = false}) => MaterialApp(
         title: 'ERP POS',
         navigatorKey: paired ? kNavigatorKey : null,
@@ -128,7 +131,10 @@ class _PosAppState extends State<PosApp> {
         locale: PosLocale.locale,
         supportedLocales: [for (final l in PosLocale.supported) Locale(l)],
         localizationsDelegates: GlobalMaterialLocalizations.delegates,
-        builder: (context, child) => Directionality(textDirection: PosLocale.direction, child: child ?? const SizedBox()),
+        builder: (context, child) => Directionality(
+          textDirection: PosLocale.direction,
+          child: VirtualKeyboardHost(child: child ?? const SizedBox()),
+        ),
         home: home,
       );
 

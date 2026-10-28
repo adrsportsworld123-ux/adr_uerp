@@ -538,4 +538,10 @@ const Map<String, String> stringsMl = {
   'Changed mind': 'മനസ്സ് മാറി',
   'Damaged in transit': 'യാത്രയിൽ കേടായി',
   'Other': 'മറ്റുള്ളവ',
+  'Show keyboard': 'കീബോർഡ് കാണിക്കുക',
+  'Hide keyboard': 'കീബോർഡ് മറയ്ക്കുക',
+  'Shift': 'ഷിഫ്റ്റ്',
+  'Backspace': 'ബാക്ക്‌സ്‌പേസ്',
+  'Space': 'സ്‌പേസ്',
+  'Enter': 'എന്റർ',
 };

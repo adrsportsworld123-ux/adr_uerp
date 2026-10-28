@@ -12,13 +12,13 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
 import { Branch, ReorderSuggestion, Recommendation } from "@/lib/types";
+import { ReorderToPO } from "@/components/purchase/reorder-to-po";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { rupees } from "@/lib/format";
@@ -129,39 +129,7 @@ export default function AIInsightsPage() {
             </Button>
           </div>
 
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Product</TableHead>
-                <TableHead>Available</TableHead>
-                <TableHead>Reorder pt.</TableHead>
-                <TableHead>Daily velocity</TableHead>
-                <TableHead>Days of stock left</TableHead>
-                <TableHead>Suggested qty</TableHead>
-                <TableHead>Reason</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {suggestions.map((s) => (
-                <TableRow key={`${s.branch_id}-${s.variant_id}`}>
-                  <TableCell>{s.product_name} <span className="text-xs text-muted-foreground">({s.sku})</span></TableCell>
-                  <TableCell>{s.available}</TableCell>
-                  <TableCell>{s.reorder_point}</TableCell>
-                  <TableCell>{s.daily_velocity}</TableCell>
-                  <TableCell>{s.days_of_stock_remaining ?? "—"}</TableCell>
-                  <TableCell className="font-medium">{s.suggested_reorder_qty}</TableCell>
-                  <TableCell><Badge variant="destructive">{s.reason}</Badge></TableCell>
-                </TableRow>
-              ))}
-              {suggestions.length === 0 && !loadingSuggestions && (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">
-                    Nothing is at risk of stocking out right now
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <ReorderToPO suggestions={suggestions} branches={branches} loading={loadingSuggestions} />
         </CardContent>
       </Card>
 

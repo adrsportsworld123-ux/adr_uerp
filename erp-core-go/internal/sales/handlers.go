@@ -452,7 +452,7 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 	// weekend special, seasonal) may set the price, recorded on the line
 	// as price_rule_id. pricing.ResolveLinePriceAt owns that precedence.
 	var sellingPrice float64
-	var priceRuleID *string
+	var priceRuleID, markupRuleID, priceBasis *string
 	var openPrice bool
 	var description string
 	var approvedBy string
@@ -467,6 +467,10 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 		}
 		sellingPrice = lp.UnitPrice
 		priceRuleID = lp.PriceRuleID
+		markupRuleID = lp.MarkupRuleID
+		if lp.Basis != "" {
+			priceBasis = &lp.Basis
+		}
 	}
 
 	if err := reserveStock(ctx, tx, branchID, variantID, quantity); err != nil {
@@ -517,10 +521,12 @@ func addLineToCart(ctx context.Context, tx pgx.Tx, orderID, variantID string, qu
 
 	var lineID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, price_rule_id, open_price, price_approved_by, description)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid, NULLIF($11, ''))
+		INSERT INTO sales_order_lines (id, sales_order_id, variant_id, quantity, unit_price, discount_amount, tax_amount, line_total, price_includes_tax, price_rule_id, open_price, price_approved_by, description,
+		                               markup_rule_id, price_basis)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, $5, $6, $7, $8, $9, NULLIF($10, '')::uuid, NULLIF($11, ''), $12, $13)
 		RETURNING id`,
-		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax, priceRuleID, openPrice, approvedBy, description).Scan(&lineID); err != nil {
+		orderID, variantID, quantity, sellingPrice, calc.Tax, calc.Total, priceIncludesTax, priceRuleID, openPrice, approvedBy, description,
+		markupRuleID, priceBasis).Scan(&lineID); err != nil {
 		return resp, err
 	}
 	if trackBatch {

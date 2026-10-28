@@ -83,6 +83,17 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 
 **Volume tiers and Buy X Get Y (2026-10-21, erp-core-go §3.76).** A volume tier's "Discount as" is a percentage, ₹ off each piece or ₹ off the lot. "Buy X get Y — different products" picks the products bought and rewarded with `MultiProductPick`. The old "Buy X get Y (BOGO)" is the same-product type, unchanged. Tests: `e2e/promotion-tiers-bxgy.spec.ts`.
 
+**Round 12 (2026-10-25, erp-core-go §3.77).**
+- **Pricing:** Pricing › Markup Rules (cost + % or ₹). Sales Policy's "Customer price" (as today / customer benefit / shop benefit) has a merchant default and per-branch overrides (`price_benefit`).
+- **Reports:** the Report Library's Outstanding group (credit outstanding by customer, open credit sales, payables by supplier). `GROUP_ORDER` lists the groups; a group it doesn't know still shows at the end.
+- **Terminals:** POS Terminals › Screen layout › On-screen keyboard.
+- **Approvals:** Overview › Approvals: Waiting (approve or reject through the item's own endpoint) and Given (approvals by PIN). Needs `approvals.view`.
+- **Reorder:** AI Insights' reorder table creates draft POs per supplier (`components/purchase/reorder-to-po.tsx`).
+- **Expenses:** Finance › Expenses (list / import a CSV / heads).
+- **Partners:** Finance › Partners (summary, pay-in/out, `/partners/[id]` statement). `components/partners/use-partners.tsx` (`usePartners`, `PartnerSelect`) is the one partner picker. The bill payment method "partner" and PO "Funded by" show only when partners exist.
+- **Parties:** `PARTY_LABEL` has `partner`.
+- **Tests:** `e2e/round12.spec.ts`.
+
 **Reporting round (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60–§3.63):** the sales dashboard (`/dashboard`, recharts; widgets per role under `/dashboard/settings`), X & Z reports (`/reports/x-z`), the Report Library (`/reports/library`) and Saved Reports (`/reports/saved`). `e2e/reports-round10.spec.ts` covers them. The app shell puts focus back at the top after a navigation that left nothing focused (recharts' focusable charts otherwise sent the next Tab past the end of the new page).
 
 ## Working conventions to keep

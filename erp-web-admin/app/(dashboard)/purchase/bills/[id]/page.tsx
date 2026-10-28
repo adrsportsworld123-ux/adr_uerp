@@ -17,13 +17,17 @@ import Link from "next/link";
 
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
-const METHODS = ["cash", "card", "upi", "bank_transfer", "cheque"];
+import { PartnerSelect, usePartners } from "@/components/partners/use-partners";
+
 const METHOD_LABELS: Record<string, string> = {
   cash: "Cash",
   card: "Card",
   upi: "UPI",
   bank_transfer: "Bank transfer",
   cheque: "Cheque",
+  // erp-core-go migrations/074: a partner paid the supplier from their own
+  // money; it adds to their capital. Offered only when there are partners.
+  partner: "Paid by a partner",
 };
 
 export default function BillDetailPage() {
@@ -44,6 +48,9 @@ export default function BillDetailPage() {
   const [chequeDate, setChequeDate] = useState("");
   const [accountPayee, setAccountPayee] = useState(true);
   const throughBank = (method === "bank_transfer" || method === "cheque") && accounts.length > 0;
+  const partners = usePartners();
+  const [partnerId, setPartnerId] = useState("");
+  const METHODS = ["cash", "card", "upi", "bank_transfer", "cheque", ...(partners.length > 0 ? ["partner"] : [])];
   const [submitting, setSubmitting] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
 
@@ -54,6 +61,11 @@ export default function BillDetailPage() {
         setBill(b);
         const balance = Number(b.grand_total) - Number(b.amount_paid);
         setAmount(balance > 0 ? balance.toFixed(2) : "");
+        // A partner funds this bill's purchase order: they pay it, unless changed.
+        if (b.funded_by_partner_id) {
+          setMethod("partner");
+          setPartnerId(b.funded_by_partner_id);
+        }
       })
       .catch((e) => setError(e.message));
   }, [id]);
@@ -71,6 +83,7 @@ export default function BillDetailPage() {
         amount: Number(amount),
         method,
         reference_no: referenceNo,
+        ...(method === "partner" ? { partner_id: partnerId } : {}),
         ...(throughBank && bankAccount ? { bank_account_id: bankAccount } : {}),
         ...(throughBank && bankAccount && method === "cheque"
           ? { cheque_number: chequeNumber, cheque_date: chequeDate, account_payee: accountPayee }
@@ -165,6 +178,16 @@ export default function BillDetailPage() {
                   </Select>
                 </div>
               </div>
+              {method === "partner" && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="pay-partner">Partner who paid *</Label>
+                  <PartnerSelect id="pay-partner" partners={partners} value={partnerId} onChange={setPartnerId} />
+                  <span className="text-xs text-muted-foreground">
+                    Paid from their own money: it is added to their capital, not taken from the shop&apos;s cash or bank.
+                    {bill.funded_by_partner && ` ${bill.funded_by_partner} funds this purchase order.`}
+                  </span>
+                </div>
+              )}
               {throughBank && (
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="pay-bank">From account</Label>

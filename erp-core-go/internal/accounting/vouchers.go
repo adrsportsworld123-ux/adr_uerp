@@ -187,11 +187,12 @@ const partyNameSQL = `CASE l.party_type
 	WHEN 'customer' THEN (SELECT c.name FROM customers c WHERE c.id = l.party_id)
 	WHEN 'supplier' THEN (SELECT s.name FROM suppliers s WHERE s.id = l.party_id)
 	WHEN 'employee' THEN (SELECT u.name || COALESCE(' (' || u.employee_code || ')', '') FROM users u WHERE u.id = l.party_id)
-	WHEN 'bank_account' THEN (SELECT ba.bank_name || ' ••' || right(ba.account_number, 4) FROM bank_accounts ba WHERE ba.id = l.party_id) END`
+	WHEN 'bank_account' THEN (SELECT ba.bank_name || ' ••' || right(ba.account_number, 4) FROM bank_accounts ba WHERE ba.id = l.party_id)
+	WHEN 'partner' THEN (SELECT p.name FROM partners p WHERE p.id = l.party_id) END`
 
 // PartyTypes a journal line can name (migrations/067 added employees and
-// the merchant's bank accounts).
-var PartyTypes = map[string]bool{"customer": true, "supplier": true, "employee": true, "bank_account": true}
+// the merchant's bank accounts, migrations/074 partners).
+var PartyTypes = map[string]bool{"customer": true, "supplier": true, "employee": true, "bank_account": true, "partner": true}
 
 // partyExistsSQL: $1 party type, $2 party id.
 const partyExistsSQL = `SELECT CASE $1
@@ -199,6 +200,7 @@ const partyExistsSQL = `SELECT CASE $1
 	WHEN 'supplier' THEN EXISTS (SELECT 1 FROM suppliers WHERE id::text = $2)
 	WHEN 'employee' THEN EXISTS (SELECT 1 FROM users WHERE id::text = $2 AND employee_code IS NOT NULL)
 	WHEN 'bank_account' THEN EXISTS (SELECT 1 FROM bank_accounts WHERE id::text = $2)
+	WHEN 'partner' THEN EXISTS (SELECT 1 FROM partners WHERE id::text = $2)
 	ELSE false END`
 
 // partyAccounts: the control accounts whose balance is the sum of the
@@ -1020,8 +1022,12 @@ func (h *Handler) PartySearch(w http.ResponseWriter, r *http.Request) {
 			WHERE (branch_id IS NULL OR app_branch_visible(branch_id))
 			  AND ($1 = '' OR bank_name ILIKE '%' || $1 || '%' OR account_name ILIKE '%' || $1 || '%' OR account_number LIKE '%' || $1 || '%')
 			ORDER BY status = 'active' DESC, bank_name LIMIT 50`
+	case "partner":
+		query = `SELECT id::text, name, trim_scale(share_ratio)::text || '% share' FROM partners
+			WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR phone LIKE '%' || $1 || '%')
+			ORDER BY status = 'active' DESC, name LIMIT 50`
 	default:
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "type must be employee or bank_account")
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "type must be employee, bank_account or partner")
 		return
 	}
 	type party struct {

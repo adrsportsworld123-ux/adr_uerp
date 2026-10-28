@@ -63,20 +63,22 @@ type terminalResponse struct {
 	// cart side (left | right); null = the merchant's localization.
 	TextDirection *string `json:"text_direction"`
 	CartSide      *string `json:"cart_side"`
+	// migrations/072: the till shows its own on-screen keyboard.
+	VirtualKeyboard bool `json:"virtual_keyboard"`
 }
 
 const terminalSelect = `
 	SELECT t.id, t.name, t.branch_id, b.name, b.status, t.status,
 	       COALESCE(t.device_fingerprint, '') <> '', t.paired_at::text,
 	       t.pairing_code_hash IS NOT NULL AND t.pairing_expires_at > now(),
-	       t.last_synced_at::text, t.created_at::text, t.text_direction, t.cart_side
+	       t.last_synced_at::text, t.created_at::text, t.text_direction, t.cart_side, t.virtual_keyboard
 	FROM pos_terminals t
 	JOIN branches b ON b.id = t.branch_id`
 
 func scanTerminal(row pgx.Row) (terminalResponse, error) {
 	var t terminalResponse
 	err := row.Scan(&t.TerminalID, &t.Name, &t.BranchID, &t.BranchName, &t.BranchStatus, &t.Status,
-		&t.Paired, &t.PairedAt, &t.PairingPending, &t.LastSyncedAt, &t.CreatedAt, &t.TextDirection, &t.CartSide)
+		&t.Paired, &t.PairedAt, &t.PairingPending, &t.LastSyncedAt, &t.CreatedAt, &t.TextDirection, &t.CartSide, &t.VirtualKeyboard)
 	return t, err
 }
 
@@ -192,6 +194,8 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		// "" = follow the merchant's localization (migrations/064)
 		TextDirection *string `json:"text_direction"`
 		CartSide      *string `json:"cart_side"`
+		// migrations/072: absent = unchanged
+		VirtualKeyboard *bool `json:"virtual_keyboard"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
@@ -225,9 +229,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			       pairing_code_hash = CASE WHEN $4 = 'inactive' THEN NULL ELSE pairing_code_hash END,
 			       text_direction = CASE WHEN $5::text IS NULL THEN text_direction ELSE NULLIF($5, '') END,
 			       cart_side = CASE WHEN $6::text IS NULL THEN cart_side ELSE NULLIF($6, '') END,
+			       virtual_keyboard = COALESCE($7, virtual_keyboard),
 			       updated_at = now()
 			WHERE merchant_id = $1 AND id::text = $2 AND channel = 'pos' AND app_branch_visible(branch_id)`,
-			claims.TenantID, id, req.Name, req.Status, req.TextDirection, req.CartSide)
+			claims.TenantID, id, req.Name, req.Status, req.TextDirection, req.CartSide, req.VirtualKeyboard)
 		if err != nil {
 			return err
 		}

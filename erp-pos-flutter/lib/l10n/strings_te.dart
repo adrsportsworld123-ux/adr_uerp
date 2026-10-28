@@ -538,4 +538,10 @@ const Map<String, String> stringsTe = {
   'Changed mind': 'మనసు మార్చుకున్నారు',
   'Damaged in transit': 'రవాణాలో పాడైంది',
   'Other': 'ఇతరం',
+  'Show keyboard': 'కీబోర్డ్ చూపు',
+  'Hide keyboard': 'కీబోర్డ్ దాచు',
+  'Shift': 'షిఫ్ట్',
+  'Backspace': 'బ్యాక్‌స్పేస్',
+  'Space': 'స్పేస్',
+  'Enter': 'ఎంటర్',
 };

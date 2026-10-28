@@ -54,9 +54,15 @@ function PurchaseOrdersView() {
         title="Purchase Orders"
         description="Orders placed with suppliers. Receive each delivery as a GRN against the PO; it completes once everything ordered has arrived."
         actions={
-          <Link href="/purchase/orders/new" className={buttonVariants()}>
-            <Plus /> New purchase order
-          </Link>
+          <>
+            {/* Tick the items running low and turn them into draft POs (erp-core-go §3.77). */}
+            <Link href="/ai-insights" className={buttonVariants({ variant: "outline" })}>
+              From reorder suggestions
+            </Link>
+            <Link href="/purchase/orders/new" className={buttonVariants()}>
+              <Plus /> New purchase order
+            </Link>
+          </>
         }
       />
       <DataTable<PurchaseOrderSummary>

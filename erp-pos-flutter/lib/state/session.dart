@@ -13,6 +13,7 @@ import '../local/offline_store.dart';
 import '../printing/document_saver.dart' as doc_saver;
 import '../printing/printer_service.dart';
 import '../ui/format.dart';
+import '../ui/virtual_keyboard.dart' show PosKeyboard;
 import 'device_id.dart';
 
 /// Holds everything a single POS terminal session needs: the authenticated
@@ -1068,6 +1069,9 @@ class AppSession extends ChangeNotifier {
   /// returns whether the screens need to rebuild.
   static bool applyLocalization(PosLocalization l) {
     PosClock.utcOffsetMinutes = l.utcOffsetMinutes;
+    // The on-screen keyboard (migrations/072) needs no rebuild of the
+    // screens: VirtualKeyboardHost listens to it.
+    PosKeyboard.enabled.value = l.virtualKeyboard;
     return PosLocale.apply(language: l.language, textDirection: l.direction, cartSide: l.cartSide);
   }
 
