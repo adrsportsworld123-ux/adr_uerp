@@ -48,6 +48,20 @@ type payslipResponse struct {
 	// LoanDeduction: employee loan and advance instalments recovered from
 	// this pay (migrations/067); part of total_deductions.
 	LoanDeduction string `json:"loan_deduction"`
+	// Leave and permission (migrations/075): days of approved leave paid
+	// and unpaid, explicit absences, and permission minutes beyond the
+	// month's free allowance. Unpaid leave, absences and those minutes
+	// are what reduced days_present.
+	LeavePaidDays           string `json:"leave_paid_days"`
+	LeaveUnpaidDays         string `json:"leave_unpaid_days"`
+	AbsentDays              string `json:"absent_days"`
+	PermissionUnpaidMinutes int    `json:"permission_unpaid_minutes"`
+	// The payslip itself and its run, for printing and self-service.
+	PayslipID   string `json:"payslip_id,omitempty"`
+	RunID       string `json:"payroll_run_id,omitempty"`
+	PeriodMonth int    `json:"period_month,omitempty"`
+	PeriodYear  int    `json:"period_year,omitempty"`
+	RunStatus   string `json:"run_status,omitempty"`
 }
 
 type payrollRunResponse struct {
@@ -175,18 +189,29 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 			}
 
 			var attendedRows int
-			var absentDays, halfDays float64
-			arows, err := tx.Query(ctx, `SELECT status FROM attendance WHERE user_id = $1 AND work_date BETWEEN $2 AND $3`, e.id, effStart, effEnd)
+			var absentDays, halfDays, leavePaid, leaveUnpaid float64
+			arows, err := tx.Query(ctx, `
+				SELECT status, leave_request_id IS NOT NULL, COALESCE(leave_days, 0)::float8, leave_unpaid_days::float8
+				FROM attendance WHERE user_id = $1 AND work_date BETWEEN $2 AND $3`, e.id, effStart, effEnd)
 			if err != nil {
 				return err
 			}
 			for arows.Next() {
 				var st string
-				if err := arows.Scan(&st); err != nil {
+				var onLeave bool
+				var leaveDays, unpaid float64
+				if err := arows.Scan(&st, &onLeave, &leaveDays, &unpaid); err != nil {
 					arows.Close()
 					return err
 				}
 				attendedRows++
+				// A day of an approved leave request (migrations/075) docks
+				// only its unpaid part; HR marking it absent still docks it all.
+				if onLeave && st != "absent" {
+					leavePaid += leaveDays - unpaid
+					leaveUnpaid += unpaid
+					continue
+				}
 				switch st {
 				case "absent":
 					absentDays++
@@ -206,13 +231,34 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 			// treated as paid, not as an unmarked absence. An employee
 			// with zero attendance rows for the whole period is paid in
 			// full (salaried staff this deployment doesn't clock-track).
+			// Approved permission minutes beyond the month's free allowance
+			// (migrations/075), as a part of the employee's working day.
+			var permUnpaid int
+			var dayMinutes float64
+			if err := tx.QueryRow(ctx, `
+				SELECT COALESCE((SELECT sum(unpaid_minutes) FROM permission_requests
+				                 WHERE user_id = $1 AND status = 'approved' AND work_date BETWEEN $2 AND $3), 0)::int,
+				       COALESCE((SELECT CASE WHEN s.end_time > s.start_time THEN EXTRACT(EPOCH FROM (s.end_time - s.start_time)) / 60
+				                             ELSE EXTRACT(EPOCH FROM (s.end_time - s.start_time + interval '24 hours')) / 60 END
+				                 FROM users u JOIN shifts s ON s.id = u.shift_id WHERE u.id = $1),
+				                (SELECT standard_day_hours * 60 FROM attendance_settings WHERE merchant_id = current_setting('app.tenant_id')::uuid),
+				                480)::float8`,
+				e.id, effStart, effEnd).Scan(&permUnpaid, &dayMinutes); err != nil {
+				return err
+			}
+			permDays := 0.0
+			if permUnpaid > 0 && dayMinutes > 0 {
+				permDays = float64(permUnpaid) / dayMinutes
+			}
+
 			daysPresent := daysInPeriod
-			if attendedRows > 0 {
-				daysPresent = daysInPeriod - absentDays - 0.5*halfDays
+			if attendedRows > 0 || permDays > 0 {
+				daysPresent = daysInPeriod - absentDays - 0.5*halfDays - leaveUnpaid - permDays
 				if daysPresent < 0 {
 					daysPresent = 0
 				}
 			}
+			daysPresent = math.Round(daysPresent*100) / 100
 			prorate := daysPresent / daysInPeriod
 
 			basicP := round2(basic * prorate)
@@ -271,9 +317,10 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 				INSERT INTO payslips (id, merchant_id, payroll_run_id, user_id, basic, hra, special_allowance, other_allowances,
 				                       commission_amount, gross_earnings, days_in_period, days_present,
 				                       pf_employee, pf_employer, esi_employee, esi_employer, pt_amount, tds_amount,
-				                       lwf_employee, lwf_employer, total_deductions, net_pay, loan_deduction)
+				                       lwf_employee, lwf_employer, total_deductions, net_pay, loan_deduction,
+				                       leave_paid_days, leave_unpaid_days, permission_unpaid_minutes, absent_days)
 				VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-				        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+				        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 				ON CONFLICT (payroll_run_id, user_id) DO UPDATE SET
 				  basic = EXCLUDED.basic, hra = EXCLUDED.hra, special_allowance = EXCLUDED.special_allowance,
 				  other_allowances = EXCLUDED.other_allowances, commission_amount = EXCLUDED.commission_amount,
@@ -281,7 +328,9 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 				  days_present = EXCLUDED.days_present, pf_employee = EXCLUDED.pf_employee, pf_employer = EXCLUDED.pf_employer,
 				  esi_employee = EXCLUDED.esi_employee, esi_employer = EXCLUDED.esi_employer, pt_amount = EXCLUDED.pt_amount,
 				  tds_amount = EXCLUDED.tds_amount, lwf_employee = EXCLUDED.lwf_employee, lwf_employer = EXCLUDED.lwf_employer,
-				  total_deductions = EXCLUDED.total_deductions, net_pay = EXCLUDED.net_pay, loan_deduction = EXCLUDED.loan_deduction
+				  total_deductions = EXCLUDED.total_deductions, net_pay = EXCLUDED.net_pay, loan_deduction = EXCLUDED.loan_deduction,
+				  leave_paid_days = EXCLUDED.leave_paid_days, leave_unpaid_days = EXCLUDED.leave_unpaid_days,
+				  permission_unpaid_minutes = EXCLUDED.permission_unpaid_minutes, absent_days = EXCLUDED.absent_days
 				RETURNING user_id, basic::text, hra::text, special_allowance::text, other_allowances::text,
 				          commission_amount::text, gross_earnings::text, days_in_period::text, days_present::text,
 				          pf_employee::text, pf_employer::text, esi_employee::text, esi_employer::text, pt_amount::text,
@@ -289,7 +338,7 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 				          loan_deduction::text, id::text`,
 				runID, e.id, basicP, hraP, specialP, otherP, commissionAmount, grossEarnings, daysInPeriod, daysPresent,
 				pfEmployee, pfEmployer, esiEmployee, esiEmployer, ptAmount, tdsAmount, cfg.LWFEmployee, cfg.LWFEmployer, totalDed, netPay,
-				loanDed,
+				loanDed, leavePaid, leaveUnpaid, permUnpaid, absentDays+0.5*halfDays,
 			).Scan(&ps.UserID, &ps.Basic, &ps.HRA, &ps.SpecialAllowance, &ps.OtherAllowances, &ps.CommissionAmount,
 				&ps.GrossEarnings, &ps.DaysInPeriod, &ps.DaysPresent, &ps.PFEmployee, &ps.PFEmployer, &ps.ESIEmployee,
 				&ps.ESIEmployer, &ps.PTAmount, &ps.TDSAmount, &ps.LWFEmployee, &ps.LWFEmployer, &ps.TotalDeductions, &ps.NetPay,
@@ -301,6 +350,9 @@ func (h *Handler) CreateOrRecomputeRun(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			ps.Name = e.name
+			ps.PayslipID = payslipID
+			ps.LeavePaidDays, ps.LeaveUnpaidDays = formatDays(leavePaid), formatDays(leaveUnpaid)
+			ps.AbsentDays, ps.PermissionUnpaidMinutes = formatDays(absentDays+0.5*halfDays), permUnpaid
 			resp.Payslips = append(resp.Payslips, ps)
 
 			totalGross += grossEarnings
@@ -414,12 +466,8 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		rows, err := tx.Query(ctx, `
-			SELECT p.user_id, u.name, p.basic::text, p.hra::text, p.special_allowance::text, p.other_allowances::text,
-			       p.commission_amount::text, p.gross_earnings::text, p.days_in_period::text, p.days_present::text,
-			       p.pf_employee::text, p.pf_employer::text, p.esi_employee::text, p.esi_employer::text, p.pt_amount::text,
-			       p.tds_amount::text, p.lwf_employee::text, p.lwf_employer::text, p.total_deductions::text, p.net_pay::text,
-			       p.loan_deduction::text
-			FROM payslips p JOIN users u ON u.id = p.user_id
+			SELECT `+payslipCols+`
+			FROM payslips p JOIN users u ON u.id = p.user_id JOIN payroll_runs pr ON pr.id = p.payroll_run_id
 			WHERE p.payroll_run_id = $1 ORDER BY u.name`, id)
 		if err != nil {
 			return err
@@ -428,10 +476,7 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 		resp.Payslips = []payslipResponse{}
 		for rows.Next() {
 			var ps payslipResponse
-			if err := rows.Scan(&ps.UserID, &ps.Name, &ps.Basic, &ps.HRA, &ps.SpecialAllowance, &ps.OtherAllowances,
-				&ps.CommissionAmount, &ps.GrossEarnings, &ps.DaysInPeriod, &ps.DaysPresent, &ps.PFEmployee, &ps.PFEmployer,
-				&ps.ESIEmployee, &ps.ESIEmployer, &ps.PTAmount, &ps.TDSAmount, &ps.LWFEmployee, &ps.LWFEmployer,
-				&ps.TotalDeductions, &ps.NetPay, &ps.LoanDeduction); err != nil {
+			if err := rows.Scan(payslipDest(&ps)...); err != nil {
 				return err
 			}
 			resp.Payslips = append(resp.Payslips, ps)
@@ -449,7 +494,8 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetMyPayslips: GET /payroll/employees/{id}/payslips — self-service
-// unless the caller has payroll.manage, checked in-handler for the same
+// (finalized runs only: a draft can still change) unless the caller has
+// payroll.manage, checked in-handler for the same
 // reason internal/hr's ListAttendance checks hr.manage in-handler: the
 // gate depends on whose id was requested, not a fixed router-level rule.
 func (h *Handler) GetMyPayslips(w http.ResponseWriter, r *http.Request) {
@@ -462,33 +508,26 @@ func (h *Handler) GetMyPayslips(w http.ResponseWriter, r *http.Request) {
 
 	payslips := []payslipResponse{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		if employeeID != claims.UserID {
-			codes, err := authn.FetchPermissions(ctx, tx, claims.UserID)
-			if err != nil {
-				return err
-			}
-			if !authn.HasPermission(codes, "payroll.manage") {
-				return errForbiddenOtherPayslip
-			}
+		codes, err := authn.FetchPermissions(ctx, tx, claims.UserID)
+		if err != nil {
+			return err
+		}
+		manager := authn.HasPermission(codes, "payroll.manage")
+		if employeeID != claims.UserID && !manager {
+			return errForbiddenOtherPayslip
 		}
 		rows, err := tx.Query(ctx, `
-			SELECT p.user_id, u.name, p.basic::text, p.hra::text, p.special_allowance::text, p.other_allowances::text,
-			       p.commission_amount::text, p.gross_earnings::text, p.days_in_period::text, p.days_present::text,
-			       p.pf_employee::text, p.pf_employer::text, p.esi_employee::text, p.esi_employer::text, p.pt_amount::text,
-			       p.tds_amount::text, p.lwf_employee::text, p.lwf_employer::text, p.total_deductions::text, p.net_pay::text,
-			       p.loan_deduction::text
+			SELECT `+payslipCols+`
 			FROM payslips p JOIN users u ON u.id = p.user_id JOIN payroll_runs pr ON pr.id = p.payroll_run_id
-			WHERE p.user_id = $1 ORDER BY pr.period_year DESC, pr.period_month DESC`, employeeID)
+			WHERE p.user_id = $1 AND ($2 OR pr.status = 'finalized')
+			ORDER BY pr.period_year DESC, pr.period_month DESC`, employeeID, manager)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var ps payslipResponse
-			if err := rows.Scan(&ps.UserID, &ps.Name, &ps.Basic, &ps.HRA, &ps.SpecialAllowance, &ps.OtherAllowances,
-				&ps.CommissionAmount, &ps.GrossEarnings, &ps.DaysInPeriod, &ps.DaysPresent, &ps.PFEmployee, &ps.PFEmployer,
-				&ps.ESIEmployee, &ps.ESIEmployer, &ps.PTAmount, &ps.TDSAmount, &ps.LWFEmployee, &ps.LWFEmployer,
-				&ps.TotalDeductions, &ps.NetPay, &ps.LoanDeduction); err != nil {
+			if err := rows.Scan(payslipDest(&ps)...); err != nil {
 				return err
 			}
 			payslips = append(payslips, ps)
@@ -579,6 +618,10 @@ func (h *Handler) GetChallanSummary(w http.ResponseWriter, r *http.Request) {
 // negatives toward zero: -10.00 became -9.99.)
 func round2(v float64) float64 {
 	return math.Round(v*100) / 100
+}
+
+func formatDays(v float64) string {
+	return strconv.FormatFloat(v, 'f', 1, 64)
 }
 
 func formatMoney(v float64) string {

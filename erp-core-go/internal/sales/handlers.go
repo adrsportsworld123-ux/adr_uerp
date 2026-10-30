@@ -114,10 +114,14 @@ type orderLine struct {
 	// product's; Description is null without one.
 	Description *string `json:"description"`
 	CatalogName string  `json:"catalog_name"`
-	CGSTAmount  string  `json:"cgst_amount"`
-	SGSTAmount  string  `json:"sgst_amount"`
-	IGSTAmount  string  `json:"igst_amount"`
-	CessAmount  string  `json:"cess_amount"`
+	// The product's unit (migrations/076): "pcs", "kg"… and how many
+	// decimals a quantity of it may have. Empty for a product without one.
+	UnitSymbol   string `json:"unit_symbol"`
+	UnitDecimals int    `json:"unit_decimals"`
+	CGSTAmount   string `json:"cgst_amount"`
+	SGSTAmount   string `json:"sgst_amount"`
+	IGSTAmount   string `json:"igst_amount"`
+	CessAmount   string `json:"cess_amount"`
 }
 
 // ---------------------------------------------------------------------
@@ -327,6 +331,10 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 
 	var resp orderResponse
 	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Whole numbers for a product counted in Pcs (migrations/076).
+		if err := catalog.CheckQuantity(ctx, tx, req.VariantID, req.Quantity); err != nil {
+			return err
+		}
 		override, err := resolveOpenPrice(ctx, tx, orderID, req.VariantID, req)
 		if err != nil {
 			return err
@@ -357,7 +365,7 @@ func (h *Handler) AddLine(w http.ResponseWriter, r *http.Request) {
 		ope.write(w)
 		return
 	}
-	if writeDescriptionError(w, err) {
+	if writeDescriptionError(w, err) || catalog.WriteQuantityError(w, err) {
 		return
 	}
 	switch {
@@ -1023,11 +1031,12 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 		       gst_cgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
 		       gst_sgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
 		       gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state)::text, sol.cess_amount::text,
-		       sol.description, p.name
+		       sol.description, p.name, COALESCE(un.symbol, ''), COALESCE(un.decimals, 3)
 		FROM sales_order_lines sol
 		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
 		JOIN products p ON p.id = pv.product_id
+		LEFT JOIN units un ON un.id = p.unit_id
 		LEFT JOIN users au ON au.id = sol.price_approved_by
 		WHERE sol.sales_order_id = $1
 		ORDER BY sol.created_at`, orderID)
@@ -1042,7 +1051,8 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity,
 			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal,
 			&l.TaxableValue, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy,
-			&l.HSNCode, &l.TaxRate, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount, &l.Description, &l.CatalogName); err != nil {
+			&l.HSNCode, &l.TaxRate, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount, &l.Description, &l.CatalogName,
+			&l.UnitSymbol, &l.UnitDecimals); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

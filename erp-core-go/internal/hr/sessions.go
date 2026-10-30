@@ -177,38 +177,10 @@ func (h *Handler) AddSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var resp attendanceResponse
 	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var userID string
-		var branchID *string
-		if err := tx.QueryRow(ctx, `SELECT user_id::text, branch_id::text FROM attendance WHERE id::text = $1 FOR UPDATE`, attendanceID).Scan(&userID, &branchID); err != nil {
+		if _, err := addSession(ctx, tx, attendanceID, *in, out, claims.UserID, strings.TrimSpace(req.Reason)); err != nil {
 			return err
 		}
-		if out != nil && !out.After(*in) {
-			return errBadSessionTimes
-		}
-		if err := lockPunches(ctx, tx, userID); err != nil {
-			return err
-		}
-		if err := checkOverlap(ctx, tx, userID, "", *in, out); err != nil {
-			return err
-		}
-		var sessionID string
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO attendance_sessions (merchant_id, attendance_id, user_id, branch_id, clock_in, clock_out,
-			    clock_in_source, clock_out_source, corrected_by, corrected_at, correction_reason)
-			VALUES (current_setting('app.tenant_id')::uuid, $1::uuid, $2::uuid, $3::uuid, $4, $5,
-			    'manual', CASE WHEN $5::timestamptz IS NOT NULL THEN 'manual' END, $6, now(), $7)
-			RETURNING id::text`,
-			attendanceID, userID, branchID, *in, out, claims.UserID, strings.TrimSpace(req.Reason)).Scan(&sessionID); err != nil {
-			return err
-		}
-		if err := recalcDay(ctx, tx, attendanceID); err != nil {
-			return err
-		}
-		if err := scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &resp); err != nil {
-			return err
-		}
-		return audit.Log(ctx, tx, audit.Entry{EntityType: "attendance_sessions", EntityID: sessionID, Action: "create",
-			PerformedBy: claims.UserID, After: map[string]any{"clock_in": in, "clock_out": out}, Reason: strings.TrimSpace(req.Reason)})
+		return scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &resp)
 	})
 	if err != nil {
 		writeSessionError(w, err, "attendance record")
@@ -239,49 +211,92 @@ func (h *Handler) CorrectSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var resp attendanceResponse
 	err = h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var userID, attendanceID string
-		var curIn time.Time
-		var curOut *time.Time
-		if err := tx.QueryRow(ctx, `SELECT user_id::text, attendance_id::text, clock_in, clock_out FROM attendance_sessions WHERE id::text = $1 FOR UPDATE`,
-			sessionID).Scan(&userID, &attendanceID, &curIn, &curOut); err != nil {
+		attendanceID, err := correctSession(ctx, tx, sessionID, in, outSet, out, claims.UserID, strings.TrimSpace(req.Reason))
+		if err != nil {
 			return err
 		}
-		newIn, newOut := curIn, curOut
-		if in != nil {
-			newIn = *in
-		}
-		if outSet {
-			newOut = out
-		}
-		if newOut != nil && !newOut.After(newIn) {
-			return errBadSessionTimes
-		}
-		if err := lockPunches(ctx, tx, userID); err != nil {
-			return err
-		}
-		if err := checkOverlap(ctx, tx, userID, sessionID, newIn, newOut); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE attendance_sessions SET clock_in = $2, clock_out = $3,
-			  clock_out_source = CASE WHEN $3::timestamptz IS NOT NULL AND clock_out_source IS NULL THEN 'manual' ELSE clock_out_source END,
-			  corrected_by = $4, corrected_at = now(), correction_reason = $5
-			WHERE id::text = $1`, sessionID, newIn, newOut, claims.UserID, strings.TrimSpace(req.Reason)); err != nil {
-			return err
-		}
-		if err := recalcDay(ctx, tx, attendanceID); err != nil {
-			return err
-		}
-		if err := scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &resp); err != nil {
-			return err
-		}
-		return audit.Log(ctx, tx, audit.Entry{EntityType: "attendance_sessions", EntityID: sessionID, Action: "update", PerformedBy: claims.UserID,
-			Before: map[string]any{"clock_in": curIn, "clock_out": curOut}, After: map[string]any{"clock_in": newIn, "clock_out": newOut},
-			Reason: strings.TrimSpace(req.Reason)})
+		return scanAttendance(tx.QueryRow(ctx, attendanceSelect+` WHERE a.id::text = $1`, attendanceID), &resp)
 	})
 	if err != nil {
 		writeSessionError(w, err, "session")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, resp)
+}
+
+// addSession adds a check-in/out pair (source manual) to a day, rebuilds
+// the day and audits it: HR's AddSession and an approved regularization.
+func addSession(ctx context.Context, tx pgx.Tx, attendanceID string, in time.Time, out *time.Time, by, reason string) (string, error) {
+	var userID string
+	var branchID *string
+	if err := tx.QueryRow(ctx, `SELECT user_id::text, branch_id::text FROM attendance WHERE id::text = $1 FOR UPDATE`, attendanceID).Scan(&userID, &branchID); err != nil {
+		return "", err
+	}
+	if out != nil && !out.After(in) {
+		return "", errBadSessionTimes
+	}
+	if err := lockPunches(ctx, tx, userID); err != nil {
+		return "", err
+	}
+	if err := checkOverlap(ctx, tx, userID, "", in, out); err != nil {
+		return "", err
+	}
+	var sessionID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO attendance_sessions (merchant_id, attendance_id, user_id, branch_id, clock_in, clock_out,
+		    clock_in_source, clock_out_source, corrected_by, corrected_at, correction_reason)
+		VALUES (current_setting('app.tenant_id')::uuid, $1::uuid, $2::uuid, $3::uuid, $4, $5,
+		    'manual', CASE WHEN $5::timestamptz IS NOT NULL THEN 'manual' END, $6, now(), $7)
+		RETURNING id::text`,
+		attendanceID, userID, branchID, in, out, by, reason).Scan(&sessionID); err != nil {
+		return "", err
+	}
+	if err := recalcDay(ctx, tx, attendanceID); err != nil {
+		return "", err
+	}
+	return sessionID, audit.Log(ctx, tx, audit.Entry{EntityType: "attendance_sessions", EntityID: sessionID, Action: "create",
+		PerformedBy: by, After: map[string]any{"clock_in": in, "clock_out": out}, Reason: reason})
+}
+
+// correctSession changes a session's check-in and/or check-out (outSet
+// with out nil reopens it), keeping its punch evidence, rebuilds the day
+// and audits it: HR's CorrectSession and an approved regularization.
+// Returns the session's day.
+func correctSession(ctx context.Context, tx pgx.Tx, sessionID string, in *time.Time, outSet bool, out *time.Time, by, reason string) (string, error) {
+	var userID, attendanceID string
+	var curIn time.Time
+	var curOut *time.Time
+	if err := tx.QueryRow(ctx, `SELECT user_id::text, attendance_id::text, clock_in, clock_out FROM attendance_sessions WHERE id::text = $1 FOR UPDATE`,
+		sessionID).Scan(&userID, &attendanceID, &curIn, &curOut); err != nil {
+		return "", err
+	}
+	newIn, newOut := curIn, curOut
+	if in != nil {
+		newIn = *in
+	}
+	if outSet {
+		newOut = out
+	}
+	if newOut != nil && !newOut.After(newIn) {
+		return "", errBadSessionTimes
+	}
+	if err := lockPunches(ctx, tx, userID); err != nil {
+		return "", err
+	}
+	if err := checkOverlap(ctx, tx, userID, sessionID, newIn, newOut); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE attendance_sessions SET clock_in = $2, clock_out = $3,
+		  clock_out_source = CASE WHEN $3::timestamptz IS NOT NULL AND clock_out_source IS NULL THEN 'manual' ELSE clock_out_source END,
+		  corrected_by = $4, corrected_at = now(), correction_reason = $5
+		WHERE id::text = $1`, sessionID, newIn, newOut, by, reason); err != nil {
+		return "", err
+	}
+	if err := recalcDay(ctx, tx, attendanceID); err != nil {
+		return "", err
+	}
+	return attendanceID, audit.Log(ctx, tx, audit.Entry{EntityType: "attendance_sessions", EntityID: sessionID, Action: "update", PerformedBy: by,
+		Before: map[string]any{"clock_in": curIn, "clock_out": curOut}, After: map[string]any{"clock_in": newIn, "clock_out": newOut},
+		Reason: reason})
 }

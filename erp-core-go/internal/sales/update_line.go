@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/taxcalc"
@@ -83,6 +84,9 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN categories c ON c.id = p.category_id
 			WHERE sol.id = $1 AND sol.sales_order_id = $2`, lineID, orderID,
 		).Scan(&variantID, &oldQuantity, &trackBatch, &minShelfLifeDays); err != nil {
+			return err
+		}
+		if err := catalog.CheckQuantity(ctx, tx, variantID, req.Quantity); err != nil {
 			return err
 		}
 
@@ -167,6 +171,9 @@ func (h *Handler) UpdateLine(w http.ResponseWriter, r *http.Request) {
 		return h.refreshPromotions(ctx, tx, orderID, claims.UserID, &resp)
 	})
 
+	if catalog.WriteQuantityError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, ErrInsufficientStock):
 		httpx.Error(w, http.StatusConflict, "STOCK_UNAVAILABLE", "requested quantity exceeds available stock")

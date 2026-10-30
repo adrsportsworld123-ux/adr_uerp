@@ -41,6 +41,13 @@ type barcodeResponse struct {
 	// Phase 13: non-nil for an open-price variant — the cashier enters
 	// the price; SellingPrice is only the suggestion.
 	OpenPrice *OpenPrice `json:"open_price"`
+	// Units (migrations/076): what the product is counted in, and what one
+	// scan of this barcode adds — PackQty base units ("1.000" for an
+	// ordinary barcode; 30 for a tray of 30; the weight for a scale code).
+	// SellingPrice stays the price of one base unit.
+	Unit      *UnitRef `json:"unit"`
+	PackQty   string   `json:"pack_qty"`
+	PackLabel string   `json:"pack_label,omitempty"`
 }
 
 // ServeHTTP is the ≤6-second POS flow's first hop: scan a barcode, get back
@@ -67,6 +74,7 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pluCode, weightKg, isWeighed := decodeWeighingScaleBarcode(code)
 
 	var resp barcodeResponse
+	var u unitCols
 	var sellable bool
 	var opEnabled bool
 	var opMin, opMax, opAbove *string
@@ -77,22 +85,24 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 				       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 				       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
-				       `+SellablePredicate+`, `+OpenPriceColumns+`
+				       `+SellablePredicate+`, `+OpenPriceColumns+`, `+unitColumns+`
 				FROM product_variants pv
 				JOIN products p ON p.id = pv.product_id
 				LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+				LEFT JOIN units u ON u.id = p.unit_id
 				WHERE pv.plu_code = $1`, pluCode)
-			if err := row.Scan(
+			if err := row.Scan(append([]any{
 				&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 				&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
 				&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax, &sellable,
 				&opEnabled, &opMin, &opMax, &opAbove,
-			); err != nil {
+			}, u.dest()...)...); err != nil {
 				return err
 			}
 			resp.OpenPrice = NewOpenPrice(opEnabled, opMin, opMax, opAbove)
 			weightStr := strconv.FormatFloat(weightKg, 'f', 3, 64)
 			resp.ComputedWeightKg = &weightStr
+			resp.Unit, resp.PackQty = u.ref(), weightStr
 			return nil
 		}
 
@@ -101,21 +111,29 @@ func (h *BarcodeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
-			       `+SellablePredicate+`, `+OpenPriceColumns+`
+			       `+SellablePredicate+`, `+OpenPriceColumns+`, `+unitColumns+`,
+			       b.pack_qty::text, `+packLabelSQL+`
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+			LEFT JOIN units u ON u.id = p.unit_id
+			LEFT JOIN units bu ON bu.id = b.pack_unit_id
 			WHERE b.code = $1`, code)
-		if err := row.Scan(
+		var label *string
+		if err := row.Scan(append(append([]any{
 			&resp.ProductID, &resp.ProductName, &resp.HSNCode,
 			&resp.VariantID, &resp.SKU, &resp.SellingPrice, &resp.MRP,
 			&resp.CGSTRate, &resp.SGSTRate, &resp.IGSTRate, &resp.CessRate, &resp.PriceIncludesTax, &sellable,
 			&opEnabled, &opMin, &opMax, &opAbove,
-		); err != nil {
+		}, u.dest()...), &resp.PackQty, &label)...); err != nil {
 			return err
 		}
 		resp.OpenPrice = NewOpenPrice(opEnabled, opMin, opMax, opAbove)
+		resp.Unit = u.ref()
+		if label != nil {
+			resp.PackLabel = *label
+		}
 		return nil
 	})
 

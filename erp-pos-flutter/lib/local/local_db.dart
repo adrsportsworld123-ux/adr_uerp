@@ -35,7 +35,9 @@ class LocalDb {
       // an open-price line's own description, sent with /sync/push.
       // v7 (erp-core-go migrations/063): catalog.pos_color, the product's
       // tile colour; the next pull is a full one so every product gets it.
-      version: 7,
+      // v8 (erp-core-go migrations/076): catalog.pack_qty (what one scan of
+      // the barcode adds), unit_symbol and unit_decimals; a full re-pull.
+      version: 8,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
@@ -68,6 +70,12 @@ class LocalDb {
         if (oldVersion < 5) {
           await db.execute('ALTER TABLE pending_orders ADD COLUMN round_off REAL NOT NULL DEFAULT 0');
         }
+        if (oldVersion < 8) {
+          await db.execute('ALTER TABLE catalog ADD COLUMN pack_qty REAL NOT NULL DEFAULT 1');
+          await db.execute('ALTER TABLE catalog ADD COLUMN unit_symbol TEXT');
+          await db.execute('ALTER TABLE catalog ADD COLUMN unit_decimals INTEGER NOT NULL DEFAULT 3');
+          await db.execute("DELETE FROM sync_meta WHERE key = 'last_pull_at'");
+        }
       },
       onCreate: (db, version) async {
         await db.execute('''
@@ -88,7 +96,10 @@ class LocalDb {
             open_price_min TEXT,
             open_price_max TEXT,
             open_price_approval_above TEXT,
-            pos_color TEXT
+            pos_color TEXT,
+            pack_qty REAL NOT NULL DEFAULT 1,
+            unit_symbol TEXT,
+            unit_decimals INTEGER NOT NULL DEFAULT 3
           )
         ''');
         await db.execute('''

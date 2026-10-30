@@ -76,6 +76,9 @@ type productSummary struct {
 	CategoryName *string `json:"category_name"`
 	BrandID      *string `json:"brand_id"`
 	BrandName    *string `json:"brand_name"`
+	// Unit: what the product's stock is kept in (migrations/076); null only
+	// for a merchant without the standard units.
+	Unit *UnitRef `json:"unit"`
 }
 
 // ListProducts: GET /products?category_id=&brand_id=&q=&min_price=&max_price=&page=&limit=&status=&sort=&dir=
@@ -145,6 +148,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 			LEFT JOIN categories c ON c.id = p.category_id
 			LEFT JOIN brands b ON b.id = p.brand_id
+			LEFT JOIN units u ON u.id = p.unit_id
 			WHERE ($1 = '' OR p.category_id IN (` + db.CategorySubtreeSQL + `))
 			  AND ($2 = '' OR p.brand_id::text = $2)
 			  AND ($3 = '' OR p.name ILIKE '%' || $3 || '%'
@@ -164,7 +168,8 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 		rows, err := tx.Query(ctx, `
 			SELECT p.id, p.name, COALESCE(p.hsn_code,''), p.status, p.price_includes_tax,
 			       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0),
-			       p.category_id::text, c.name, p.brand_id::text, b.name`+where+`
+			       p.category_id::text, c.name, p.brand_id::text, b.name,
+			       u.id::text, u.code, u.symbol, u.name, u.kind, u.decimals`+where+`
 			ORDER BY `+orderBy+`, p.id
 			LIMIT $8 OFFSET $9`, append(args, limit, offset)...)
 		if err != nil {
@@ -179,14 +184,20 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			categoryName     *string
 			brandID          *string
 			brandName        *string
+			unit             *UnitRef
 		}
 		var productRows []row
 		for rows.Next() {
 			var rrow row
+			var uid, ucode, usym, uname, ukind *string
+			var udec *int
 			if err := rows.Scan(&rrow.id, &rrow.name, &rrow.hsn, &rrow.status, &rrow.priceIncludesTax, &rrow.taxRatePct,
-				&rrow.categoryID, &rrow.categoryName, &rrow.brandID, &rrow.brandName); err != nil {
+				&rrow.categoryID, &rrow.categoryName, &rrow.brandID, &rrow.brandName, &uid, &ucode, &usym, &uname, &ukind, &udec); err != nil {
 				rows.Close()
 				return err
+			}
+			if uid != nil {
+				rrow.unit = &UnitRef{ID: *uid, Code: *ucode, Symbol: *usym, Name: *uname, Kind: *ukind, Decimals: *udec}
 			}
 			productRows = append(productRows, rrow)
 		}
@@ -243,6 +254,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 				ProductID: pr.id, Name: pr.name, HSNCode: pr.hsn, Status: pr.status,
 				PriceIncludesTax: pr.priceIncludesTax, TaxRatePct: pr.taxRatePct, Variants: variants,
 				CategoryID: pr.categoryID, CategoryName: pr.categoryName, BrandID: pr.brandID, BrandName: pr.brandName,
+				Unit: pr.unit,
 			})
 		}
 		var ids []string

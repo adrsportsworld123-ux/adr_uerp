@@ -36,6 +36,11 @@ type catalogEntry struct {
 	// POSColor: the product's tile colour (#RRGGBB, migrations/063); "" =
 	// none of its own.
 	POSColor string `json:"pos_color"`
+	// Units (migrations/076): what one scan of this barcode adds (base
+	// units; "1.000" for an ordinary barcode) and the product's unit.
+	PackQty      string `json:"pack_qty"`
+	UnitSymbol   string `json:"unit_symbol"`
+	UnitDecimals int    `json:"unit_decimals"`
 }
 
 type stockEntry struct {
@@ -78,11 +83,13 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			       pv.id, pv.sku, pv.selling_price::text, pv.mrp::text,
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
-			       `+catalog.OpenPriceColumns+`, COALESCE(p.pos_color, '')
+			       `+catalog.OpenPriceColumns+`, COALESCE(p.pos_color, ''),
+			       b.pack_qty::text, COALESCE(u.symbol, ''), COALESCE(u.decimals, 3)
 			FROM barcodes b
 			JOIN product_variants pv ON pv.id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
+			LEFT JOIN units u ON u.id = p.unit_id
 			WHERE ($1::boolean = false) OR (p.updated_at > $2) OR (pv.updated_at > $2)`,
 			hasSince, since)
 		if err != nil {
@@ -97,7 +104,7 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			if err := catalogRows.Scan(&c.Barcode, &c.ProductID, &c.ProductName, &c.HSNCode,
 				&c.VariantID, &c.SKU, &c.SellingPrice, &c.MRP,
 				&c.CGSTRate, &c.SGSTRate, &c.IGSTRate, &c.CessRate, &c.PriceIncludesTax,
-				&opEnabled, &opMin, &opMax, &opAbove, &c.POSColor); err != nil {
+				&opEnabled, &opMin, &opMax, &opAbove, &c.POSColor, &c.PackQty, &c.UnitSymbol, &c.UnitDecimals); err != nil {
 				return err
 			}
 			c.OpenPrice = catalog.NewOpenPrice(opEnabled, opMin, opMax, opAbove)

@@ -252,6 +252,7 @@ var labels = map[string]string{
 	"price_list_items":               "Price list entries",
 	"price_rules":                    "Price rules",
 	"markup_rules":                   "Markup rules",
+	"price_suggestion_rules":         "Price suggestion rules",
 	"scheduled_price_changes":        "Scheduled price changes",
 	"promotions":                     "Promotions",
 	"promotion_products":             "Promotion products",

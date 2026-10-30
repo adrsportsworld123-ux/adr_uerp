@@ -35,11 +35,12 @@ const (
 	FeatureMultiCurrency       = "multi_currency"
 	FeatureWhiteLabel          = "white_label"
 	FeatureCustomIntegrations  = "custom_integrations"
+	FeaturePriceSuggestion     = "price_suggestion" // migrations/080
 )
 
 // AllFeatures is every feature code the console may put on a plan.
 var AllFeatures = []string{FeatureBasicReports, FeatureGSTCompliance, FeatureAdvancedReports, FeatureCustomReportBuilder,
-	FeatureLoyaltyCRM, FeatureAPIAccess, FeaturePayroll, FeatureMultiCurrency, FeatureWhiteLabel, FeatureCustomIntegrations}
+	FeatureLoyaltyCRM, FeatureAPIAccess, FeaturePayroll, FeatureMultiCurrency, FeatureWhiteLabel, FeatureCustomIntegrations, FeaturePriceSuggestion}
 
 // Limit kinds (keys of plans.limits).
 const (

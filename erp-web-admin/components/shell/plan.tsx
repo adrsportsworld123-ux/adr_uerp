@@ -20,6 +20,7 @@ export const FEATURE_LABEL: Record<string, string> = {
   multi_currency: "Multi-currency",
   white_label: "White-label",
   custom_integrations: "Custom integrations",
+  price_suggestion: "Selling price suggestions",
 };
 
 const FEATURE_BLURB: Record<string, string> = {
@@ -27,6 +28,7 @@ const FEATURE_BLURB: Record<string, string> = {
   advanced_reports: "AI insights, anomaly alerts, demand forecasts and asking questions of your data in plain words.",
   custom_report_builder: "Build your own reports: pick fields, filters and groupings, save them and export.",
   payroll: "Salary structures, statutory deductions, payroll runs, payslips and challans.",
+  price_suggestion: "A suggested selling price from each item's cost and MRP, by your own margin and rounding rules.",
 };
 
 // The plan that first includes a feature, for the preview's call to action.
@@ -37,6 +39,7 @@ const FIRST_PLAN: Record<string, string> = {
   loyalty_crm: "Professional",
   api_access: "Professional",
   payroll: "Enterprise",
+  price_suggestion: "Professional",
 };
 
 function days(iso: string | null) {

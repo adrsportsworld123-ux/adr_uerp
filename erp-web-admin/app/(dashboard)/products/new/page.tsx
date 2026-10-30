@@ -11,6 +11,7 @@
 // Admin), same tiered-role pattern pricing.manage/credit.manage already
 // use.
 import { useEffect, useState } from "react";
+import { UnitSelect, useUnits } from "@/components/catalog/units";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
@@ -23,6 +24,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SearchSelect, categoryOption } from "@/components/data/search-select";
 
 import { currencySymbol } from "@/lib/currency";
+import { SuggestionHint, useLiveSuggestion, useSuggestionSettings } from "@/components/pricing/suggestions";
+
 export default function NewProductPage() {
   const router = useRouter();
 
@@ -37,9 +40,28 @@ export default function NewProductPage() {
   const [costPrice, setCostPrice] = useState("");
   const [mrp, setMrp] = useState("");
   const [sellingPrice, setSellingPrice] = useState("");
+  // Price suggestions (§3.83): until a price is typed, the field shows the
+  // suggestion for the cost, MRP, category, brand and GST entered.
+  const [priceTyped, setPriceTyped] = useState(false);
   // Pre-filled from the merchant's default (GET /pricing/settings) once it
   // loads; the user can still flip it per product before saving.
   const [priceIncludesTax, setPriceIncludesTax] = useState(false);
+  const { enabled: suggestionsOn } = useSuggestionSettings();
+  const suggestion = useLiveSuggestion(
+    Number(costPrice) > 0
+      ? {
+          key: "new",
+          cost_price: Number(costPrice),
+          mrp: Number(mrp) || 0,
+          category_id: categoryId,
+          brand_id: brandId,
+          tax_slab_id: taxSlabId,
+          price_includes_tax: priceIncludesTax,
+        }
+      : null,
+    suggestionsOn,
+  );
+  const shownPrice = priceTyped || suggestion?.suggested_price == null ? sellingPrice : String(suggestion.suggested_price);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<CatalogBrand[]>([]);
@@ -52,6 +74,10 @@ export default function NewProductPage() {
   // FIFO); pluCode is only meaningful alongside a weighing-scale barcode.
   const [trackBatch, setTrackBatch] = useState(false);
   const [pluCode, setPluCode] = useState("");
+  // What the stock is counted in (erp-core-go §3.79); Pieces until chosen.
+  const { units } = useUnits();
+  const [unitId, setUnitId] = useState("");
+  const shownUnit = unitId || units.find((u) => u.code === "PCS")?.unit_id || "";
 
   // Barcode: the real one already on the product (manually entered — the
   // backend auto-detects/validates EAN-13 for a 13-digit code) and/or a
@@ -158,12 +184,13 @@ export default function NewProductPage() {
         tax_slab_id: taxSlabId || undefined,
         price_includes_tax: priceIncludesTax,
         collection_id: collectionId || undefined,
+        unit_id: unitId || undefined,
         variants: [
           {
             sku,
             cost_price: Number(costPrice) || 0,
             mrp: Number(mrp),
-            selling_price: Number(sellingPrice),
+            selling_price: Number(shownPrice),
             track_batch: trackBatch,
             plu_code: pluCode || undefined,
             original_barcode: originalBarcode || undefined,
@@ -205,6 +232,10 @@ export default function NewProductPage() {
             <div className="flex flex-col gap-2">
               <Label htmlFor="hsnCode">HSN code</Label>
               <Input id="hsnCode" value={hsnCode} onChange={(e) => setHsnCode(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="unit">Counted in</Label>
+              <UnitSelect id="unit" value={shownUnit} onChange={setUnitId} units={units} />
             </div>
 
             <div className="flex items-end gap-2">
@@ -384,11 +415,24 @@ export default function NewProductPage() {
                   min="0.01"
                   step="0.01"
                   required
-                  value={sellingPrice}
-                  onChange={(e) => setSellingPrice(e.target.value)}
+                  value={shownPrice}
+                  onChange={(e) => {
+                    setSellingPrice(e.target.value);
+                    setPriceTyped(true);
+                  }}
                 />
               </div>
             </div>
+            {suggestion && (
+              <SuggestionHint
+                s={suggestion}
+                current={shownPrice}
+                onUse={(p) => {
+                  setSellingPrice(String(p));
+                  setPriceTyped(false);
+                }}
+              />
+            )}
 
             <div className="flex flex-col gap-3 border rounded p-3">
               <p className="text-xs text-muted-foreground">

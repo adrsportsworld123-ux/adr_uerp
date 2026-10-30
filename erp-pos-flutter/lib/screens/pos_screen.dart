@@ -129,7 +129,8 @@ class _PosScreenState extends State<PosScreen> {
     await _withBusy(() async {
       final product = await session.scanBarcode(trimmed);
       if (product != null && mounted) {
-        if (await addProductToCart(context, session, product, 1)) {
+        // A pack barcode adds its contents (a tray of 30), a scale barcode its weight (erp-core-go migrations/076).
+        if (await addProductToCart(context, session, product, product.packQty)) {
           _selectLast(session);
           _scanController.clear();
         }
@@ -191,6 +192,10 @@ class _PosScreenState extends State<PosScreen> {
     final value = await _promptText(context, title: line.productName, label: tr('Quantity'), confirm: tr('Update'));
     final qty = double.tryParse(value ?? '');
     if (qty == null || qty <= 0 || !mounted) return;
+    if (line.unitDecimals == 0 && qty != qty.roundToDouble()) {
+      _snack(tr('{0} is counted in whole {1}', [line.productName, line.unitSymbol ?? 'pcs']));
+      return _refocusScan();
+    }
     final session = context.read<AppSession>();
     final ok = await _withBusy(() => session.updateLineQuantity(line.lineId, qty));
     if (ok != true && session.lastError != null) _snack(session.lastError!);

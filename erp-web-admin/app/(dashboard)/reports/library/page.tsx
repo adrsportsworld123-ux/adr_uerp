@@ -36,7 +36,7 @@ type Period = { key: string; label: string };
 type Filter = { field: string; op: string; value?: unknown };
 
 // Outstanding: credit owed by customers and to suppliers, party-wise (erp-core-go §3.77).
-const GROUP_ORDER = ["Sales", "Items", "Payments", "Stock", "Products", "Purchases", "Outstanding", "Expenses", "Accounts", "Audit"];
+const GROUP_ORDER = ["Sales", "Items", "Payments", "Stock", "Products", "Purchases", "Outstanding", "Expenses", "Farm", "Accounts", "Audit"];
 const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
 // Fixed choices for some filters (the values the server stores).
 const CHOICES: Record<string, { value: string; label: string }[]> = {

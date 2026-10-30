@@ -31,6 +31,7 @@ type Kind int
 const (
 	KindReceipt  Kind = iota // customer-facing: sale receipts
 	KindPurchase             // supplier-facing: GRNs, purchase bills, purchase returns
+	KindInternal             // for staff (payslips): no footer
 )
 
 const defaultReceiptFooter = "Thank you, visit again!"

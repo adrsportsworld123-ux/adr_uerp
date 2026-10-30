@@ -12,7 +12,10 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
-import { Branch, StockLevel } from "@/lib/types";
+import { Branch, ProductDetail, StockLevel } from "@/lib/types";
+import { rupees } from "@/lib/format";
+import { withUnit } from "@/components/catalog/units";
+import { StatusChip } from "@/components/data/status-chip";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,12 +23,59 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+/** Everything that tells this variant apart: its product, options, codes, unit and prices. */
+function VariantDetails({ detail, variantId }: { detail: ProductDetail | null; variantId: string }) {
+  if (!detail) return <p className="text-sm text-muted-foreground">Loading the variant…</p>;
+  const v = detail.variants.find((x) => x.variant_id === variantId);
+  if (!v) return null;
+  const options = Object.entries(v.attribute_combo ?? {});
+  const unit = detail.unit?.symbol;
+  const rows: [string, React.ReactNode][] = [
+    ["Product", detail.name],
+    ["Category · brand", [detail.category_name, detail.brand_name].filter(Boolean).join(" · ") || "—"],
+    ["SKU", <span key="sku" className="font-mono">{v.sku}</span>],
+    ["Variant", options.length ? options.map(([k, val]) => `${k}: ${val}`).join(" · ") : detail.variants.length > 1 ? "—" : "The only variant"],
+    [
+      "Barcodes",
+      v.barcodes && v.barcodes.length ? (
+        <span key="codes" className="font-mono">{v.barcodes.map((b) => `${b.code}${b.pack_label ? ` (${b.pack_label})` : ""}`).join(" · ")}</span>
+      ) : (
+        [v.original_barcode, v.generated_barcode].filter(Boolean).join(" · ") || "—"
+      ),
+    ],
+    ["Counted in", detail.unit ? `${detail.unit.name} (${detail.unit.symbol})` : "—"],
+    ["Cost · MRP · selling", `${rupees(v.cost_price)} · ${rupees(v.mrp)} · ${rupees(v.selling_price)}${detail.price_includes_tax ? " (incl. GST)" : " (+ GST)"}`],
+    ["GST", detail.tax_slab_name ?? "—"],
+    ["Tracking", [v.track_batch ? "Batch & expiry" : "", v.track_serial ? "Serial numbers" : "", v.plu_code ? `Scale PLU ${v.plu_code}` : ""].filter(Boolean).join(" · ") || "None"],
+    ["On hand, every branch", withUnit(v.on_hand_total, unit)],
+  ];
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3" data-testid="variant-details">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold">Selected variant</span>
+        <StatusChip status={v.status} />
+      </div>
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+        {rows.map(([k, val]) => (
+          <div key={k} className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">{k}</dt>
+            <dd className="text-end">{val}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 export default function InventoryPage() {
   const [branchId, setBranchId] = useState(SEED_BRANCH_ID);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [variant, setVariant] = useState<VariantOption | null>(null);
   const variantId = variant?.variantId ?? "";
   const [stock, setStock] = useState<StockLevel | null>(null);
+  // The chosen variant's product (GET /products/{id}), so it is clear which
+  // size, colour or pack is being looked up and adjusted.
+  const [detail, setDetail] = useState<ProductDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -53,12 +103,25 @@ export default function InventoryPage() {
       .catch(() => {});
   }, []);
 
-  async function lookup() {
-    if (!variantId) return;
+  // Choosing a variant shows its details and its stock at once ("Look up"
+  // still refreshes the stock).
+  function choose(o: VariantOption) {
+    setVariant(o);
+    setStock(null);
+    setDetail(null);
+    api
+      .get<ProductDetail>(`/api/v1/products/${o.productId}`)
+      .then(setDetail)
+      .catch(() => setDetail(null));
+    void lookup(o.variantId);
+  }
+
+  async function lookup(id = variantId, branch = branchId) {
+    if (!id) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await api.get<StockLevel>(`/api/v1/inventory?branch_id=${branchId}&variant_id=${variantId}`);
+      const result = await api.get<StockLevel>(`/api/v1/inventory?branch_id=${branch}&variant_id=${id}`);
       setStock(result);
     } catch (e) {
       setStock(null);
@@ -114,7 +177,11 @@ export default function InventoryPage() {
               <Label>Branch</Label>
               <Select
                 value={branchId}
-                onValueChange={(v) => setBranchId(v ?? SEED_BRANCH_ID)}
+                onValueChange={(v) => {
+                  const b = v ?? SEED_BRANCH_ID;
+                  setBranchId(b);
+                  if (variantId) void lookup(variantId, b);
+                }}
                 items={Object.fromEntries(branches.map((b) => [b.branch_id, b.name]))}
               >
                 <SelectTrigger>
@@ -133,14 +200,16 @@ export default function InventoryPage() {
               <Label htmlFor="invVariant">Product variant</Label>
               {/* Searches the whole catalogue (name, SKU or barcode); the old
                   dropdown held only the first 200 products. */}
-              <ProductPicker id="invVariant" ariaLabel="Product variant" value={variant} onChange={setVariant} placeholder="Choose a product variant" />
+              <ProductPicker id="invVariant" ariaLabel="Product variant" value={variant} onChange={choose} placeholder="Choose a product variant" />
             </div>
-            <Button onClick={lookup} disabled={busy || !variantId}>
+            <Button onClick={() => lookup()} disabled={busy || !variantId}>
               Look up
             </Button>
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
+
+          {variant && <VariantDetails detail={detail} variantId={variant.variantId} />}
 
           {stock && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm border-t pt-4">

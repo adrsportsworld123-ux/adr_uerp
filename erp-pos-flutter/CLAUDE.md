@@ -181,6 +181,10 @@ line items for the FULL order in every case exactly as this app expects
 — check `phase0_1_design.md` §3.4 before assuming otherwise if a second
 device's cart view ever looks wrong.
 
+**Leave, permission and payslips (2026-10-28, erp-core-go §3.78).** Attendance › "Leave, permission & payslips" (`lib/screens/my_requests_screen.dart`) shows the cashier's leave balance and permission use, asks for leave, a permission or an attendance correction (`source: pos`), lists their requests (cancel one still waiting) and saves their finalized payslips as PDF. It needs the server; a manager approves on the web. A route or dialog pushed from it gets `AppSession` through `ChangeNotifierProvider.value`, like every scoped screen. `test/my_requests_test.dart`.
+
+**Units (2026-10-29, erp-core-go §3.79).** A scan adds `ProductLookup.packQty` (a tray of 30; a scale barcode's weight), online or offline (local DB v8 keeps `pack_qty`, `unit_symbol`, `unit_decimals` per barcode). A cart line shows a non-piece unit (`unitSuffix`), and a quantity typed for a whole-number unit must be whole. Tests that touch the local database go in `offline_store_test.dart`: deleting the shared database file from another test file breaks tests running in parallel.
+
 **Not yet built:** on-device verification of offline sync, printing, and
 PIN-login against real Android/iOS hardware or a real network thermal
 printer — this environment has never had either. Everything above is

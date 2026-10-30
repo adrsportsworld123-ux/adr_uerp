@@ -241,8 +241,8 @@ class _CartLine extends StatelessWidget {
                   Expanded(
                     child: Text(
                         line.openPrice
-                            ? tr('{0} · qty {1} · open price {2}', [line.sku, formatQty(line.quantity), formatRupees(line.unitPrice)])
-                            : tr('{0} · qty {1}', [line.sku, formatQty(line.quantity)]),
+                            ? tr('{0} · qty {1} · open price {2}', [line.sku, formatQty(line.quantity) + unitSuffix(line.unitSymbol), formatRupees(line.unitPrice)])
+                            : tr('{0} · qty {1}', [line.sku, formatQty(line.quantity) + unitSuffix(line.unitSymbol)]),
                         style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                   ),
                   _Stepper(

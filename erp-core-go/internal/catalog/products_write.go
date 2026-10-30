@@ -55,6 +55,8 @@ type createProductRequest struct {
 	// merchant never set one).
 	PriceIncludesTax *bool                `json:"price_includes_tax"`
 	Variants         []createVariantInput `json:"variants"`
+	// UnitID: what the stock is kept in (migrations/076); "" = Pieces.
+	UnitID string `json:"unit_id"`
 }
 
 type variantResponse struct {
@@ -165,7 +167,7 @@ func createProductTx(ctx context.Context, tx pgx.Tx, req createProductRequest) (
 	for _, l := range []struct {
 		id    *string
 		table string
-	}{{categoryID, "categories"}, {brandID, "brands"}, {taxSlabID, "tax_slabs"}, {collectionID, "collections"}} {
+	}{{categoryID, "categories"}, {brandID, "brands"}, {taxSlabID, "tax_slabs"}, {collectionID, "collections"}, {nullableUUID(req.UnitID), "units"}} {
 		if l.id != nil {
 			if err := refUsable(ctx, tx, l.table, *l.id); err != nil {
 				return productResponse{}, err
@@ -184,10 +186,10 @@ func createProductTx(ctx context.Context, tx pgx.Tx, req createProductRequest) (
 
 	var productID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, collection_id, name, short_description, hsn_code, product_type, price_includes_tax)
-		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO products (id, merchant_id, category_id, brand_id, tax_slab_id, collection_id, name, short_description, hsn_code, product_type, price_includes_tax, unit_id)
+		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id`,
-		categoryID, brandID, taxSlabID, collectionID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType, priceIncludesTax,
+		categoryID, brandID, taxSlabID, collectionID, req.Name, req.ShortDescription, req.HSNCode, req.ProductType, priceIncludesTax, nullableUUID(req.UnitID),
 	).Scan(&productID); err != nil {
 		return productResponse{}, err
 	}
@@ -225,6 +227,11 @@ type updateProductRequest struct {
 	PriceIncludesTax *bool `json:"price_includes_tax"`
 	// POSColor: the POS tile colour, "#RRGGBB"; "" clears it (migrations/063).
 	POSColor *string `json:"pos_color"`
+	// UnitID: what the stock is kept in (migrations/076). A product that
+	// already has stock or sales keeps its numbers, which then mean the
+	// new unit — so that needs UnitChangeConfirmed.
+	UnitID              *string `json:"unit_id"`
+	UnitChangeConfirmed bool    `json:"unit_change_confirmed"`
 }
 
 // posColor is a tile colour: #RRGGBB.

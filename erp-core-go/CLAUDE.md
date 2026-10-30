@@ -147,6 +147,19 @@ Use `accounting.PaymentLedgerCode(ctx, tx, method, bankAccountID)` / `BankLedger
 
 An expense posts through `expenses.Create` (Dr the head's account, Cr cash/bank/partner/2200). Money a partner pays for the shop credits their capital through `partners.Capital` + `partners.Record`; never post to a `3000-NN` account directly. A partner's profit share is `accounting.NetProfit` × ratio, worked out, not posted (§3.77).
 
+## Leave, permission and payslips (2026-10-28)
+
+Leave, permission and attendance-correction requests are decided through their own endpoints (`internal/hr/leave.go`, `permission.go`, `regularization.go`), by someone with hr.manage who is not the employee. Only an approved leave writes the attendance `leave_*` columns (`markLeaveDay`, undone by `unmarkLeave`); payroll reads them. A correction goes through `addSession` / `correctSession`, the same code as HR's own. Payslip PDFs are `documents.Payslip` (§3.78).
+
+## Units, branch types and the farm (2026-10-29)
+
+A product's stock, cost and price are in its unit (`products.unit_id`, §3.79); a barcode's `pack_qty` only says how much one scan adds. New line-entry endpoints call `catalog.CheckQuantity` inside their transaction and answer with `catalog.WriteQuantityError`. What a branch does is `branch_business_types` (§3.80): never hide an existing screen or endpoint behind a type; the farm (`internal/farm`, §3.81) is the only feature that needs one (`farmBranch`). Farm stock moves go through `farm.moveStock` and post through `farm.post` (1500 Livestock WIP ↔ 1200 Inventory).
+
+## Animals, feed, medicine; price suggestions (2026-10-30)
+
+- **Farm (§3.82):** every farm event goes through `recordEvent` (heads, the register, withdrawal); an animal on the register is one of its batch's heads, so anything that adds or removes heads is a `farm_events` row (`birth`, `addition`, `transfer_in/out`) and `aliveSQL` counts them. Produce is checked against open withdrawals by `withdrawalBlock`; only farm.manage overrides, with a reason. `moveStock` takes a reference type (`farm_event`, `farm_feed_mix`).
+- **Price suggestions (§3.83):** `pricing.suggest` is pure (cost, MRP, GST basis, rule → price and status) and covered by the playbook test; a suggestion never writes a price on its own. Routes under `/pricing/suggest…` and `/pricing/suggestion-…` are the plan feature `price_suggestion`; settings and rules need `pricing.suggestion.manage` (Merchant Admin only).
+
 ## Repo layout
 
 ```

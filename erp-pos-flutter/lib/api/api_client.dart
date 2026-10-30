@@ -103,6 +103,14 @@ class ProductLookup {
   /// migrations/063); null = none.
   final String? posColor;
 
+  /// Units (erp-core-go migrations/076): what one scan of this barcode
+  /// adds, in the product's unit (30 for a tray of eggs, the weight for a
+  /// scale barcode, 1 otherwise); the unit's symbol and how many decimals
+  /// a quantity of it may have. sellingPrice stays per unit.
+  final double packQty;
+  final String? unitSymbol;
+  final int unitDecimals;
+
   ProductLookup({
     required this.productId,
     required this.productName,
@@ -112,19 +120,31 @@ class ProductLookup {
     required this.mrp,
     this.openPrice,
     this.posColor,
+    this.packQty = 1,
+    this.unitSymbol,
+    this.unitDecimals = 3,
   });
 
-  factory ProductLookup.fromJson(Map<String, dynamic> json) => ProductLookup(
-        productId: json['product_id'] as String,
-        productName: json['product_name'] as String,
-        variantId: json['variant_id'] as String,
-        sku: json['sku'] as String,
-        sellingPrice: json['selling_price'] as String,
-        mrp: json['mrp'] as String,
-        openPrice: OpenPriceRange.fromJson(json['open_price']),
-        posColor: _color(json['pos_color']),
-      );
+  factory ProductLookup.fromJson(Map<String, dynamic> json) {
+    final unit = json['unit'] as Map<String, dynamic>?;
+    return ProductLookup(
+      productId: json['product_id'] as String,
+      productName: json['product_name'] as String,
+      variantId: json['variant_id'] as String,
+      sku: json['sku'] as String,
+      sellingPrice: json['selling_price'] as String,
+      mrp: json['mrp'] as String,
+      openPrice: OpenPriceRange.fromJson(json['open_price']),
+      posColor: _color(json['pos_color']),
+      packQty: double.tryParse(json['pack_qty'] as String? ?? '') ?? 1,
+      unitSymbol: unit?['symbol'] as String?,
+      unitDecimals: unit?['decimals'] as int? ?? 3,
+    );
+  }
 }
+
+/// " kg" after a quantity; none for pieces (or an unknown unit).
+String unitSuffix(String? symbol) => symbol == null || symbol.isEmpty || symbol == 'pcs' ? '' : ' $symbol';
 
 String? _color(dynamic v) => v is String && RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(v) ? v : null;
 
@@ -229,6 +249,11 @@ class OrderLine {
   // Phase 13: unitPrice was typed at the till (an open-price item).
   final bool openPrice;
 
+  /// The product's unit (erp-core-go migrations/076): "kg", "pcs"; null
+  /// when unknown (a line added offline). unitDecimals 0 = whole numbers.
+  final String? unitSymbol;
+  final int unitDecimals;
+
   OrderLine({
     required this.lineId,
     required this.variantId,
@@ -240,6 +265,8 @@ class OrderLine {
     required this.taxAmount,
     required this.lineTotal,
     this.openPrice = false,
+    this.unitSymbol,
+    this.unitDecimals = 3,
   });
 
   factory OrderLine.fromJson(Map<String, dynamic> json) => OrderLine(
@@ -253,6 +280,8 @@ class OrderLine {
         taxAmount: json['tax_amount'] as String,
         lineTotal: json['line_total'] as String,
         openPrice: json['open_price'] as bool? ?? false,
+        unitSymbol: (json['unit_symbol'] as String?)?.isEmpty == true ? null : json['unit_symbol'] as String?,
+        unitDecimals: json['unit_decimals'] as int? ?? 3,
       );
 }
 
@@ -1388,6 +1417,138 @@ class DownloadedFile {
   DownloadedFile(this.filename, this.bytes);
 }
 
+/// A leave type an employee can ask for (erp-core-go §3.78, migrations/075).
+class LeaveTypeInfo {
+  final String id;
+  final String code;
+  final String name;
+  final bool paid;
+  final bool allowHalfDay;
+  const LeaveTypeInfo({required this.id, required this.code, required this.name, required this.paid, required this.allowHalfDay});
+  factory LeaveTypeInfo.fromJson(Map<String, dynamic> j) => LeaveTypeInfo(
+        id: j['leave_type_id'] as String,
+        code: j['code'] as String,
+        name: j['name'] as String,
+        paid: j['paid'] as bool,
+        allowHalfDay: j['allow_half_day'] as bool,
+      );
+}
+
+/// One leave type's balance for the leave year; null [entitled] / [available] = no limit.
+class LeaveBalanceInfo {
+  final String name;
+  final bool paid;
+  final num? entitled;
+  final num taken;
+  final num pending;
+  final num? available;
+  const LeaveBalanceInfo({required this.name, required this.paid, this.entitled, required this.taken, required this.pending, this.available});
+  factory LeaveBalanceInfo.fromJson(Map<String, dynamic> j) => LeaveBalanceInfo(
+        name: j['name'] as String,
+        paid: j['paid'] as bool,
+        entitled: j['entitled'] as num?,
+        taken: j['taken'] as num,
+        pending: j['pending'] as num,
+        available: j['available'] as num?,
+      );
+}
+
+/// GET /hr/leave-balances: the leave year's balances and this month's permission use.
+class LeaveBalancesInfo {
+  final List<LeaveBalanceInfo> balances;
+  final int permissionFreeCount;
+  final int permissionUsedCount;
+  final int permissionFreeMinutes;
+  final int permissionUsedFreeMinutes;
+  final int permissionUnpaidMinutes;
+  final int permissionMaxMinutes;
+  const LeaveBalancesInfo({
+    required this.balances,
+    required this.permissionFreeCount,
+    required this.permissionUsedCount,
+    required this.permissionFreeMinutes,
+    required this.permissionUsedFreeMinutes,
+    required this.permissionUnpaidMinutes,
+    required this.permissionMaxMinutes,
+  });
+  factory LeaveBalancesInfo.fromJson(Map<String, dynamic> j) {
+    final p = j['permission'] as Map<String, dynamic>;
+    return LeaveBalancesInfo(
+      balances: (j['balances'] as List<dynamic>)
+          .map((e) => e as Map<String, dynamic>)
+          .where((b) => b['status'] == 'active' || (b['taken'] as num) > 0 || (b['pending'] as num) > 0)
+          .map(LeaveBalanceInfo.fromJson)
+          .toList(),
+      permissionFreeCount: p['free_count'] as int,
+      permissionUsedCount: p['used_count'] as int,
+      permissionFreeMinutes: p['free_minutes'] as int,
+      permissionUsedFreeMinutes: p['used_free_minutes'] as int,
+      permissionUnpaidMinutes: p['unpaid_minutes'] as int,
+      permissionMaxMinutes: p['max_minutes'] as int,
+    );
+  }
+}
+
+/// One of my requests — leave, permission or an attendance correction —
+/// as the list shows it.
+class HrRequestInfo {
+  /// leave | permission | regularization
+  final String kind;
+  final String id;
+  final String number;
+  final String what;
+  final String when;
+  final String reason;
+  final String status;
+  final String? outcome;
+  final String? note;
+  final String requestedAt;
+  const HrRequestInfo({
+    required this.kind,
+    required this.id,
+    required this.number,
+    required this.what,
+    required this.when,
+    required this.reason,
+    required this.status,
+    this.outcome,
+    this.note,
+    required this.requestedAt,
+  });
+}
+
+/// A finalized payslip in the employee's own list.
+class PayslipSummary {
+  final String id;
+  final int month;
+  final int year;
+  final String daysPresent;
+  final String daysInPeriod;
+  final String gross;
+  final String deductions;
+  final String netPay;
+  const PayslipSummary({
+    required this.id,
+    required this.month,
+    required this.year,
+    required this.daysPresent,
+    required this.daysInPeriod,
+    required this.gross,
+    required this.deductions,
+    required this.netPay,
+  });
+  factory PayslipSummary.fromJson(Map<String, dynamic> j) => PayslipSummary(
+        id: j['payslip_id'] as String,
+        month: j['period_month'] as int,
+        year: j['period_year'] as int,
+        daysPresent: j['days_present'] as String,
+        daysInPeriod: j['days_in_period'] as String,
+        gross: j['gross_earnings'] as String,
+        deductions: j['total_deductions'] as String,
+        netPay: j['net_pay'] as String,
+      );
+}
+
 /// One attendance row (erp-core-go internal/hr/attendance.go).
 class AttendanceRecord {
   final String id;
@@ -1832,6 +1993,150 @@ class ApiClient {
       }),
     );
     return AttendanceRecord.fromJson(_decode(resp));
+  }
+
+  /// GET /hr/attendance?month=YYYY-MM — the caller's own days of a month,
+  /// with their check-in sessions (for asking for a correction).
+  Future<List<AttendanceRecord>> myAttendanceMonth(String month) async {
+    final uri = Uri.parse('$baseUrl/api/v1/hr/attendance').replace(queryParameters: {'month': month});
+    final resp = await _http.get(uri, headers: _authHeaders);
+    return (_decode(resp)['attendance'] as List<dynamic>).map((e) => AttendanceRecord.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  // Leave, permission and attendance corrections (erp-core-go §3.78): the
+  // signed-in employee asks; a manager approves on the web.
+
+  Future<List<LeaveTypeInfo>> leaveTypes() async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/hr/leave-types'), headers: _authHeaders);
+    return (_decode(resp)['leave_types'] as List<dynamic>)
+        .map((e) => e as Map<String, dynamic>)
+        .where((t) => t['status'] == 'active')
+        .map(LeaveTypeInfo.fromJson)
+        .toList();
+  }
+
+  Future<LeaveBalancesInfo> myLeaveBalances() async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/hr/leave-balances'), headers: _authHeaders);
+    return LeaveBalancesInfo.fromJson(_decode(resp));
+  }
+
+  /// POST /hr/leave-requests; returns the request number.
+  Future<String> askLeave({required String leaveTypeId, required String fromDate, required String toDate, bool halfDay = false, required String reason}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/hr/leave-requests'),
+      headers: _authHeaders,
+      body: jsonEncode({'leave_type_id': leaveTypeId, 'from_date': fromDate, 'to_date': toDate, 'half_day': halfDay, 'reason': reason, 'source': 'pos'}),
+    );
+    return _decode(resp)['request_number'] as String;
+  }
+
+  /// POST /hr/permission-requests (times HH:MM); returns the request number.
+  Future<String> askPermission({required String workDate, required String fromTime, required String toTime, required String reason}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/hr/permission-requests'),
+      headers: _authHeaders,
+      body: jsonEncode({'work_date': workDate, 'from_time': fromTime, 'to_time': toTime, 'reason': reason, 'source': 'pos'}),
+    );
+    return _decode(resp)['request_number'] as String;
+  }
+
+  /// POST /hr/regularizations: correct [sessionId] (either time), or add a
+  /// missed check-in/out (both). Returns the request number.
+  Future<String> askCorrection({required String workDate, String? sessionId, DateTime? clockIn, DateTime? clockOut, required String reason}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/hr/regularizations'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'work_date': workDate,
+        if (sessionId != null) 'session_id': sessionId,
+        if (clockIn != null) 'clock_in': clockIn.toUtc().toIso8601String(),
+        if (clockOut != null) 'clock_out': clockOut.toUtc().toIso8601String(),
+        'reason': reason,
+        'source': 'pos',
+      }),
+    );
+    return _decode(resp)['request_number'] as String;
+  }
+
+  static const _requestPaths = {'leave': 'leave-requests', 'permission': 'permission-requests', 'regularization': 'regularizations'};
+  static const _requestKeys = {'leave': 'leave_requests', 'permission': 'permission_requests', 'regularization': 'regularizations'};
+  static const _requestIds = {'leave': 'leave_request_id', 'permission': 'permission_request_id', 'regularization': 'regularization_id'};
+
+  /// The caller's own requests of every kind, waiting ones first, newest first.
+  Future<List<HrRequestInfo>> myRequests() async {
+    final out = <HrRequestInfo>[];
+    for (final kind in _requestPaths.keys) {
+      final resp = await _http.get(Uri.parse('$baseUrl/api/v1/hr/${_requestPaths[kind]}?mine=1'), headers: _authHeaders);
+      final list = (_decode(resp)[_requestKeys[kind]] as List<dynamic>).map((e) => e as Map<String, dynamic>);
+      for (final r in list) {
+        String what, when;
+        String? outcome;
+        switch (kind) {
+          case 'leave':
+            what = '${r['leave_type']}${r['half_day'] == true ? ' (½)' : ''}';
+            when = r['from_date'] == r['to_date'] ? r['from_date'] as String : '${r['from_date']} – ${r['to_date']} · ${r['days']}';
+            final unpaid = r['unpaid_days'] as num?;
+            if (r['status'] == 'approved' && unpaid != null && unpaid > 0) outcome = '$unpaid unpaid';
+          case 'permission':
+            what = 'Permission';
+            when = '${r['work_date']}, ${r['from_time']}–${r['to_time']}';
+            final unpaid = r['unpaid_minutes'] as int?;
+            if (r['status'] == 'approved' && unpaid != null && unpaid > 0) outcome = '$unpaid min unpaid';
+          default:
+            what = r['session_id'] == null ? 'Add a missed day' : 'Correct a check-in';
+            when = r['work_date'] as String;
+        }
+        out.add(HrRequestInfo(
+          kind: kind,
+          id: r[_requestIds[kind]] as String,
+          number: r['request_number'] as String,
+          what: what,
+          when: when,
+          reason: r['reason'] as String,
+          status: r['status'] as String,
+          outcome: outcome,
+          note: (r['decision_note'] ?? r['cancel_reason']) as String?,
+          requestedAt: r['requested_at'] as String,
+        ));
+      }
+    }
+    out.sort((a, b) {
+      final p = (a.status == 'pending' ? 0 : 1) - (b.status == 'pending' ? 0 : 1);
+      return p != 0 ? p : b.requestedAt.compareTo(a.requestedAt);
+    });
+    return out;
+  }
+
+  /// Cancels one of the caller's own requests still waiting.
+  Future<void> cancelRequest(String kind, String id, {String reason = ''}) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/hr/${_requestPaths[kind]}/$id/cancel'),
+      headers: _authHeaders,
+      body: jsonEncode({'reason': reason}),
+    );
+    _decode(resp);
+  }
+
+  /// GET /payroll/employees/{me}/payslips — finalized months only.
+  Future<List<PayslipSummary>> myPayslips(String userId) async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/payroll/employees/$userId/payslips'), headers: _authHeaders);
+    return (_decode(resp)['payslips'] as List<dynamic>).map((e) => PayslipSummary.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// GET /payroll/payslips/{id}/pdf — the payslip under the letterhead.
+  Future<DownloadedFile> payslipPdf(String payslipId) async {
+    final resp = await _http.get(Uri.parse('$baseUrl/api/v1/payroll/payslips/$payslipId/pdf'), headers: _authHeaders);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      try {
+        _decode(resp);
+      } on FormatException {
+        // not a JSON error body
+      }
+      throw ApiException(resp.statusCode, 'DOWNLOAD_FAILED', 'could not download the payslip');
+    }
+    final disposition = resp.headers['content-disposition'] ?? '';
+    final name = RegExp(r'filename="([^"]+)"').firstMatch(disposition)?.group(1) ?? 'payslip-$payslipId.pdf';
+    return DownloadedFile(name, resp.bodyBytes);
   }
 
   Future<List<Customer>> searchCustomers(String query) async {

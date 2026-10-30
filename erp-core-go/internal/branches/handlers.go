@@ -7,6 +7,7 @@ package branches
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -29,6 +30,8 @@ type branchResponse struct {
 	Timezone string `json:"timezone"`
 	GSTIN    string `json:"gstin"`
 	Status   string `json:"status"`
+	// BusinessTypes: what the branch does (migrations/077), e.g. ["retail"].
+	BusinessTypes []string `json:"business_types"`
 }
 
 type branchRequest struct {
@@ -36,6 +39,8 @@ type branchRequest struct {
 	Code     string `json:"code"`
 	Timezone string `json:"timezone"`
 	GSTIN    string `json:"gstin"`
+	// BusinessTypes: none = a Retail shop (migrations/077).
+	BusinessTypes []string `json:"business_types"`
 }
 
 // updateBranchRequest (Phase 11): omitted = keep. Name/code/timezone
@@ -64,6 +69,9 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "name and code are required")
 		return
 	}
+	if len(req.BusinessTypes) == 0 {
+		req.BusinessTypes = []string{"retail"}
+	}
 	// No zone given: the merchant's business clock (migrations/064,
 	// app_merchant_tz — Asia/Kolkata unless the merchant set another).
 	timezone := req.Timezone
@@ -78,6 +86,10 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 		).Scan(&resp.BranchID, &resp.Name, &resp.Code, &resp.Timezone, &resp.GSTIN, &resp.Status); err != nil {
 			return err
 		}
+		if err := setBusinessTypes(ctx, tx, resp.BranchID, req.BusinessTypes); err != nil {
+			return err
+		}
+		resp.BusinessTypes = req.BusinessTypes
 		// Every branch needs a real pos_terminal_id an "online" channel
 		// order can reference (sales_orders.pos_terminal_id is NOT NULL,
 		// same as any in-person order) — see
@@ -92,6 +104,10 @@ func (h *Handler) CreateBranch(w http.ResponseWriter, r *http.Request) {
 			resp.BranchID)
 		return err
 	})
+	if errors.Is(err, errUnknownBusinessType) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create branch — code may already be in use")
 		return
@@ -134,7 +150,9 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM branches`+where, p.Q, status).Scan(&total); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT id, name, code, timezone, COALESCE(gstin,''), status FROM branches`+where+
+		rows, err := tx.Query(ctx, `SELECT id, name, code, timezone, COALESCE(gstin,''), status,
+			COALESCE((SELECT array_agg(bt.type_code ORDER BY t.sort_order) FROM branch_business_types bt JOIN business_types t ON t.code = bt.type_code
+			          WHERE bt.branch_id = branches.id), '{}') FROM branches`+where+
 			` ORDER BY `+p.OrderBy+`, id LIMIT $3 OFFSET $4`, p.Q, status, limit, offset)
 		if err != nil {
 			return err
@@ -142,7 +160,7 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var b branchResponse
-			if err := rows.Scan(&b.BranchID, &b.Name, &b.Code, &b.Timezone, &b.GSTIN, &b.Status); err != nil {
+			if err := rows.Scan(&b.BranchID, &b.Name, &b.Code, &b.Timezone, &b.GSTIN, &b.Status, &b.BusinessTypes); err != nil {
 				return err
 			}
 			branches = append(branches, b)
@@ -197,7 +215,7 @@ func (h *Handler) UpdateBranch(w http.ResponseWriter, r *http.Request) {
 				return nil
 			}
 		}
-		return tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			UPDATE branches SET
 			  name = COALESCE($1, name),
 			  code = COALESCE($2, code),
@@ -208,7 +226,12 @@ func (h *Handler) UpdateBranch(w http.ResponseWriter, r *http.Request) {
 			WHERE id = $5
 			RETURNING id, name, code, timezone, COALESCE(gstin,''), status`,
 			req.Name, req.Code, req.Timezone, req.GSTIN, branchID, req.Status,
-		).Scan(&resp.BranchID, &resp.Name, &resp.Code, &resp.Timezone, &resp.GSTIN, &resp.Status)
+		).Scan(&resp.BranchID, &resp.Name, &resp.Code, &resp.Timezone, &resp.GSTIN, &resp.Status); err != nil {
+			return err
+		}
+		var err error
+		resp.BusinessTypes, err = branchTypes(ctx, tx, resp.BranchID)
+		return err
 	})
 	if badTimezone {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "unknown timezone "+*req.Timezone+" — use an IANA name such as Asia/Kolkata")

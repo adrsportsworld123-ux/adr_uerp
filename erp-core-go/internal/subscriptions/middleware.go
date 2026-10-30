@@ -28,6 +28,7 @@ var featureRoutes = []struct {
 	{regexp.MustCompile(`^/sales/orders/[^/]+/loyalty/`), FeatureLoyaltyCRM},
 	{regexp.MustCompile(`^/payroll/`), FeaturePayroll},
 	{regexp.MustCompile(`^/hr/(statutory-config|employees/[^/]+/salary-structure)`), FeaturePayroll},
+	{regexp.MustCompile(`^/pricing/(suggest|suggestion-)`), FeaturePriceSuggestion},
 }
 
 // FeatureFor returns the feature a path needs, or "".

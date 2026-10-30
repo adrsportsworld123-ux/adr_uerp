@@ -63,6 +63,8 @@ type productDetailVariant struct {
 	GeneratedBarcode *string        `json:"generated_barcode"`
 	OnHandTotal      string         `json:"on_hand_total"` // across all branches — why track_batch may be locked
 	OpenPrice        *OpenPrice     `json:"open_price"`    // Phase 13; nil = fixed price
+	// Barcodes: every code of the variant with its pack (migrations/076).
+	Barcodes []BarcodeInfo `json:"barcodes"`
 }
 
 type productDetail struct {
@@ -86,23 +88,33 @@ type productDetail struct {
 	// POSColor: the product's tile colour on the POS grid (#RRGGBB,
 	// migrations/063); null = none of its own.
 	POSColor *string `json:"pos_color"`
+	// Unit: what the stock is kept in (migrations/076).
+	Unit *UnitRef `json:"unit"`
 }
 
 func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (productDetail, error) {
 	var d productDetail
+	var uid, ucode, usym, uname, ukind *string
+	var udec *int
 	if err := tx.QueryRow(ctx, `
 		SELECT p.id, p.name, COALESCE(p.short_description,''), COALESCE(p.hsn_code,''),
 		       p.category_id::text, c.name, p.brand_id::text, b.name, p.tax_slab_id::text, ts.name,
-		       p.collection_id::text, col.name, p.product_type, p.status, p.price_includes_tax, p.updated_at::text, p.pos_color
+		       p.collection_id::text, col.name, p.product_type, p.status, p.price_includes_tax, p.updated_at::text, p.pos_color,
+		       u.id::text, u.code, u.symbol, u.name, u.kind, u.decimals
 		FROM products p
+		LEFT JOIN units u ON u.id = p.unit_id
 		LEFT JOIN categories c ON c.id = p.category_id
 		LEFT JOIN brands b ON b.id = p.brand_id
 		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 		LEFT JOIN collections col ON col.id = p.collection_id
 		WHERE p.id = $1`, productID,
 	).Scan(&d.ProductID, &d.Name, &d.ShortDescription, &d.HSNCode, &d.CategoryID, &d.CategoryName, &d.BrandID, &d.BrandName,
-		&d.TaxSlabID, &d.TaxSlabName, &d.CollectionID, &d.CollectionName, &d.ProductType, &d.Status, &d.PriceIncludesTax, &d.UpdatedAt, &d.POSColor); err != nil {
+		&d.TaxSlabID, &d.TaxSlabName, &d.CollectionID, &d.CollectionName, &d.ProductType, &d.Status, &d.PriceIncludesTax, &d.UpdatedAt, &d.POSColor,
+		&uid, &ucode, &usym, &uname, &ukind, &udec); err != nil {
 		return d, err
+	}
+	if uid != nil {
+		d.Unit = &UnitRef{ID: *uid, Code: *ucode, Symbol: *usym, Name: *uname, Kind: *ukind, Decimals: *udec}
 	}
 
 	rows, err := tx.Query(ctx, `
@@ -139,7 +151,16 @@ func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (produc
 		}
 		d.Variants = append(d.Variants, v)
 	}
-	return d, rows.Err()
+	if err := rows.Err(); err != nil {
+		return d, err
+	}
+	rows.Close()
+	for i := range d.Variants {
+		if d.Variants[i].Barcodes, err = variantBarcodes(ctx, tx, d.Variants[i].VariantID); err != nil {
+			return d, err
+		}
+	}
+	return d, nil
 }
 
 // GetProduct: GET /products/{id} — everything an edit screen needs, in
@@ -183,7 +204,7 @@ func refExists(ctx context.Context, tx pgx.Tx, table, id string) error {
 
 // lifecycleTables are the link targets with an active/inactive status
 // (migrations/036). Collections have none yet.
-var lifecycleTables = map[string]bool{"categories": true, "brands": true, "tax_slabs": true}
+var lifecycleTables = map[string]bool{"categories": true, "brands": true, "tax_slabs": true, "units": true}
 
 // refUsable is refExists plus "and it's active" — the check for a link
 // being newly set. An existing link to a since-deactivated record stays
@@ -292,6 +313,25 @@ func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if req.UnitID != nil && *req.UnitID != "" && (before.Unit == nil || *req.UnitID != before.Unit.ID) {
+			if err := refUsable(ctx, tx, "units", *req.UnitID); err != nil {
+				return err
+			}
+			var used bool
+			if err := tx.QueryRow(ctx, `
+				SELECT EXISTS (SELECT 1 FROM stock_movements m JOIN product_variants v ON v.id = m.variant_id WHERE v.product_id = $1)
+				    OR EXISTS (SELECT 1 FROM sales_order_lines l JOIN product_variants v ON v.id = l.variant_id WHERE v.product_id = $1)`,
+				productID).Scan(&used); err != nil {
+				return err
+			}
+			if used && !req.UnitChangeConfirmed {
+				return &unitError{status: http.StatusConflict, code: "UNIT_IN_USE",
+					msg: "this product already has stock or sales counted in its unit; the same numbers will mean the new unit (send unit_change_confirmed)"}
+			}
+		} else {
+			req.UnitID = nil
+		}
+
 		if linkChanged(req.CategoryID, before.CategoryID) {
 			newCategory := nullableUUID(*req.CategoryID)
 			for _, v := range before.Variants {
@@ -313,10 +353,11 @@ func (h *ListHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
 				collection_id = CASE WHEN $9::text IS NULL THEN collection_id ELSE NULLIF($9,'')::uuid END,
 				price_includes_tax = COALESCE($10, price_includes_tax),
 				pos_color = CASE WHEN $11::text IS NULL THEN pos_color ELSE NULLIF($11, '') END,
+				unit_id = COALESCE($12::uuid, unit_id),
 				updated_at = now()
 			WHERE id = $8`,
 			req.Name, req.ShortDescription, req.HSNCode, req.CategoryID, req.BrandID, req.TaxSlabID, req.Status, productID, req.CollectionID, req.PriceIncludesTax,
-			req.POSColor,
+			req.POSColor, req.UnitID,
 		); err != nil {
 			return err
 		}
@@ -569,9 +610,13 @@ func (h *ListHandler) AddVariant(w http.ResponseWriter, r *http.Request) {
 // respondProductEditError writes the error response for the three edit
 // endpoints and reports whether it did.
 func respondProductEditError(w http.ResponseWriter, err error, internalMsg string) bool {
+	var ue *unitError
 	switch {
 	case err == nil:
 		return false
+	case errors.As(err, &ue):
+		httpx.Error(w, ue.status, ue.code, ue.msg)
+	case WriteQuantityError(w, err):
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "product or variant not found")
 	case errors.Is(err, errInvalidReference):

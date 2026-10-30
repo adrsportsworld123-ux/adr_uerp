@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
@@ -183,6 +184,9 @@ func (h *Handler) CreateQuotation(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 
+	if catalog.WriteQuantityError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, sales.ErrProductInactive):
 		httpx.Error(w, http.StatusConflict, "PRODUCT_INACTIVE", "a line's product is inactive or discontinued and can't be quoted")

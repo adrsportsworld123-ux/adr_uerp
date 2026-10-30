@@ -464,7 +464,10 @@ export default function NewSalePage() {
                         <Button variant="ghost" size="icon-sm" aria-label={`One less ${l.product_name}`} onClick={() => step(l.line_id, Number(l.quantity) - 1)}>
                           {Number(l.quantity) <= 1 ? <Trash2 /> : <Minus />}
                         </Button>
-                        <span className="tabular w-8 text-center">{qty(l.quantity)}</span>
+                        <span className="tabular min-w-8 text-center">
+                          {qty(l.quantity)}
+                          {l.unit_symbol && l.unit_symbol !== "pcs" ? ` ${l.unit_symbol}` : ""}
+                        </span>
                         <Button variant="ghost" size="icon-sm" aria-label={`One more ${l.product_name}`} onClick={() => step(l.line_id, Number(l.quantity) + 1)}>
                           <Plus />
                         </Button>

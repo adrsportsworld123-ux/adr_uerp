@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../api/api_client.dart';
 import '../l10n/l10n.dart';
 import '../state/session.dart';
+import 'my_requests_screen.dart';
 
 /// Where the device is, for an attendance punch — or why it can't say.
 class DeviceFix {
@@ -207,6 +208,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           padding: const EdgeInsets.only(top: 12),
                           child: Text(_error!, style: TextStyle(color: theme.colorScheme.error), textAlign: TextAlign.center),
                         ),
+                      const SizedBox(height: 24),
+                      // Leave, permission, corrections and payslips (erp-core-go §3.78).
+                      OutlinedButton.icon(
+                        key: const Key('attendance-requests'),
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => ChangeNotifierProvider<AppSession>.value(value: context.read<AppSession>(), child: const MyRequestsScreen()))),
+                        icon: const Icon(Icons.event_note),
+                        label: Text(tr('Leave, permission & payslips')),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                      ),
                     ],
                   ),
           ),

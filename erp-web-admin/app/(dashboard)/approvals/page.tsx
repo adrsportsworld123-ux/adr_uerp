@@ -3,12 +3,13 @@
 // Approvals (erp-core-go §3.77, internal/approvals/requests.go), two tabs:
 //   Waiting — everything waiting for someone: branch transfers to approve,
 //   journal vouchers submitted for approval, oversold offline sales to
-//   review. Approve / reject (or resolve) here; each goes through the
+//   review, employees' leave, permission and attendance corrections
+//   (§3.78; nobody decides their own). Approve / reject (or resolve) here; each goes through the
 //   item's own endpoint and permission, exactly as on its own screen.
 //   Given — what was approved, mostly by a manager's PIN at the till:
 //   manual discounts, returns, open prices, cash and stock-count variances,
 //   stock adjustments, cash paid in/out, payment corrections, transfers,
-//   vouchers and employee loans — who asked, who approved, how much, why.
+//   vouchers, employee loans and employees' requests — who asked, who approved, how much, why.
 // Both need approvals.view (Branch Manager and Merchant Admin).
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -30,7 +31,7 @@ import { useMyBranches } from "@/components/data/branch-select";
 
 const message = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
-type WaitingKind = "transfer" | "voucher" | "stock_review";
+type WaitingKind = "transfer" | "voucher" | "stock_review" | "leave" | "permission" | "regularization";
 type WaitingItem = {
   kind: WaitingKind;
   id: string;
@@ -40,7 +41,7 @@ type WaitingItem = {
   branch: string | null;
   requested_by: string | null;
   requested_at: string;
-  amount: string;
+  amount: string | null; // null for an HR request
   can_act: boolean;
   why?: string;
 };
@@ -55,12 +56,28 @@ type GivenItem = {
   reason: string | null;
 };
 
-const WAITING_LABEL: Record<WaitingKind, string> = { transfer: "Branch transfer", voucher: "Journal voucher", stock_review: "Oversold offline sale" };
-const WAITING_TONE: Record<WaitingKind, Tone> = { transfer: "info", voucher: "plum", stock_review: "warn" };
+const WAITING_LABEL: Record<WaitingKind, string> = {
+  transfer: "Branch transfer",
+  voucher: "Journal voucher",
+  stock_review: "Oversold offline sale",
+  leave: "Leave",
+  permission: "Permission",
+  regularization: "Attendance correction",
+};
+const WAITING_TONE: Record<WaitingKind, Tone> = { transfer: "info", voucher: "plum", stock_review: "warn", leave: "teal", permission: "teal", regularization: "teal" };
 const WAITING_LINK: Record<WaitingKind, (id: string) => string> = {
   transfer: (id) => `/transfers/${id}`,
   voucher: (id) => `/accounting/vouchers/${id}`,
   stock_review: () => "/inventory/review",
+  leave: () => "/hr/leave",
+  permission: () => "/hr/leave",
+  regularization: () => "/hr/leave",
+};
+// Employees' requests (erp-core-go §3.78) are decided through their own endpoints.
+const HR_PATH: Partial<Record<WaitingKind, string>> = {
+  leave: "/api/v1/hr/leave-requests",
+  permission: "/api/v1/hr/permission-requests",
+  regularization: "/api/v1/hr/regularizations",
 };
 const GIVEN_LABEL: Record<string, string> = {
   manual_discount: "Manual discount",
@@ -74,6 +91,9 @@ const GIVEN_LABEL: Record<string, string> = {
   transfer: "Branch transfer",
   voucher: "Journal voucher",
   loan: "Employee loan",
+  leave: "Leave",
+  permission: "Permission",
+  regularization: "Attendance correction",
 };
 
 export default function ApprovalsPage() {
@@ -133,6 +153,7 @@ function Waiting() {
     try {
       if (it.kind === "transfer") await api.post(`/api/v1/branch-transfers/${it.id}/approve`, {});
       else if (it.kind === "voucher") await api.post(`/api/v1/accounting/vouchers/${it.id}/approve`, {});
+      else if (HR_PATH[it.kind]) await api.post(`${HR_PATH[it.kind]}/${it.id}/approve`, {});
       toast.success(`${WAITING_LABEL[it.kind]} ${it.reference} approved`);
       load();
     } catch (e) {
@@ -149,6 +170,7 @@ function Waiting() {
     try {
       if (it.kind === "transfer") await api.post(`/api/v1/branch-transfers/${it.id}/reject`, { reason: note.trim() });
       else if (it.kind === "voucher") await api.post(`/api/v1/accounting/vouchers/${it.id}/reject`, { note: note.trim() });
+      else if (HR_PATH[it.kind]) await api.post(`${HR_PATH[it.kind]}/${it.id}/reject`, { note: note.trim() });
       else await api.post(`/api/v1/inventory/review/${it.id}/resolve`, { resolution: note.trim() });
       toast.success(it.kind === "stock_review" ? `Review of ${it.reference} resolved` : `${WAITING_LABEL[it.kind]} ${it.reference} sent back`);
       setRejecting(null);
@@ -166,7 +188,7 @@ function Waiting() {
   return (
     <Panel
       title={`Waiting (${items.length})`}
-      description={`${counts("transfer")} transfer(s), ${counts("voucher")} voucher(s), ${counts("stock_review")} oversold sale(s) to review. Oldest first.`}
+      description={`${counts("transfer")} transfer(s), ${counts("voucher")} voucher(s), ${counts("stock_review")} oversold sale(s) to review, ${counts("leave") + counts("permission") + counts("regularization")} employee request(s). Oldest first.`}
     >
       <Table data-testid="approvals-waiting">
         <TableHeader>
@@ -197,7 +219,7 @@ function Waiting() {
                 {it.requested_by ?? "—"}
                 <span className="block text-xs text-muted-foreground">{dateTime(it.requested_at)}</span>
               </TableCell>
-              <TableCell className="tabular text-right">{rupees(it.amount)}</TableCell>
+              <TableCell className="tabular text-right">{it.amount != null ? rupees(it.amount) : "—"}</TableCell>
               <TableCell>
                 <div className="flex justify-end gap-1.5" title={it.can_act ? undefined : it.why}>
                   {it.kind === "stock_review" ? (
@@ -239,7 +261,9 @@ function Waiting() {
               ? "The voucher goes back to its author as a draft, with your note."
               : rejecting.kind === "transfer"
                 ? "The transfer is rejected; the reason is kept on it."
-                : "Say what was done about it (a count, an adjustment)."
+                : HR_PATH[rejecting.kind]
+                  ? "The employee sees the request rejected, with your reason."
+                  : "Say what was done about it (a count, an adjustment)."
           }
           footer={
             <>

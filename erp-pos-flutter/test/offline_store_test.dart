@@ -11,6 +11,25 @@ import 'package:erp_pos_app/local/offline_store.dart';
 /// check. This is the part of the offline feature most likely to have a
 /// real bug: arithmetic, status transitions, and the shape handed to
 /// POST /sync/push.
+/// A catalog row with a pack (erp-core-go migrations/076).
+Map<String, dynamic> _unitEntry(String barcode, {String? packQty, String? unit, int? decimals}) => {
+      'barcode': barcode,
+      'product_id': 'prod-eggs',
+      'product_name': 'Eggs',
+      'hsn_code': '0407',
+      'variant_id': 'variant-eggs',
+      'sku': 'EGG',
+      'selling_price': '6.00',
+      'mrp': '6.00',
+      'cgst_rate': 0.0,
+      'sgst_rate': 0.0,
+      'igst_rate': 0.0,
+      'cess_rate': 0.0,
+      if (packQty != null) 'pack_qty': packQty,
+      if (unit != null) 'unit_symbol': unit,
+      if (decimals != null) 'unit_decimals': decimals,
+    };
+
 void main() {
   setUpAll(() {
     sqfliteFfiInit();
@@ -172,5 +191,28 @@ void main() {
     await store.checkout(orderId, [PaymentInput(method: 'cash', amount: double.parse(summary.grandTotal))]);
     final lines = (await store.listUnsynced()).firstWhere((o) => o.id == orderId).lines;
     expect(lines.map((l) => l['description']), containsAll(['Name on bat — "ARJUN 10"', null]));
+  });
+
+  test('the offline catalog keeps each barcode\'s pack', () async {
+    final store = OfflineStore();
+    await store.cacheCatalog([
+      _unitEntry('2000000000301', packQty: '30.000', unit: 'pcs', decimals: 0),
+      _unitEntry('2000000000011', packQty: '1.000', unit: 'pcs', decimals: 0),
+      _unitEntry('2000000000028'), // an older server: no pack
+    ]);
+    final tray = await store.lookupBarcode('2000000000301');
+    expect(tray!.lookup.packQty, 30);
+    expect(tray.lookup.unitSymbol, 'pcs');
+    expect(tray.lookup.unitDecimals, 0);
+    expect((await store.lookupBarcode('2000000000011'))!.lookup.packQty, 1);
+    final legacy = await store.lookupBarcode('2000000000028');
+    expect(legacy!.lookup.packQty, 1);
+    expect(legacy.lookup.unitSymbol, isNull);
+
+    // Selling the tray offline: 30 eggs at ₹6.
+    final orderId = await store.createPendingOrder('branch-1', 'terminal-1');
+    final summary = await store.addLine(orderId, tray, tray.lookup.packQty);
+    expect(summary.lines.single.quantity, '30.0');
+    expect(summary.grandTotal, '180.00');
   });
 }

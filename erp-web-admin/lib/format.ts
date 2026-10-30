@@ -96,3 +96,46 @@ export const SOURCE_LABEL: Record<string, string> = translated({
   payment_gateway_settlement: "Gateway settlement",
   payment_gateway_settlement_reversal: "Gateway reversal",
 });
+
+/** Minutes the merchant's zone is ahead of UTC at instant `ms`. */
+function zoneOffsetMinutes(ms: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: safeZone(),
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date(ms));
+  const n = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return Math.round((Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute")) - Math.floor(ms / 60000) * 60000) / 60000);
+}
+
+/**
+ * A day and a time typed on the merchant's clock ("2026-10-18", "18:00") as
+ * an RFC 3339 instant, whatever the browser's own zone. `nextDay` for a
+ * check-out past midnight.
+ */
+export function merchantStamp(date: string, hm: string, nextDay = false): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = hm.split(":").map(Number);
+  const wall = Date.UTC(y, m - 1, d + (nextDay ? 1 : 0), hh, mm);
+  let at = wall - zoneOffsetMinutes(wall) * 60000;
+  at = wall - zoneOffsetMinutes(at) * 60000; // across a DST change
+  return new Date(at).toISOString();
+}
+
+/** An instant's time of day on the merchant's clock, "18:05". */
+export function merchantTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : new Intl.DateTimeFormat("en-GB", { timeZone: safeZone(), hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
+}
+
+/** "2026-10-18" → "18 Oct 2026". */
+export function shortDate(ymd: string | null | undefined): string {
+  if (!ymd) return "—";
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}

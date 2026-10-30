@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/softdelete"
 )
@@ -129,6 +130,9 @@ func isPOError(err error) bool {
 
 // respondPO maps the PO errors to the API's codes (phase0_1_design.md §3).
 func respondPO(w http.ResponseWriter, err error, status int, resp any, action string) {
+	if catalog.WriteQuantityError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, errPONotDraft):
 		httpx.Error(w, http.StatusConflict, "PO_NOT_EDITABLE", "only a draft purchase order can be changed")
@@ -242,6 +246,9 @@ func insertPOLine(ctx context.Context, tx pgx.Tx, poID string, l poLineRequest) 
 	// not the transaction's now(), so lines entered together keep their
 	// order on screen and on the PDF.
 	var lineID string
+	if err := catalog.CheckQuantity(ctx, tx, l.VariantID, l.Quantity); err != nil {
+		return err
+	}
 	return tx.QueryRow(ctx, `
 		INSERT INTO purchase_order_lines (po_id, variant_id, quantity, unit_cost, line_total, created_at)
 		SELECT $1, pv.id, $3::numeric(14,3), $4::numeric(14,2), round($3::numeric(14,3) * $4::numeric(14,2), 2), clock_timestamp()

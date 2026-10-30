@@ -6,11 +6,13 @@ import { Dialog } from "@base-ui/react/dialog";
 import { CornerDownLeft, Search } from "lucide-react";
 import { EXTRA_DESTINATIONS, NAV_GROUPS } from "@/lib/nav";
 import { t } from "@/lib/i18n";
+import { usePermissions } from "@/lib/permissions";
 
 type Entry = { href: string; label: string; group: string };
 
-const ENTRIES: Entry[] = [
-  ...NAV_GROUPS.flatMap((g) => g.items.map((i) => ({ href: i.href, label: i.label, group: g.label }))),
+// A group with a business feature (the farm) is offered only where a branch has it.
+const ENTRIES: (Entry & { businessFeature?: string })[] = [
+  ...NAV_GROUPS.flatMap((g) => g.items.map((i) => ({ href: i.href, label: i.label, group: g.label, businessFeature: g.businessFeature }))),
   ...EXTRA_DESTINATIONS,
 ];
 
@@ -23,12 +25,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
 
+  const { does } = usePermissions();
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return ENTRIES;
+    const entries = ENTRIES.filter((e) => !e.businessFeature || does(e.businessFeature));
+    if (!q) return entries;
     // The English name finds a screen in any language, as does the translated one.
-    return ENTRIES.filter((e) => [e.label, e.group, t(e.label), t(e.group)].some((s) => s.toLowerCase().includes(q)));
-  }, [query]);
+    return entries.filter((e) => [e.label, e.group, t(e.label), t(e.group)].some((s) => s.toLowerCase().includes(q)));
+  }, [query, does]);
 
   useEffect(() => {
     listRef.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });

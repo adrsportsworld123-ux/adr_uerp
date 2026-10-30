@@ -151,8 +151,12 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, l := range resp.Lines {
+		qty := l.Quantity
+		if l.UnitSymbol != "" && l.UnitSymbol != "pcs" { // a weight or volume prints its unit (migrations/076)
+			qty += " " + l.UnitSymbol
+		}
 		data.Lines = append(data.Lines, printing.ReceiptLine{
-			ProductName: l.ProductName, SKU: l.SKU, Quantity: l.Quantity, UnitPrice: l.UnitPrice, LineTotal: l.LineTotal,
+			ProductName: l.ProductName, SKU: l.SKU, Quantity: qty, UnitPrice: l.UnitPrice, LineTotal: l.LineTotal,
 		})
 	}
 	for _, p := range resp.Payments {

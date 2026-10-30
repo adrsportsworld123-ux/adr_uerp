@@ -105,7 +105,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
 | `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}`, `POST /pricing/scheduled-changes`, `PUT /pricing/scheduled-changes/{id}`, `POST /pricing/rules`, `PUT /pricing/rules/{id}` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29). For a rule, `details.below_cost_skus` lists every covered variant it would put below cost (§3.30) |
 | `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
-| `BARCODE_EXISTS` | 409 | `POST /products/variants/{id}/barcodes`, `POST /products` | The supplied `code` (or `variants[].original_barcode`) is already assigned to a different variant (`barcodes` table's `UNIQUE (merchant_id, code)`) |
+| `BARCODE_EXISTS` | 409 | `POST /products/variants/{id}/barcodes`, `POST /products`, `PUT /products/variants/{id}/original-barcode` (§3.83) | The supplied `code` (or `variants[].original_barcode`) is already assigned to a different variant (`barcodes` table's `UNIQUE (merchant_id, code)`) |
 | `NO_BARCODE` | 409 | `GET /products/variants/{id}/label` | The variant has no barcode assigned yet — assign one first |
 | `COUPON_CODE_EXISTS` | 409 | `POST /coupons`, `PATCH /coupons/{id}` | The supplied `code` is already in use (`coupons` table's `UNIQUE (merchant_id, code)`) |
 | `COUPON_NOT_FOUND` | 404 | `POST /sales/orders/{id}/coupons` | No active coupon with this code |
@@ -192,7 +192,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `ADJUSTMENT_NOT_APPROVED` | 403 | `POST /inventory/adjustments` | Worth more than the policy's stock threshold (quantity × cost) without a valid approver code + PIN (§3.43) |
 | `BELOW_COST_NOT_ALLOWED` | 403 | `PATCH /pricing/variants/{id}` (`override: true`) | The policy limits below-cost prices to a higher role (§3.43) |
 | `SUBSCRIPTION_EXPIRED` | 402 | any write on a tenant route while the subscription is expired or cancelled (reads, exports, sign-out, `/subscription/*` and `/sync/push` still work) | The account is read-only until renewed (§3.44) |
-| `FEATURE_NOT_IN_PLAN` | 403 | `/gst/*`, e-invoice and e-way bill, `/ai/*`, `/loyalty/*`, loyalty redemption, `/payroll/*`, statutory config and salary structures, `/report-builder/*` | The plan lacks the feature; `details.available_in` names the first plan with it (§3.44) |
+| `FEATURE_NOT_IN_PLAN` | 403 | `/gst/*`, e-invoice and e-way bill, `/ai/*`, `/loyalty/*`, loyalty redemption, `/payroll/*`, statutory config and salary structures, `/report-builder/*`, `/pricing/suggest*` and `/pricing/suggestion-*` (§3.83) | The plan lacks the feature; `details.available_in` names the first plan with it (§3.44) |
 | `PLAN_LIMIT_REACHED` | 403 | `POST /branches`, `POST /pos-terminals`, `POST /products`, the same `PATCH`es setting `status: active`, `POST /sales/orders`, `POST /quotations/{id}/convert` | One more would exceed the plan's limit; `details` has `limit_kind`, `used`, `limit`, `upgrade_to` (§3.44) |
 | `RETENTION_LIMIT` | 403 | `/reports/*`, `/ai/*`, cash and inventory reconciliation history, report builder | A date before the plan's report history; statutory records are never limited (§3.44) |
 | `SAME_PLAN` / `PLAN_NOT_OFFERED` | 409 | `POST /subscription/change` | Already on that plan (and not lapsed) / the plan is retired (§3.44) |
@@ -258,6 +258,44 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `PARTNER_EXISTS` | 409 | `POST/PATCH /partners` (§3.77) | Another partner has that name |
 | `PARTNER_RETIRED` | 409 | partner pay-in/out, expenses and bill payments paid by a partner (§3.77) | The partner has retired; their history stays, no new entries |
 | `HEAD_EXISTS` | 409 | `POST/PATCH /expense-heads` (§3.77) | An expense head with that name exists |
+| `LEAVE_TYPE_EXISTS` | 409 | `POST/PATCH /hr/leave-types` (§3.78) | Another leave type has that code |
+| `LEAVE_OVERLAP` | 409 | `POST /hr/leave-requests`, its approve (§3.78) | The dates overlap the employee's waiting or approved leave |
+| `LEAVE_DAY_WORKED` | 409 | `POST /hr/leave-requests/{id}/approve` (§3.78) | The employee checked in on a day of a full-day leave: ask for a half day, or correct the attendance first |
+| `PERMISSION_OVERLAP` | 409 | `POST /hr/permission-requests` (§3.78) | The times overlap another permission that day |
+| `PERMISSION_TOO_LONG` | 400 | `POST /hr/permission-requests` (§3.78) | Longer than the merchant's longest permission (`permission_max_minutes`) |
+| `REGULARIZATION_PENDING` | 409 | `POST /hr/regularizations` (§3.78) | A correction of that check-in session is already waiting |
+| `MISSED_CHECK_OUT` | 409 | `POST /hr/regularizations` (§3.78) | An earlier check-in has no check-out (it overlaps everything after it): correct that one first |
+| `REGULARIZE_LEAVE_DAY` | 409 | `POST /hr/regularizations`, its approve (§3.78) | The day is a full day of approved leave: cancel the leave first |
+| `SESSION_GONE` | 409 | `POST /hr/regularizations/{id}/approve` (§3.78) | The check-in session the request corrects was removed |
+| `REQUEST_NOT_PENDING` | 409 | approve / reject / cancel of a leave, permission or regularization (§3.78) | Already decided or cancelled (an approved leave or permission is cancelled by HR; an applied correction can't be) |
+| `SELF_APPROVAL` | 403 | approve / reject of a leave, permission or regularization (§3.78) | Your own request: someone else with hr.manage decides |
+| `PAYROLL_FINALIZED` | 409 | approving or cancelling (approved) leave and permission (§3.78) | That month's payroll is finalized; it can no longer change |
+| `QTY_UNIT` | 400 | sale lines (add / change), quotation lines, PO lines, GRN lines, branch transfers, stock adjustments (§3.79) | A quantity finer than the product's unit: a fraction of a whole-number unit (Pcs), or more decimals than it has |
+| `UNIT_EXISTS` | 409 | `POST/PATCH /units` (§3.79) | Another unit has that code |
+| `UNIT_FIXED` | 409 | `PATCH /units/{id}` (§3.79) | A unit's kind and size, a standard unit's code, and Pieces being active don't change |
+| `UNIT_IN_USE` | 409 | `PATCH /products/{id}` with `unit_id` (§3.79) | The product has stock movements or sales counted in its unit: send `unit_change_confirmed` (the numbers then mean the new unit) |
+| `UNIT_KIND_MISMATCH` | 400 | a barcode's pack (§3.79) | A pack is a pack unit (Box, Bag, Tray …) or a unit of the product's own kind (g of a kg product), not another kind |
+| `BRANCH_HAS_ACTIVE_BATCHES` | 409 | `PUT /branches/{id}/business-types` (§3.80) | Removing a farm type while the branch has an active batch of that species |
+| `BRANCH_NOT_FARM` | 409 | farm sheds and batches (§3.81) | The branch has no farm business type |
+| `SPECIES_NOT_ON_BRANCH` | 409 | farm sheds and batches (§3.81) | The branch doesn't farm that species |
+| `HOUSE_EXISTS` | 409 | `POST/PATCH /farm/houses` (§3.81) | The branch already has a shed or pond by that name |
+| `HOUSE_IN_USE` | 409 | `PATCH /farm/houses/{id}` (§3.81) | Changing the species of, or switching off, a shed with an active batch |
+| `HOUSE_FULL` | 409 | `POST /farm/batches` (§3.81) | More animals than the shed holds |
+| `MORE_THAN_ALIVE` | 409 | mortality, culls and harvests (§3.81) | More heads than the batch has alive |
+| `FARM_STOCK_SHORT` | 409 | feed, medicine, placement from stock; cancelling produce (§3.81) | Not enough free stock of the item in the branch |
+| `BATCH_CLOSED` | 409 | events and edits of a batch (§3.81) | The batch is closed |
+| `EVENT_CANCELLED` / `EVENT_PLACEMENT` | 409 | `POST /farm/events/{id}/cancel` (§3.81) | Already cancelled / the placement is the batch itself |
+| `SCHEDULE_IN_USE` | 409 | `PUT /farm/schedules/{id}` with items (§3.81) | A batch recorded items of the schedule: switch it off and make another |
+| `WITHDRAWAL_PERIOD` | 409 | production events, milk recording, an animal harvested (§3.82) | The batch (or animal) was treated and its meat, milk or egg withdrawal hasn't ended; `details` has `produce_kind`, `until`, `treatment`, `treated_on`, `animal`. Someone with farm.manage may send `override_withdrawal` with `override_reason` (403 without it) |
+| `ANIMAL_REQUIRED` | 409 | mortality, culls, harvests of a herd (§3.82) | Every remaining head is on the register: say which animal |
+| `ANIMAL_NOT_ACTIVE` | 409 | an animal's events, breeding, moves (§3.82) | The animal has left the farm |
+| `REGISTER_FULL` | 409 | `POST /farm/animals` with origin existing (§3.82) | All the herd's heads are on the register already; a new one is `purchased` |
+| `TAG_EXISTS` | 409 | animals, a birth's young (§3.82) | Another animal has that tag |
+| `BATCH_HAS_ANIMALS` | 409 | `POST /farm/batches/{id}/close` (§3.82) | Animals of the batch are still on the register |
+| `EVENT_TRANSFER` / `EVENT_FROM_BREEDING` | 409 | `POST /farm/events/{id}/cancel` (§3.82) | A move is undone by moving back; a birth is cancelled on the mother's breeding record |
+| `BIRTH_HAS_YOUNG` | 409 | `POST /farm/breeding/{id}/cancel` (§3.82) | Young of the birth are on the register |
+| `MILK_ALREADY_RECORDED` | 409 | `POST /farm/batches/{id}/milk` (§3.82) | That animal's milking (date, session) is in already |
+| `FARM_ITEM_EXISTS` / `RECIPE_EXISTS` / `MIX_CANCELLED` | 409 | farm items, feed recipes, feed mixes (§3.82) | The product is a farm item already / another recipe has the name / the mix is cancelled already |
 
 ### 3.1 Auth
 
@@ -2725,6 +2763,128 @@ Verified:
 - Go: `TestMarkupPrice`, `TestPickPrice`.
 - POS: `test/virtual_keyboard_test.dart`; the full suite of 79 passes, goldens unchanged.
 - `e2e/round12.spec.ts` (6), and `purchase-orders`, `users-open-price`, `pos-grid`, `localization`, `ai-insights`, `reports-round10`, `multi-branch`.
+
+### 3.78 Expense reports; leave, permission and attendance regularization; payslips (2026-10-28)
+
+Migration 075. `internal/reportbuilder` (expenses dataset), `internal/hr/requests.go`, `leave.go`, `permission.go`, `regularization.go`, `internal/payroll/payroll.go` and `payslips.go`, `internal/documents/payslip.go`, `internal/approvals/requests.go`.
+
+**Not changed by default:** with no request made, attendance, payroll and the approvals list are as before. A day marked "leave" by hand (`POST /hr/attendance/mark`, no request) stays paid. The attendance settings keep their values; the new rules have defaults.
+
+- **Expense reports.** Report builder dataset `expenses` (date, month, number, head, account and whether it is booked as an asset or expense, branch, description, vendor, reference, amount, paid by, bank account, partner, payment status — Paid / Paid later / Unpaid — paid on, unpaid amount, amount paid by partners, imported, status, entered by). Library group **Expenses**, cancelled expenses left out:
+  - `expense_register` — every expense.
+  - `expense_head_monthly` — per head per month.
+  - `expense_by_branch` — total, unpaid and paid by partners per branch.
+  - `expense_unpaid_partner` — unpaid ones and ones a partner paid.
+- **Leave (075).**
+  - `leave_types`: code, name, paid, `annual_quota` (days a leave year; null = no limit), half day allowed, status. Seeded for every merchant (and `systemLeaveTypes` for a new one): CL Casual 12, SL Sick 6, LOP Loss of pay (unpaid).
+  - The leave year starts in `attendance_settings.leave_year_start_month` (January by default) and is named by the year it starts in. `leave_allocations` gives an employee their own allowance for a year (a late joiner, a carried-forward balance); otherwise the type's quota applies.
+  - `leave_requests`: one type, from–to (at most 62 days, within one leave year) or a half day, reason. Anyone asks for themselves (`source` pos/web); with hr.manage for an employee. Overlapping waiting or approved leave is refused.
+  - **Approve** (hr.manage, never your own): the paid budget is what is left of the type's allowance this leave year (all of it for a type with no limit, none for an unpaid type); the earliest days are paid first. Each day goes on the employee's attendance row — a new row with status `leave`, or the day's existing row, keeping its status in `leave_prev_status` — with `leave_request_id`, `leave_days` (1 or 0.5) and `leave_unpaid_days`. A full day the employee checked in on is refused (`LEAVE_DAY_WORKED`); a half day may share a worked day.
+  - **Cancel**: the employee their own waiting request; hr.manage anyone's, an approved one too, unless that month's payroll is finalized. The days come off the attendance: a row the leave created (with no check-in) goes, any other gets its status back. Reject needs a note.
+  - `GET /hr/leave-balances?user_id=&year=&month=`: per type the allowance, taken, unpaid beyond the balance, waiting and left; and the month's permission use.
+- **Permission (075).** `permission_requests`: a date, from–to (HH:MM), at most `permission_max_minutes` (240). On approval it is free while the month's approved permissions are fewer than `permission_free_count` (2) and within `permission_free_minutes` (240); the minutes beyond are unpaid (`paid_minutes` / `unpaid_minutes`, fixed at approval; cancelling one doesn't re-price later ones).
+- **Attendance regularization (075).** `attendance_regularizations`: a correction of a check-in session (`session_id` with the new check-in and/or check-out — e.g. a missed check-out), or a missed day (both times). Only the last `regularize_within_days` (30) days, up to today; not on a full leave day. An earlier check-in that was never checked out overlaps everything after it, so a later correction asks for that one first (`MISSED_CHECK_OUT`). Approval applies it through the same code as HR's session correction (`addSession` / `correctSession`, refactored out of `AddSession` / `CorrectSession`): the session is stamped corrected with "Regularization RG-…: reason", the day rebuilt, a missing day created as present, an absent day made present. An applied correction can't be cancelled; HR corrects the session again.
+- Request numbers LV-, PR-, RG-00001 from `hr_request_counters` (per merchant and kind; a branch-scoped reader can't count every row). The three tables are branch-scoped (RLS) by the employee's branch. Endpoints: `/hr/leave-types`, `/hr/leave-balances` (GET; PUT sets an allowance), `/hr/leave-requests`, `/hr/permission-requests`, `/hr/regularizations` (POST to ask, GET `?mine=1&user_id=&status=&from=&to=` — your own without hr.manage — and `/{id}/approve|reject|cancel`). `PUT /hr/attendance/settings` takes the new rules.
+- **Payroll.** A day of an approved leave docks only `leave_unpaid_days` (HR marking it absent still docks it all). Approved permission minutes beyond the free allowance dock that fraction of a day: the employee's shift length, else `standard_day_hours` (8). `days_present` is rounded to 2 places. Payslips add `leave_paid_days`, `leave_unpaid_days`, `absent_days` (absent + half of half days) and `permission_unpaid_minutes`; a payslip with no leave and no permission is computed exactly as before.
+- **Payslips.** `GET /payroll/payslips/{id}` (JSON with the employee's details, the company letterhead, the period, net pay in words) and `/pdf` (A4 under the employee's branch letterhead, `documents.KindInternal`: no footer; bank account masked; a draft run's payslip stamped DRAFT). `GET /payroll/runs/{id}/payslips` (payroll.manage) gives every payslip of a run to print together. An employee sees their own once the run is finalized; `GET /payroll/employees/{id}/payslips` now shows them finalized runs only (payroll.manage sees drafts too) and adds `payslip_id`, the period and the run status.
+- **Approvals.** `GET /approvals/waiting` adds kinds `leave`, `permission`, `regularization` (`can_act` needs hr.manage and not your own; `amount` is null); `GET /approvals/given` adds the same kinds, decided ones with who asked and who approved.
+- **Web:** HR › Leave & Requests (`/hr/leave`: requests with approve / reject / cancel and asking on an employee's behalf, balances with an allowance, leave types, rules), Access › My Leave & Payslips (`/my-hr`, everyone: balance, ask, my requests, my payslips as PDF), Approvals handles the three kinds, the payroll page has a Leave column, a PDF per payslip and "Print all payslips" (`/payroll/runs/{id}/print`), Report Library › Expenses.
+- **POS:** Attendance › "Leave, permission & payslips" (`lib/screens/my_requests_screen.dart`): balance and permission use, ask for leave / permission / an attendance correction, my requests (cancel a waiting one), my payslips saved as PDF.
+
+Verified:
+- `hr_flow.py` 130 (expense reports, settings, leave types and balances, leave approve / overlap / worked day / half day / cancel, permission free and unpaid minutes, regularization of a missed check-out and a missed day with every refusal, HR session endpoints after the refactor, approvals waiting and given, payroll docking, the hand-marked leave staying paid, payslip JSON / PDF / self-view, payroll finalized refusals).
+- All earlier API scripts on one fresh database with it: 759 checks.
+- Go: `TestLeaveYearOf`, `TestFreeMinutes`, `TestHoursText`, `TestPayslip`.
+- Web: `e2e/round13.spec.ts` (4), and `round12`, `hr-payroll`, `audit-softdelete-attendance`, `master-lifecycle`, `merchant-banking-loans`, `phase11-masters`, `users-open-price`, `localization`.
+- POS: `test/my_requests_test.dart` (3); the full suite of 81 passes, goldens unchanged.
+
+### 3.79 Units of measure and pack barcodes (2026-10-29)
+
+Migration 076. `internal/catalog/units.go`; the quantity check in `internal/sales`, `quotations`, `purchase` (PO and GRN lines), `branches` (transfers), `inventory` (adjustments).
+
+**Not changed by default:** every existing product is in Pieces — or Kilograms when it has a weighing-scale code or was ever sold or received in a fraction, so nothing it did is refused — and every barcode is a pack of 1. Stock, cost and price stay per base unit everywhere.
+
+- `units`: code, name, symbol, kind (count, weight, volume, length, area, pack), `factor` in the kind's reference unit (pcs, kg, L, m, sq m; null for a pack unit), `decimals` (0 = whole numbers), standard or the merchant's own, status. Seeded (and `systemUnits`): Pieces, Dozen, Pair, Kilogram, Gram, Quintal, Litre, Millilitre, Metre, Centimetre, Square foot; packs Box, Bag, Tray, Packet, Bottle, Crate, Carton. `GET /units` (everyone), `POST/PATCH /units` (`units.manage`); a unit's kind and size never change.
+- `products.unit_id`: the base unit. A product made by any path without one (an import, a sync) is in Pieces (trigger `app_default_product_unit`). Changing it once the product has stock movements or sales needs `unit_change_confirmed` (`UNIT_IN_USE`). Product list and detail return `unit`.
+- A barcode is a pack: `barcodes.pack_qty` (base units one scan adds), `pack_unit_id`, `pack_size` (as entered). A pack unit holds `pack_size` base units (a Tray of 30 pcs); a unit of the product's own kind converts (500 g of a kg item = 0.5). `POST /products/variants/{id}/barcodes` takes `pack_unit_id` / `pack_size`; `PUT /products/variants/{id}/barcodes/{code}/pack` changes one (and touches the variant, so a till's next pull sees it). Product detail lists `barcodes` with `pack_label`.
+- `GET /products/barcode/{code}` adds `unit`, `pack_qty` (a scale code's weight for a scale code) and `pack_label`. `/sync/pull` adds `pack_qty`, `unit_symbol`, `unit_decimals`.
+- **Whole numbers:** a quantity finer than the unit (a fraction of a Pcs item) is refused (`QTY_UNIT`) when a sale line is added or changed, and on quotation, PO and GRN lines, transfers and adjustments. An offline sale and an invoice import are never refused for it.
+- Sale lines (`GET /sales/orders/{id}`, the sale detail) carry `unit_symbol` / `unit_decimals`; the PDF and thermal receipts print the unit after a quantity that isn't in pieces. Report builder datasets with products have a Unit field.
+- **Web:** Catalog › Units; the product forms' "Counted in"; each barcode's pack ("Add a pack barcode", "Pack…"); the GRN line form starts at a pack's contents; units on the sale pages.
+- **POS:** a scan adds the barcode's pack (a tray adds 30; a scale barcode now adds its weight — it used to add 1); the offline catalog keeps the pack (local DB v8, one full re-pull); cart lines show a non-piece unit; a quantity typed for a whole-number unit must be whole.
+
+### 3.80 What each branch does: business types (2026-10-29)
+
+Migration 077. `internal/branches/business_types.go`.
+
+**Not changed by default:** every existing branch is a Retail shop, and no existing screen or endpoint depends on a type; only the farm (§3.81) needs one.
+
+- `business_types` (the platform's catalogue): Retail shop, Wholesale, Grocery / FMCG, Pharmacy, Warehouse, and farms — Poultry, Goat, Rabbit, Dairy, Pig, Fish (aquaculture) — each with features (`farm`, `farm_poultry` …) and, for a farm, its species. `branch_business_types`: a branch's types (one or more). `app_branch_features(branch)`.
+- `GET /business-types`; `GET /branches` adds `business_types`; `POST /branches` takes them (none = Retail); `PUT /branches/{id}/business-types` (`branches.configure`; at least one; a farm type stays while an active batch of its species is on the branch); `GET /me/features` — the features across the caller's branches, and each branch's types, features and species.
+- **Web:** Branches shows what each branch does, and the shop icon on a row changes it; the Farm group in the sidebar (and the command palette) shows only when a branch farms.
+
+### 3.81 Farm management (2026-10-29)
+
+Migration 078. `internal/farm`.
+
+One model for chicken, goat, rabbit, cattle, pig and fish, built and proven on chicken. Only a branch with a farm business type holds a farm, and a batch only of a species it farms (`BRANCH_NOT_FARM`, `SPECIES_NOT_ON_BRANCH`).
+
+- **Sheds and ponds** (`farm_houses`): shed, pen, cage house, paddock, pond, tank; species; capacity; area. `GET/POST /farm/houses`, `PATCH /farm/houses/{id}`.
+- **Batches** (`farm_batches`, FB-00001): a flock, herd or pond stocking — species, purpose (chicken: broiler, layer, breeder, country; goat: meat, breeding, dairy; rabbit: meat, breeding; cattle: dairy, breeding, calf rearing; pig: fattening, breeding; fish: grow-out, nursery), breed, shed, placed on, age when placed, how many, average weight, source, schedule (the standard one for the purpose unless chosen or "none"). The animals can come out of the branch's stock (`stock_variant_id`: chicks bought on a GRN). Capacity is enforced. `GET/POST /farm/batches`, `GET/PATCH /farm/batches/{id}`, `POST /farm/batches/{id}/close`.
+- **The log** (`farm_events`, `POST /farm/batches/{id}/events`): mortality and culls (heads, cause), feed and medicine (an item and quantity from stock), vaccination (a vaccine or a schedule item, optionally from stock), weight (average, sample), production (an item into stock — eggs, milk, a harvest's live weight — with the heads that left), expense (cost only; pay it in Expenses) and notes. Dates between the placement and today; never more heads than are alive. `POST /farm/events/{id}/cancel` puts the stock and the entry back; the placement can't be cancelled. `GET /farm/events?branch_id=&from=&to=&type=&batch_id=`.
+- **Stock and books:** use leaves stock at its current cost (Dr 1500 Livestock & Farm Work-in-Progress, Cr 1200 Inventory; movement `farm_use`); produce enters stock at the cost given (else the item's cost price), blended into its average cost (Dr 1200, Cr 1500; `farm_output`); a batch-tracked item drains / receives batches. Closing a batch posts what is left in 1500 for it to 5200 Farm Losses & Mortality (or, produce valued above cost, 1500 to 4100 Farm Gains), so 1500 is clear for a closed batch. Mortality moves no money: its cost stays on the survivors. New accounts 1500, 4100, 5200 (also in `systemAccounts`).
+- **Figures** (worked out from the log): age, alive, died, culled, harvested, mortality %, feed (kg of weight-unit items) and per head placed, costs (animals, feed, health, other), produce value, net cost and cost per head alive, latest average weight and live weight, FCR (feed kg / kg gained: live + harvested − placed weight), eggs today and in all and laying % over the last 7 days (count-unit produce of a layer or breeder flock), milk (volume-unit produce), and vaccines due.
+- **Schedules** (`farm_schedules`, items by day of age; `GET/POST /farm/schedules`, `PUT /farm/schedules/{id}`): seeded broiler and layer chicken plans (Marek's, Newcastle, Gumboro … — common practice, to confirm with a vet; `systemFarmSchedules` for a new merchant). A batch's items are due on placed + (day − age when placed): done, overdue, today, coming, or before placement.
+- `GET /farm/dashboard?branch_id=`: the farm branches, active batches with their figures, what is due now and in the next 7 days, today's deaths, feed, eggs and milk. `GET /farm/species`.
+- Permissions `farm.manage` (set up, close, cancel) and `farm.record` (the log and reads): Branch Manager and Merchant Admin, and the Branch Manager role template.
+- Report builder datasets `farm_events` and `farm_batches`; Report Library › Farm: Daily farm log, Flock and herd performance, Feed used by batch, Mortality by cause, Production by day.
+- **Web:** Farm › Farm Dashboard (record a due vaccination from it), Flocks & Herds (and a batch's page: figures, cost, the record buttons, its schedule, its log with cancel, close), Sheds & Ponds, Vaccination Schedules.
+
+Verified:
+- `units_flow.py` 57, `farm_flow.py` 77 (business types; sheds; a broiler flock from stock with feed, vaccination from the schedule, weight, FCR, a harvest into stock, cancel, close clearing 1500; a layer flock's eggs and laying %; the dashboard; schedules; reports).
+- Every API script on one fresh database: about 1,000 checks.
+- Go: `TestFitsDecimals`, `TestQuantityErrorMessage`, `TestPurposes`, `TestTrimNum`.
+- Web: `e2e/round14.spec.ts` (2) and `round13`.
+- POS: `test/units_test.dart` and the offline pack in `offline_store_test.dart`; the full suite of 84 passes, goldens unchanged.
+
+### 3.82 Farm, round 2: animals, breeding, milk, feed and medicine (2026-10-30)
+
+Migration 079. `internal/farm` (`animals.go`, `feed.go`, `health.go`; `events.go` and `batches.go` extended).
+
+**Not changed by default:** an existing batch's figures are as before (a head count still comes from its log; the new event types only add to it), no withdrawal applies until a treatment has withdrawal days, and every existing endpoint answers as before with more fields.
+
+- **The register** (`farm_animals`, cattle, goats, pigs and rabbits): tag (once per business), name, sex, breed (the herd's unless given), born on, mother, father (an animal, or a note: a bull, an AI straw), the herd (a batch) and status (active, dead, culled, harvested). Each animal is one of its batch's heads: "existing" (counted already: at most the alive count; joined on the placement date) or "purchased" (an `addition` event adds a head, out of stock if `stock_variant_id`). `GET/POST /farm/animals`, `GET/PATCH /farm/animals/{id}` (age, last weight, breeding state, milk a day over 7 days, withdrawal; its log, breeding, milk, young), `POST /farm/animals/{id}/move` (to another active batch of the species on the branch: `transfer_out` and `transfer_in` events, no money moves) and `/exit` (died, culled, harvested into stock as one head). A herd's death, cull or harvest without an animal is refused once every remaining head is on the register (`ANIMAL_REQUIRED`); a batch with animals on the register doesn't close.
+- **Breeding** (`farm_breeding`, `POST /farm/animals/{id}/breeding`, `POST /farm/breeding/{id}/cancel`): heat, service (natural or AI, with the father), pregnancy check, birth (born alive and dead; the live young are a `birth` event of the herd, and those given tags join the register with their mother and the last service's father), abortion, dry off. State: open, served or pregnant with the expected birth (service + 283 days cattle, 150 goats, 114 pigs, 31 rabbits), in milk from a birth until dried off, days in milk.
+- **Milk** (`farm_milk_records`): `GET /farm/batches/{id}/milk?date=` lists the herd's females with each milking; `POST` records one milking (am, pm or the day) per animal, the total into stock as one production event (`produce_kind` milk, item in a volume unit).
+- **Treatments and withdrawal:** a medicine or vaccination takes an animal (or the whole batch), dose, course days, vet, diagnosis and withdrawal days for meat, milk and eggs (default: its farm item's). It keeps the dates produce may be taken again. Produce of that kind from the batch or animal before then is refused (`WITHDRAWAL_PERIOD`); farm.manage may override with a reason, kept on the event. A production event's `produce_kind` (meat, milk, eggs, other) is given or worked out (volume = milk, count from a chicken flock = eggs, heads or weight = meat).
+- **Farm items** (`farm_items`, `GET/POST /farm/items`, `PUT/DELETE /farm/items/{id}`): which products are feed, medicine or vaccine, for which species, with withdrawal days and a dose note. `GET /farm/health/stock` (each farm's medicines: free stock, next expiry from stock batches, expired and expiring within `expiry_warn_days`, used in 30 days), `GET /farm/health/withdrawals` (open withdrawals).
+- **Feed plans** (`farm_feed_plans` + items, `GET/POST /farm/feed-plans`, `PUT /farm/feed-plans/{id}`): by age (day from–to), one or more feeds, grams a head a day or (fish) % of body weight, each optionally the product in stock. Seeded (and `systemFarmFeedPlans`): broiler, layer, goat, dairy cattle, pig fattening, rabbit, fish grow-out — typical practice, to confirm with a nutritionist. A batch takes the standard plan for its species and purpose (or one chosen, or none). The batch's figures add today's ration, the plan to date against what was fed (`feed_vs_plan_pct`), biomass.
+- **Feed stock** (`GET /farm/feed/stock`): each farm's feeds (feed items, the products the active batches' plans name, what was fed in 30 days): free stock, today's planned use, the last 7 days' use, days left at the larger, low under `feed_low_days`.
+- **Our own feed** (`farm_feed_recipes`, `farm_feed_mixes`; `GET/POST /farm/feed/recipes`, `PUT …/{id}`, `GET/POST /farm/feed/mixes`, `POST …/{id}/cancel`): a recipe's ingredients for a batch size; a mix (FM-00001) scales them (or takes the lines used), takes them out of stock at cost (`farm_use`, reference `farm_feed_mix`) and puts the feed in at their total ÷ its quantity (`farm_output`), with no ledger entry (stock to stock). Cancelling reverses both.
+- **Water** (`farm_water_logs`, `GET/POST /farm/water`, `DELETE /farm/water/{id}`): a pond's DO, pH, temperature, ammonia, nitrite, transparency, with readings outside the warm-water range flagged.
+- **Schedules** repeat: `repeat_every_days` on an item; the next one is due that long after it was last given (else the first on or after placement). Seeded goat, cattle, pig and rabbit health plans (PPR, ET, FMD, HS, BQ, LSD, brucellosis, CSF, iron, deworming…; typical practice, to confirm with a vet). A batch takes a schedule for its purpose, else one for any purpose of its species.
+- `GET/PUT /farm/settings` (`feed_low_days` 7, `expiry_warn_days` 30). The dashboard adds feed running low, open withdrawals, births due within 14 days and medicine expired or expiring.
+- **Fixed:** 078's farm moves of a batch-tracked item (a medicine with an expiry) failed the `stock_batch_movements` reference check; 079 allows `farm_event` and `farm_feed_mix`.
+- Report builder: `farm_events` adds animal, produce, dose, vet, withdrawal dates and override; dataset `farm_milk`; Report Library › Farm: Milk by animal, Treatments and withdrawals.
+- **Web:** Farm › Animals (and an animal's page), Milk Recording, Feed (stock, plans, our own feed), Health & Medicine (in withdrawal, medicine stock, treatments, farm items), Water Quality; the batch page's feed, withdrawal and animals; the event dialog's animal, treatment and override; the batch dialog's feed plan; schedules' repeat.
+
+Verified: `farm2_flow.py` 87 (the register, breeding and a calf joining it, milk per animal with a withdrawal refused, overridden only by farm.manage with a reason, a repeating FMD, a death cancelled, a move, goats' kidding due, fish fed by body weight, water flags, feed plan against feed, stock cover, eggs withdrawal, a mix and its cancel without a ledger entry, medicine expiry, the dashboard, the reports).
+
+### 3.83 Selling price suggestions (2026-10-30)
+
+Migration 080. `internal/pricing/suggest.go`; `internal/catalog/barcode_original.go`.
+
+**Not changed by default:** the feature is off for every merchant until the Merchant Admin switches it on, and it never prices anything by itself: a suggestion only fills in a price a person then saves, or applies after a preview. The POS never sees it.
+
+- **Plan feature** `price_suggestion` (Professional and Enterprise; existing merchants are on Enterprise): `/pricing/suggest…` and `/pricing/suggestion-…` answer `FEATURE_NOT_IN_PLAN` without it.
+- **Settings** (`GET/PUT /pricing/suggestion-settings`; PUT `pricing.suggestion.manage`, Merchant Admin only): `enabled`, `cost_includes_tax` (the cost prices already include GST — no input credit; off: GST is added to the cost of a GST-inclusive item, so the margin is on the price before GST). Switching on with no rule adds "All products": a 15% margin, charm rounding.
+- **Rules** (`price_suggestion_rules`; `GET`, `POST`, `PUT/PATCH/DELETE …/{id}`, writes `pricing.suggestion.manage`; a deleted rule goes to the Recycle Bin): for every product, a category (and below it), a brand, or both. Method `cost` (margin: cost ÷ (1 − %), or markup: cost × (1 + %)), `mrp` (MRP − %), `lower` / `higher` of the two; a minimum margin; rounding up to ₹1 / ₹5 / ₹10, to a price ending in 9, to ₹X.99, or `charm` (₹5 up to ₹100, then ending in 9 — ADR Sports' playbook, `docs/ADR_SPORTS_Pricing_Strategy_and_Selling_Price_List.xlsx`: it gives every one of its 330 prices). Most specific wins: category + brand, the nearest category, brand, all; then priority, newest.
+- **A suggestion** (`POST /pricing/suggest {items: [{variant_id | figures, cost_price?, mrp?, category_id?, brand_id?, tax_slab_id?, price_includes_tax?}]}`, up to 200): in the product's selling-price terms; never above MRP (a price that rounds over it is MRP, `at_mrp`); `hold` with no price when cost (plus the minimum margin) is at or above MRP; `check` with no MRP; `no_cost`, `no_rule`. With the margin it gives and the rule's name.
+- **Bulk** (`POST /pricing/suggest/preview`, `/apply` — pricing.manage): every active item of a category / brand, a search (`q`: name, SKU or barcode) or chosen `variant_ids`, to its suggestion — or to a price typed over it (`prices: {variant_id: price}`, applied whatever the suggestion's status, its history reason marked "(edited)"). An unedited suggestion is applied only when `ok` or `at_mrp`; nothing above MRP (`skipped_above_mrp`) or below cost on the net price (`skipped_negative_margin`). Each row returns `price` (what applies) and `edited`.
+- **Original barcode** (`PUT /products/variants/{id}/original-barcode {code}`, pricing.manage): replaces the variant's original barcode (keeping its pack) or adds one; the generated code is untouched; EAN-13 checked; `BARCODE_EXISTS`; the variant is touched for the POS's next pull (a till's cache keeps the old code too, still for the same item, until its next full refresh).
+- **Web:** Pricing › Price Suggestions (settings, rules, try it, apply in bulk); the Pricing list's Suggested column and the Edit pricing dialog (original barcode, cost, MRP, and the selling price filled in from the suggestion as cost and MRP change, still editable, with "Keep" the current price); New product fills its selling price the same way until one is typed.
+
+Verified: `price_flow.py` 52 (edited prices, the search and chosen variants too; the plan gate, Merchant Admin only, the playbook's prices, at MRP / hold / check, rule specificity, figures for a new product, GST basis, bulk preview and apply, the original barcode); Go `TestSuggestMatchesThePlaybook`, `TestSuggestRules`, `TestRoundUp`. Every API script on one fresh database: about 1,050 checks.
 
 ## 4. What Phase 0 concretely delivers against this design
 

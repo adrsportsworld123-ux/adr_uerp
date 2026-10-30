@@ -40,6 +40,7 @@ export type VariantStatus = ProductStatus | "out_of_stock";
 export interface Product {
   product_id: string;
   name: string;
+  unit?: UnitRef | null; // erp-core-go migrations/076
   status: ProductStatus;
   hsn_code: string;
   // erp-core-go migrations/033: whether every variant's selling_price
@@ -130,6 +131,7 @@ export interface Branch {
   timezone: string;
   gstin: string;
   status: string;
+  business_types?: string[]; // erp-core-go migrations/077
 }
 
 // GET/PUT /branches/{id}/print-settings (erp-core-go internal/documents):
@@ -1205,6 +1207,13 @@ export interface AttendanceSettings {
   geofence_mode: "off" | "flag" | "block";
   allow_web: boolean;
   allow_pos: boolean;
+  // Leave, permission and regularization rules (migrations/075).
+  leave_year_start_month: number;
+  permission_free_count: number;
+  permission_free_minutes: number;
+  permission_max_minutes: number;
+  standard_day_hours: number;
+  regularize_within_days: number;
   updated_at: string | null;
 }
 
@@ -1357,6 +1366,145 @@ export interface Payslip {
   net_pay: string;
   // Employee loan instalments recovered from this pay (migrations/067).
   loan_deduction?: string;
+  // Leave and permission (migrations/075): what reduced days_present.
+  leave_paid_days?: string;
+  leave_unpaid_days?: string;
+  absent_days?: string;
+  permission_unpaid_minutes?: number;
+  payslip_id?: string;
+  payroll_run_id?: string;
+  period_month?: number;
+  period_year?: number;
+  run_status?: string;
+}
+
+// A payslip to print (GET /payroll/payslips/{id}, /payroll/runs/{id}/payslips).
+export interface PayslipDocument extends Payslip {
+  employee: {
+    employee_code: string | null;
+    designation: string | null;
+    department: string | null;
+    branch_id: string | null;
+    branch: string | null;
+    date_of_joining: string | null;
+    pan_number: string | null;
+    uan_number: string | null;
+    esi_number: string | null;
+    bank_account_no: string | null;
+    bank_ifsc: string | null;
+  };
+  company: { name: string; address: string[] | null; phone?: string; email?: string; gstin?: string };
+  period: string;
+  net_pay_words: string;
+  currency: { code: string; symbol: string };
+}
+
+// Leave, permission and attendance regularization (erp-core-go §3.78,
+// internal/hr/leave.go, permission.go, regularization.go).
+export type RequestStatus = "pending" | "approved" | "rejected" | "cancelled";
+
+export interface LeaveType {
+  leave_type_id: string;
+  code: string;
+  name: string;
+  paid: boolean;
+  annual_quota: number | null;
+  allow_half_day: boolean;
+  status: "active" | "inactive";
+  sort_order: number;
+}
+
+export interface LeaveBalance {
+  leave_type_id: string;
+  code: string;
+  name: string;
+  paid: boolean;
+  status: string;
+  entitled: number | null;
+  override: boolean;
+  taken: number;
+  unpaid: number;
+  pending: number;
+  available: number | null;
+}
+
+export interface PermissionUsage {
+  month: string;
+  free_count: number;
+  free_minutes: number;
+  max_minutes: number;
+  used_count: number;
+  used_free_minutes: number;
+  unpaid_minutes: number;
+  pending_count: number;
+  remaining_count: number;
+  remaining_minutes: number;
+}
+
+export interface LeaveBalances {
+  user_id: string;
+  name: string;
+  leave_year: number;
+  year_from: string;
+  year_to: string;
+  balances: LeaveBalance[];
+  permission: PermissionUsage;
+}
+
+interface HrRequestBase {
+  request_number: string;
+  user_id: string;
+  employee: string;
+  employee_code: string | null;
+  branch_id: string | null;
+  branch: string | null;
+  reason: string;
+  status: RequestStatus;
+  source: "pos" | "web" | "api";
+  requested_by: string | null;
+  requested_at: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  cancelled_by: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+}
+
+export interface LeaveRequest extends HrRequestBase {
+  leave_request_id: string;
+  leave_type_id: string;
+  leave_type: string;
+  leave_code: string;
+  paid_type: boolean;
+  leave_year: number;
+  from_date: string;
+  to_date: string;
+  half_day: boolean;
+  days: number;
+  paid_days: number | null;
+  unpaid_days: number | null;
+}
+
+export interface PermissionRequest extends HrRequestBase {
+  permission_request_id: string;
+  work_date: string;
+  from_time: string;
+  to_time: string;
+  minutes: number;
+  paid_minutes: number | null;
+  unpaid_minutes: number | null;
+}
+
+export interface Regularization extends HrRequestBase {
+  regularization_id: string;
+  work_date: string;
+  session_id: string | null;
+  clock_in: string | null;
+  clock_out: string | null;
+  before_clock_in: string | null;
+  before_clock_out: string | null;
+  applied_session_id: string | null;
 }
 
 export interface PayrollRun {
@@ -1624,6 +1772,45 @@ export interface ProductDetailVariant {
   // Phase 13: null = fixed price; otherwise the cashier types a price in
   // [min, max], and above approval_above a manager approves.
   open_price: OpenPrice | null;
+  // Every barcode with its pack (erp-core-go migrations/076).
+  barcodes?: BarcodeInfo[];
+}
+
+// Units of measure (erp-core-go §3.79, internal/catalog/units.go).
+export type UnitKind = "count" | "weight" | "volume" | "length" | "area" | "pack";
+
+export interface Unit {
+  unit_id: string;
+  code: string;
+  name: string;
+  symbol: string;
+  kind: UnitKind;
+  factor: number | null; // in kg / L / m / sq m / pcs; null for a pack unit
+  decimals: number;
+  is_system: boolean;
+  status: "active" | "inactive";
+  sort_order: number;
+  products: number;
+}
+
+export interface UnitRef {
+  unit_id: string;
+  code: string;
+  symbol: string;
+  name: string;
+  kind: UnitKind;
+  decimals: number;
+}
+
+export interface BarcodeInfo {
+  code: string;
+  symbology: string;
+  source: "original" | "generated";
+  is_primary: boolean;
+  pack_qty: string; // base units one scan adds
+  pack_unit_id: string | null;
+  pack_size: string | null;
+  pack_label: string; // "Tray of 30 pcs", "500 g"; "" for one base unit
 }
 
 export interface OpenPrice {
@@ -1650,6 +1837,7 @@ export interface ProductDetail {
   price_includes_tax: boolean;
   updated_at: string;
   variants: ProductDetailVariant[];
+  unit?: UnitRef | null;
   /** The POS tile colour, #RRGGBB (erp-core-go migrations/063); null = none of its own. */
   pos_color?: string | null;
 }
@@ -1713,6 +1901,7 @@ export interface SaleDetailLine {
   line_total: string;
   open_price: boolean;
   price_approved_by: string | null;
+  unit_symbol?: string; // erp-core-go migrations/076
 }
 
 export interface SaleDetailPayment {
@@ -1806,7 +1995,7 @@ export interface CartOrder {
   round_off: string;
   payable_total: string;
   /** product_name is an open-price line's own description when it has one (description), else catalog_name (migrations/062). */
-  lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean; description?: string | null; catalog_name?: string }[];
+  lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean; description?: string | null; catalog_name?: string; unit_symbol?: string; unit_decimals?: number }[];
   tax_breakup?: TaxBreakup;
   /** The delivery state set on the cart (migrations/061); null = the usual rule. */
   ship_to_state?: string | null;
@@ -2032,4 +2221,473 @@ export interface EmployeeLoan {
   created_at: string;
   schedule?: LoanInstallment[];
   repayments?: LoanRepayment[];
+}
+
+// Farm management (erp-core-go §3.81, internal/farm).
+export type FarmSpecies = "chicken" | "goat" | "rabbit" | "cow" | "pig" | "fish";
+
+export interface FarmHouse {
+  house_id: string;
+  branch_id: string;
+  branch: string;
+  name: string;
+  kind: "shed" | "pen" | "cage" | "paddock" | "pond" | "tank" | "other";
+  species: FarmSpecies;
+  capacity: number | null;
+  area_sqft: number | null;
+  notes: string | null;
+  status: "active" | "inactive";
+  occupied: number;
+  active_batch: string | null;
+}
+
+export interface FarmKPI {
+  age_days: number;
+  alive: number;
+  dead: number;
+  culled: number;
+  harvested: number;
+  mortality_pct: number;
+  feed_kg: number;
+  feed_cost: number;
+  health_cost: number;
+  stock_cost: number;
+  other_cost: number;
+  output_value: number;
+  net_cost: number;
+  cost_per_head: number | null;
+  latest_avg_weight_kg: number | null;
+  latest_weighed_on: string | null;
+  live_weight_kg: number | null;
+  harvested_kg: number;
+  fcr: number | null;
+  feed_per_head_kg: number | null;
+  eggs_total: number;
+  eggs_today: number;
+  laying_7d_pct: number | null;
+  milk_total_l: number;
+  outputs: { variant_id: string; product: string; unit: string; quantity: number; value: number }[];
+  vaccines_due: number;
+  // §3.82
+  born: number;
+  added: number;
+  moved_out: number;
+  on_register: number;
+  feed_today: FarmRation[];
+  feed_planned_kg: number | null;
+  feed_vs_plan_pct: number | null;
+  biomass_kg: number | null;
+  withdrawal: FarmWithdrawalDates;
+  animals_in_withdrawal: number;
+}
+
+export interface FarmRation {
+  feed_name: string;
+  product_id: string | null;
+  product: string | null;
+  kg: number | null;
+}
+
+/** The dates meat, milk and eggs may be taken again (null = none pending). */
+export interface FarmWithdrawalDates {
+  meat_until: string | null;
+  milk_until: string | null;
+  eggs_until: string | null;
+}
+
+export interface FarmBatch {
+  batch_id: string;
+  batch_number: string;
+  name: string | null;
+  branch_id: string;
+  branch: string;
+  house_id: string | null;
+  house: string | null;
+  species: FarmSpecies;
+  purpose: string;
+  breed: string | null;
+  supplier_id: string | null;
+  supplier: string | null;
+  source: string | null;
+  placed_on: string;
+  age_at_placement_days: number;
+  initial_count: number;
+  initial_avg_weight_kg: number | null;
+  schedule_id: string | null;
+  schedule: string | null;
+  feed_plan_id: string | null;
+  feed_plan: string | null;
+  status: "active" | "closed";
+  closed_on: string | null;
+  close_note: string | null;
+  notes: string | null;
+  kpi: FarmKPI;
+}
+
+export interface FarmDue {
+  schedule_item_id: string;
+  day_of_age: number;
+  kind: "vaccination" | "medicine" | "task";
+  name: string;
+  method: string | null;
+  due_on: string;
+  state: "done" | "overdue" | "due_today" | "upcoming" | "before_placement" | "not_done";
+  done_on: string | null;
+  event_id: string | null;
+  repeat_every_days: number | null;
+}
+
+export type FarmEventType =
+  | "placement"
+  | "mortality"
+  | "cull"
+  | "feed"
+  | "medicine"
+  | "vaccination"
+  | "weight"
+  | "production"
+  | "expense"
+  | "note"
+  | "birth"
+  | "addition"
+  | "transfer_in"
+  | "transfer_out";
+
+export type FarmProduceKind = "meat" | "milk" | "eggs" | "other";
+
+export interface FarmEvent {
+  event_id: string;
+  batch_id: string;
+  batch_number: string;
+  branch_id: string;
+  event_date: string;
+  event_type: FarmEventType;
+  head_count: number | null;
+  variant_id: string | null;
+  product: string | null;
+  unit: string | null;
+  quantity: number | null;
+  unit_cost: number | null;
+  amount: number | null;
+  avg_weight_kg: number | null;
+  sample_size: number | null;
+  cause: string | null;
+  vaccine: string | null;
+  method: string | null;
+  schedule_item_id: string | null;
+  notes: string | null;
+  journal_entry_id: string | null;
+  status: "posted" | "cancelled";
+  cancel_reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  animal_id: string | null;
+  animal_tag: string | null;
+  produce_kind: FarmProduceKind | null;
+  dose: string | null;
+  course_days: number | null;
+  vet: string | null;
+  withdrawal_meat_until: string | null;
+  withdrawal_milk_until: string | null;
+  withdrawal_eggs_until: string | null;
+  withdrawal_override: string | null;
+  related_batch: string | null;
+}
+
+export interface FarmSchedule {
+  schedule_id: string;
+  species: FarmSpecies;
+  purpose: string | null;
+  name: string;
+  is_system: boolean;
+  status: "active" | "inactive";
+  items: {
+    schedule_item_id: string;
+    day_of_age: number;
+    kind: string;
+    name: string;
+    method: string | null;
+    notes: string | null;
+    repeat_every_days: number | null;
+  }[];
+}
+
+// Farm, round 2 (erp-core-go §3.82, migrations/079).
+export interface FarmBreedState {
+  status: "open" | "served" | "pregnant" | "male" | "";
+  last_service_on: string | null;
+  expected_birth_on: string | null;
+  last_birth_on: string | null;
+  lactating: boolean;
+  days_in_milk: number | null;
+  births: number;
+}
+
+export interface FarmAnimal {
+  animal_id: string;
+  tag: string;
+  name: string | null;
+  species: FarmSpecies;
+  sex: "female" | "male";
+  breed: string | null;
+  born_on: string | null;
+  age_days: number | null;
+  origin: "existing" | "purchased" | "born";
+  joined_on: string;
+  branch_id: string;
+  branch: string;
+  batch_id: string;
+  batch_number: string;
+  house: string | null;
+  dam_id: string | null;
+  dam_tag: string | null;
+  sire_id: string | null;
+  sire_tag: string | null;
+  sire_note: string | null;
+  status: "active" | "dead" | "culled" | "harvested";
+  exit_on: string | null;
+  notes: string | null;
+  latest_weight_kg: number | null;
+  weighed_on: string | null;
+  breeding: FarmBreedState;
+  milk_7d_avg_l: number | null;
+  withdrawal: FarmWithdrawalDates;
+}
+
+export type FarmBreedingType = "heat" | "service" | "pregnancy_check" | "birth" | "abortion" | "dry_off";
+
+export interface FarmBreedingEvent {
+  breeding_id: string;
+  event_date: string;
+  event_type: FarmBreedingType;
+  method: "natural" | "ai" | null;
+  sire_id: string | null;
+  sire_tag: string | null;
+  sire_note: string | null;
+  result: "positive" | "negative" | null;
+  born_alive: number | null;
+  born_dead: number | null;
+  notes: string | null;
+  status: "posted" | "cancelled";
+  created_by: string | null;
+}
+
+export interface FarmAnimalDetail extends FarmAnimal {
+  events: FarmEvent[];
+  breeding_events: FarmBreedingEvent[];
+  milk: { date: string; am: number; pm: number; day: number; litres: number }[];
+  young: FarmAnimal[];
+}
+
+export interface FarmMilkSheet {
+  date: string;
+  batch_id: string;
+  batch_number: string;
+  batch_withdrawal_milk_until: string | null;
+  animals: {
+    animal_id: string;
+    tag: string;
+    name: string | null;
+    lactating: boolean;
+    days_in_milk: number | null;
+    am: number | null;
+    pm: number | null;
+    day: number | null;
+    withdrawal_milk_until: string | null;
+  }[];
+}
+
+export interface FarmFeedPlanItem {
+  plan_item_id: string;
+  day_from: number;
+  day_to: number | null;
+  feed_name: string;
+  product_id: string | null;
+  product: string | null;
+  grams_per_head: number | null;
+  pct_body_weight: number | null;
+}
+
+export interface FarmFeedPlan {
+  feed_plan_id: string;
+  species: FarmSpecies;
+  purpose: string | null;
+  name: string;
+  basis: "per_head" | "pct_biomass";
+  is_system: boolean;
+  status: "active" | "inactive";
+  items: FarmFeedPlanItem[];
+  batches: number;
+}
+
+export interface FarmFeedStockRow {
+  branch_id: string;
+  branch: string;
+  product_id: string;
+  product: string;
+  unit: string;
+  free: number;
+  planned_daily: number | null;
+  used_daily: number;
+  days_left: number | null;
+  low: boolean;
+}
+
+export interface FarmRecipe {
+  recipe_id: string;
+  name: string;
+  output_variant_id: string;
+  output: string;
+  output_unit: string;
+  batch_size: number;
+  notes: string | null;
+  status: "active" | "inactive";
+  items: { variant_id: string; product: string; unit: string; quantity: number; unit_cost: number }[];
+  cost_per_batch: number;
+  cost_per_unit: number;
+}
+
+export interface FarmMix {
+  mix_id: string;
+  mix_number: string;
+  branch_id: string;
+  branch: string;
+  recipe_id: string | null;
+  recipe: string | null;
+  output_variant_id: string;
+  output: string;
+  output_unit: string;
+  output_qty: number;
+  total_cost: number;
+  unit_cost: number;
+  mixed_on: string;
+  notes: string | null;
+  status: "posted" | "cancelled";
+  cancel_reason: string | null;
+  created_by: string | null;
+  lines: { variant_id: string; product: string; unit: string; quantity: number; unit_cost: number; amount: number }[];
+}
+
+export interface FarmItem {
+  farm_item_id: string;
+  product_id: string;
+  product: string;
+  unit: string;
+  variant_id: string | null;
+  role: "feed" | "medicine" | "vaccine";
+  species: FarmSpecies[];
+  withdrawal_meat_days: number | null;
+  withdrawal_milk_days: number | null;
+  withdrawal_eggs_days: number | null;
+  dose_note: string | null;
+  notes: string | null;
+}
+
+export interface FarmMedicineRow {
+  branch_id: string;
+  branch: string;
+  product_id: string;
+  product: string;
+  role: "medicine" | "vaccine";
+  unit: string;
+  free: number;
+  next_expiry: string | null;
+  expired_qty: number;
+  expiring_qty: number;
+  used_30d: number;
+  withdrawal_meat_days: number | null;
+  withdrawal_milk_days: number | null;
+  withdrawal_eggs_days: number | null;
+}
+
+export interface FarmWithdrawalRow {
+  event_id: string;
+  batch_id: string;
+  batch_number: string;
+  branch_id: string;
+  house: string | null;
+  species: FarmSpecies;
+  animal_id: string | null;
+  animal_tag: string | null;
+  treatment: string;
+  treated_on: string;
+  meat_until: string | null;
+  milk_until: string | null;
+  eggs_until: string | null;
+}
+
+export interface FarmWaterLog {
+  water_log_id: string;
+  branch_id: string;
+  house_id: string;
+  house: string;
+  logged_on: string;
+  logged_time: string | null;
+  do_mg_l: number | null;
+  ph: number | null;
+  temp_c: number | null;
+  ammonia_mg_l: number | null;
+  nitrite_mg_l: number | null;
+  transparency_cm: number | null;
+  notes: string | null;
+  created_by: string | null;
+  alerts: string[];
+}
+
+export interface FarmBirthDue {
+  animal_id: string;
+  tag: string;
+  name: string | null;
+  species: FarmSpecies;
+  batch_number: string;
+  served_on: string;
+  expected_on: string;
+  status: "served" | "pregnant";
+}
+
+// Selling price suggestions (erp-core-go §3.83, migrations/080).
+export interface SuggestionSettings {
+  enabled: boolean;
+  cost_includes_tax: boolean;
+  can_manage: boolean;
+  rule_count: number;
+}
+
+export type SuggestionMethod = "cost" | "mrp" | "lower" | "higher";
+export type SuggestionRounding = "none" | "up_1" | "up_5" | "up_10" | "end_9" | "end_99" | "charm";
+
+export interface SuggestionRule {
+  rule_id: string;
+  name: string;
+  category_id: string | null;
+  category: string | null;
+  brand_id: string | null;
+  brand: string | null;
+  method: SuggestionMethod;
+  cost_type: "margin" | "markup";
+  cost_pct: number | null;
+  mrp_discount_pct: number | null;
+  min_margin_pct: number;
+  rounding: SuggestionRounding;
+  priority: number;
+  active: boolean;
+  created_at: string;
+}
+
+export type SuggestionStatus = "ok" | "at_mrp" | "check" | "hold" | "no_cost" | "no_rule";
+
+export interface PriceSuggestion {
+  key: string;
+  variant_id?: string;
+  sku?: string;
+  product_name?: string;
+  current_price: number;
+  cost_price: number;
+  mrp: number;
+  suggested_price: number | null;
+  status: SuggestionStatus;
+  margin_pct: number | null;
+  rule_id: string | null;
+  rule: string | null;
+  note: string;
 }

@@ -25,6 +25,11 @@ export type Entitlements = {
   retention_days: number | null;
 };
 
+// What the caller's branches do (erp-core-go §3.80, GET /me/features): the
+// business-type features across them (retail, wholesale, farm …) and each
+// branch's own, so the farm screens show only where a branch farms.
+export type BranchFeatures = { branch_id: string; name: string; business_types: string[]; features: string[]; species: string[] };
+
 type PermissionsState = {
   loaded: boolean;
   permissions: string[];
@@ -34,6 +39,10 @@ type PermissionsState = {
   entitlements: Entitlements | null;
   has: (feature: string) => boolean;
   refreshEntitlements: () => void;
+  /** Some branch the caller sees has this business feature ("farm" …). */
+  does: (feature: string) => boolean;
+  branchFeatures: BranchFeatures[];
+  refreshFeatures: () => void;
 };
 
 const PermissionsContext = createContext<PermissionsState>({
@@ -44,6 +53,9 @@ const PermissionsContext = createContext<PermissionsState>({
   entitlements: null,
   has: () => true,
   refreshEntitlements: () => {},
+  does: () => false,
+  branchFeatures: [],
+  refreshFeatures: () => {},
 });
 
 export function PermissionsProvider({ children }: { children: ReactNode }) {
@@ -55,6 +67,21 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
   });
   const [entitlements, setEntitlements] = useState<Entitlements | null>(null);
   const [entTick, setEntTick] = useState(0);
+  const [features, setFeatures] = useState<{ all: string[]; branches: BranchFeatures[] }>({ all: [], branches: [] });
+  const [featTick, setFeatTick] = useState(0);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    api
+      .get<{ features: string[]; branches: BranchFeatures[] }>("/api/v1/me/features")
+      .then((d) => !cancelled && setFeatures({ all: d.features, branches: d.branches }))
+      // An older backend: no business features, so only the farm screens stay hidden.
+      .catch(() => !cancelled && setFeatures({ all: [], branches: [] }));
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, featTick]);
 
   useEffect(() => {
     if (!userId) return;
@@ -91,9 +118,15 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
 
   const has = useCallback((feature: string) => !entitlements || entitlements.features.includes(feature), [entitlements]);
   const refreshEntitlements = useCallback(() => setEntTick((t) => t + 1), []);
+  const does = useCallback((feature: string) => features.all.includes(feature), [features]);
+  const refreshFeatures = useCallback(() => setFeatTick((t) => t + 1), []);
 
   return (
-    <PermissionsContext.Provider value={{ ...state, can, entitlements, has, refreshEntitlements }}>{children}</PermissionsContext.Provider>
+    <PermissionsContext.Provider
+      value={{ ...state, can, entitlements, has, refreshEntitlements, does, branchFeatures: features.branches, refreshFeatures }}
+    >
+      {children}
+    </PermissionsContext.Provider>
   );
 }
 

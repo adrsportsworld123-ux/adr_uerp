@@ -23,6 +23,7 @@ import (
 	"erp-core-go/internal/documents"
 	"erp-core-go/internal/einvoice"
 	"erp-core-go/internal/expenses"
+	"erp-core-go/internal/farm"
 	"erp-core-go/internal/gst"
 	"erp-core-go/internal/hr"
 	"erp-core-go/internal/inventory"
@@ -66,6 +67,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	passwordReset := &authn.PasswordResetHandler{DB: database, Notify: notify}
 	barcode := &catalog.BarcodeHandler{DB: database}
 	barcodeAssign := &catalog.BarcodeAssignHandler{DB: database}
+	unitH := &catalog.UnitHandler{DB: database}
 	taxonomy := &catalog.TaxonomyHandler{DB: database}
 	deps := &dependencies.Handler{DB: database}
 	terms := &terminals.Handler{DB: database}
@@ -81,6 +83,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	pur := &purchase.Handler{DB: database, Search: searchClient}
 	acct := &accounting.Handler{DB: database}
 	br := &branches.Handler{DB: database}
+	farmH := &farm.Handler{DB: database}
 	docs := &documents.Handler{DB: database}
 	taxH := &taxes.Handler{DB: database}
 	usersH := &users.Handler{DB: database}
@@ -207,6 +210,63 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			// gate below still enforces on its own), and "what uses this
 			// record?" counts for master data.
 			protected.Get("/me/permissions", me.Permissions)
+			// What each branch does (§3.80, migrations/077).
+			protected.Get("/me/features", br.MyFeatures)
+			protected.Get("/business-types", br.ListBusinessTypes)
+			protected.With(authn.RequirePermission(database, "branches.configure")).
+				Put("/branches/{id}/business-types", br.SetBranchBusinessTypes)
+			// Farm management (§3.81, migrations/078).
+			farmRecord := authn.RequirePermission(database, "farm.record")
+			farmManage := authn.RequirePermission(database, "farm.manage")
+			protected.Get("/farm/species", farmH.Species)
+			protected.With(farmRecord).Get("/farm/dashboard", farmH.Dashboard)
+			protected.With(farmRecord).Get("/farm/houses", farmH.ListHouses)
+			protected.With(farmManage).Post("/farm/houses", farmH.CreateHouse)
+			protected.With(farmManage).Patch("/farm/houses/{id}", farmH.UpdateHouse)
+			protected.With(farmRecord).Get("/farm/batches", farmH.ListBatches)
+			protected.With(farmManage).Post("/farm/batches", farmH.CreateBatch)
+			protected.With(farmRecord).Get("/farm/batches/{id}", farmH.GetBatch)
+			protected.With(farmManage).Patch("/farm/batches/{id}", farmH.UpdateBatch)
+			protected.With(farmManage).Post("/farm/batches/{id}/close", farmH.CloseBatch)
+			protected.With(farmRecord).Post("/farm/batches/{id}/events", farmH.RecordEvent)
+			protected.With(farmRecord).Get("/farm/events", farmH.ListEvents)
+			protected.With(farmManage).Post("/farm/events/{id}/cancel", farmH.CancelEvent)
+			protected.With(farmRecord).Get("/farm/schedules", farmH.ListSchedules)
+			protected.With(farmManage).Post("/farm/schedules", farmH.SaveSchedule)
+			protected.With(farmManage).Put("/farm/schedules/{id}", farmH.SaveSchedule)
+			// Farm, round 2 (§3.82, migrations/079): animals, breeding, milk,
+			// feed plans / stock / mixing, medicine, water, settings.
+			protected.With(farmRecord).Get("/farm/animals", farmH.ListAnimals)
+			protected.With(farmManage).Post("/farm/animals", farmH.CreateAnimal)
+			protected.With(farmRecord).Get("/farm/animals/{id}", farmH.GetAnimal)
+			protected.With(farmManage).Patch("/farm/animals/{id}", farmH.UpdateAnimal)
+			protected.With(farmManage).Post("/farm/animals/{id}/move", farmH.MoveAnimal)
+			protected.With(farmRecord).Post("/farm/animals/{id}/exit", farmH.AnimalExit)
+			protected.With(farmRecord).Post("/farm/animals/{id}/breeding", farmH.RecordBreeding)
+			protected.With(farmManage).Post("/farm/breeding/{id}/cancel", farmH.CancelBreeding)
+			protected.With(farmRecord).Get("/farm/batches/{id}/milk", farmH.MilkSheet)
+			protected.With(farmRecord).Post("/farm/batches/{id}/milk", farmH.RecordMilk)
+			protected.With(farmRecord).Get("/farm/feed-plans", farmH.ListFeedPlans)
+			protected.With(farmManage).Post("/farm/feed-plans", farmH.SaveFeedPlan)
+			protected.With(farmManage).Put("/farm/feed-plans/{id}", farmH.SaveFeedPlan)
+			protected.With(farmRecord).Get("/farm/feed/stock", farmH.FeedStock)
+			protected.With(farmRecord).Get("/farm/feed/recipes", farmH.ListRecipes)
+			protected.With(farmManage).Post("/farm/feed/recipes", farmH.SaveRecipe)
+			protected.With(farmManage).Put("/farm/feed/recipes/{id}", farmH.SaveRecipe)
+			protected.With(farmRecord).Get("/farm/feed/mixes", farmH.ListMixes)
+			protected.With(farmRecord).Post("/farm/feed/mixes", farmH.CreateMix)
+			protected.With(farmManage).Post("/farm/feed/mixes/{id}/cancel", farmH.CancelMix)
+			protected.With(farmRecord).Get("/farm/items", farmH.ListFarmItems)
+			protected.With(farmManage).Post("/farm/items", farmH.SaveFarmItem)
+			protected.With(farmManage).Put("/farm/items/{id}", farmH.SaveFarmItem)
+			protected.With(farmManage).Delete("/farm/items/{id}", farmH.SaveFarmItem)
+			protected.With(farmRecord).Get("/farm/health/stock", farmH.MedicineStock)
+			protected.With(farmRecord).Get("/farm/health/withdrawals", farmH.Withdrawals)
+			protected.With(farmRecord).Get("/farm/water", farmH.ListWater)
+			protected.With(farmRecord).Post("/farm/water", farmH.RecordWater)
+			protected.With(farmManage).Delete("/farm/water/{id}", farmH.RecordWater)
+			protected.With(farmRecord).Get("/farm/settings", farmH.Settings)
+			protected.With(farmManage).Put("/farm/settings", farmH.Settings)
 			// User Management (internal/users, migrations/062): passwords,
 			// PINs, status and home branch; one's own password and PIN.
 			// Company profile (internal/merchants, migrations/065).
@@ -242,6 +302,16 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
 			protected.Post("/products/variants/{id}/barcodes", barcodeAssign.AssignBarcode)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Put("/products/variants/{id}/original-barcode", barcodeAssign.SetOriginalBarcode)
+			// Units of measure and barcode packs (§3.79, migrations/076).
+			protected.Get("/units", unitH.ListUnits)
+			protected.With(authn.RequirePermission(database, "units.manage")).
+				Post("/units", unitH.CreateUnit)
+			protected.With(authn.RequirePermission(database, "units.manage")).
+				Patch("/units/{id}", unitH.UpdateUnit)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Put("/products/variants/{id}/barcodes/{code}/pack", unitH.SetBarcodePack)
 			protected.Get("/products/variants/{id}/label", label.PrintLabel)
 			// Phase 14 label studio: any size and fields, ZPL / TSPL / ESC/POS.
 			protected.Post("/labels/preview", label.PreviewLabels)
@@ -668,6 +738,25 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Put("/pricing/settings", prc.UpdateSettings)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Patch("/pricing/variants/{id}", prc.UpdateVariantPricing)
+			// Selling price suggestions (§3.83, migrations/080): plan feature
+			// price_suggestion (subscriptions' path gate); only the Merchant
+			// Admin (pricing.suggestion.manage) switches them on and sets rules.
+			protected.Get("/pricing/suggestion-settings", prc.GetSuggestionSettings)
+			protected.With(authn.RequirePermission(database, "pricing.suggestion.manage")).
+				Put("/pricing/suggestion-settings", prc.UpdateSuggestionSettings)
+			protected.Get("/pricing/suggestion-rules", prc.ListSuggestionRules)
+			protected.With(authn.RequirePermission(database, "pricing.suggestion.manage")).
+				Post("/pricing/suggestion-rules", prc.SaveSuggestionRule)
+			protected.With(authn.RequirePermission(database, "pricing.suggestion.manage")).
+				Put("/pricing/suggestion-rules/{id}", prc.SaveSuggestionRule)
+			protected.With(authn.RequirePermission(database, "pricing.suggestion.manage")).
+				Patch("/pricing/suggestion-rules/{id}", prc.SetSuggestionRule)
+			protected.With(authn.RequirePermission(database, "pricing.suggestion.manage")).
+				Delete("/pricing/suggestion-rules/{id}", prc.SetSuggestionRule)
+			protected.Post("/pricing/suggest", prc.Suggest)
+			protected.Post("/pricing/suggest/preview", prc.ApplySuggestions)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/pricing/suggest/apply", prc.ApplySuggestions)
 			protected.Post("/pricing/bulk-update/preview", prc.PreviewBulkUpdate)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Post("/pricing/bulk-update/apply", prc.ApplyBulkUpdate)
@@ -763,6 +852,38 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/hr/attendance", hrH.ListAttendance)
 			protected.With(authn.RequirePermission(database, "hr.manage")).
 				Patch("/hr/attendance/{id}", hrH.CorrectAttendance)
+			// Leave, permission and regularization requests (§3.78,
+			// migrations/075): anyone asks for themselves; hr.manage decides,
+			// never on their own.
+			protected.Get("/hr/leave-types", hrH.ListLeaveTypes)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/leave-types", hrH.CreateLeaveType)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Patch("/hr/leave-types/{id}", hrH.UpdateLeaveType)
+			protected.Get("/hr/leave-balances", hrH.LeaveBalances)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Put("/hr/leave-balances", hrH.SetLeaveAllocation)
+			protected.Post("/hr/leave-requests", hrH.CreateLeaveRequest)
+			protected.Get("/hr/leave-requests", hrH.ListLeaveRequests)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/leave-requests/{id}/approve", hrH.ApproveLeave)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/leave-requests/{id}/reject", hrH.RejectLeave)
+			protected.Post("/hr/leave-requests/{id}/cancel", hrH.CancelLeave)
+			protected.Post("/hr/permission-requests", hrH.CreatePermission)
+			protected.Get("/hr/permission-requests", hrH.ListPermissions)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/permission-requests/{id}/approve", hrH.ApprovePermission)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/permission-requests/{id}/reject", hrH.RejectPermission)
+			protected.Post("/hr/permission-requests/{id}/cancel", hrH.CancelPermission)
+			protected.Post("/hr/regularizations", hrH.CreateRegularization)
+			protected.Get("/hr/regularizations", hrH.ListRegularizations)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/regularizations/{id}/approve", hrH.ApproveRegularization)
+			protected.With(authn.RequirePermission(database, "hr.manage")).
+				Post("/hr/regularizations/{id}/reject", hrH.RejectRegularization)
+			protected.Post("/hr/regularizations/{id}/cancel", hrH.CancelRegularization)
 			protected.With(authn.RequirePermission(database, "payroll.manage")).
 				Get("/hr/statutory-config", hrH.GetStatutoryConfig)
 			protected.With(authn.RequirePermission(database, "payroll.manage")).
@@ -791,6 +912,11 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "payroll.manage")).
 				Get("/payroll/runs/{id}/challan", payrollH.GetChallanSummary)
 			protected.Get("/payroll/employees/{id}/payslips", payrollH.GetMyPayslips)
+			// Payslips to print (§3.78): your own once final, any with payroll.manage.
+			protected.Get("/payroll/payslips/{id}", payrollH.GetPayslip)
+			protected.Get("/payroll/payslips/{id}/pdf", payrollH.PayslipPDF)
+			protected.With(authn.RequirePermission(database, "payroll.manage")).
+				Get("/payroll/runs/{id}/payslips", payrollH.RunPayslips)
 
 			protected.With(authn.RequirePermission(database, "rbac.manage")).
 				Get("/rbac/permissions", rbacH.ListPermissions)

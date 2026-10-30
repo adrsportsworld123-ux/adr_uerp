@@ -11,6 +11,8 @@
 // endpoint itself refuses price fields. Each section saves on its own and
 // re-seeds from the server's response (the keyed child components below),
 // so what you see after a save is what the server stored.
+// The unit (erp-core-go §3.79) is what the stock is counted in; each
+// barcode's pack is what one scan adds.
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -33,6 +35,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect } from "@/components/data/search-select";
+import { BarcodePacks, UnitSelect, useUnits } from "@/components/catalog/units";
 
 const STATUS_BADGE: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   active: "default",
@@ -100,7 +103,7 @@ export default function ProductEditPage() {
 
       <h2 className="text-lg font-semibold">Variants</h2>
       {product.variants.map((v) => (
-        <VariantSection key={JSON.stringify(v)} productId={product.product_id} variant={v} attrs={attrs} onSaved={onSaved} />
+        <VariantSection key={JSON.stringify(v)} productId={product.product_id} variant={v} attrs={attrs} onSaved={onSaved} product={product} />
       ))}
 
       <AddVariantSection key={`add-${product.variants.length}`} productId={product.product_id} attrs={attrs} onSaved={onSaved} />
@@ -150,6 +153,9 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
   // The POS tile colour (migrations/063): "" = none of its own (an
   // open-price item then shows the POS's standard open-price colour).
   const [posColor, setPosColor] = useState(product.pos_color ?? "");
+  const { units } = useUnits();
+  const [unitId, setUnitId] = useState(product.unit?.unit_id ?? "");
+  const [unitInUse, setUnitInUse] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -165,22 +171,26 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
   if (status !== product.status) changes.status = status;
   if (priceIncludesTax !== product.price_includes_tax) changes.price_includes_tax = priceIncludesTax;
   if (posColor !== (product.pos_color ?? "")) changes.pos_color = posColor;
+  if (unitId && unitId !== (product.unit?.unit_id ?? "")) changes.unit_id = unitId;
   const dirty = Object.keys(changes).length > 0;
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
+  async function save(e: React.FormEvent | null, confirmUnit = false) {
+    e?.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const p = await api.patch<ProductDetail>(`/api/v1/products/${product.product_id}`, changes);
+      const p = await api.patch<ProductDetail>(`/api/v1/products/${product.product_id}`, confirmUnit ? { ...changes, unit_change_confirmed: true } : changes);
       toast.success("Product saved");
+      setUnitInUse(false);
       onSaved(p);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not save product");
+      if (e instanceof ApiError && e.code === "UNIT_IN_USE") setUnitInUse(true);
+      else setError(e instanceof ApiError ? e.message : "Could not save product");
     } finally {
       setBusy(false);
     }
   }
+  const newUnit = units.find((u) => u.unit_id === unitId);
 
   return (
     <form onSubmit={save}>
@@ -209,6 +219,38 @@ function ProductSection({ product, lookups, onSaved }: { product: ProductDetail;
             <LinkSelect label="Tax slab" value={taxSlabId} onChange={setTaxSlabId} options={lookups.taxSlabs.map((t) => ({ id: t.tax_slab_id, name: t.name }))} />
             <LinkSelect label="Collection" value={collectionId} onChange={setCollectionId} options={lookups.collections.map((c) => ({ id: c.collection_id, name: c.name }))} />
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="unit">Counted in</Label>
+              <UnitSelect id="unit" value={unitId} onChange={setUnitId} units={units} current={product.unit} />
+              <span className="text-xs text-muted-foreground">
+                Stock, cost and price are per {newUnit ? newUnit.name.toLowerCase() : "unit"}
+                {newUnit && newUnit.decimals === 0 ? "; sold in whole numbers" : newUnit ? `; up to ${newUnit.decimals} decimal place(s)` : ""}.
+              </span>
+            </div>
+          </div>
+          {unitInUse && (
+            <div className="rounded-lg border border-warn/40 bg-warn/10 p-3 text-sm" role="alert">
+              This product already has stock or sales counted in {product.unit?.name.toLowerCase() ?? "its unit"}. After the change the same numbers mean{" "}
+              {newUnit?.name.toLowerCase() ?? "the new unit"} (for example, 10 in stock becomes 10 {newUnit?.symbol}).
+              <div className="mt-2 flex gap-2">
+                <Button type="button" size="sm" variant="destructive" disabled={busy} onClick={() => save(null, true)}>
+                  Change the unit anyway
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setUnitId(product.unit?.unit_id ?? "");
+                    setUnitInUse(false);
+                  }}
+                >
+                  Keep {product.unit?.name.toLowerCase()}
+                </Button>
+              </div>
+            </div>
+          )}
           {categoryId !== (product.category_id ?? "") && (
             <p className="text-xs text-warn">
               Changing the category re-checks every variant against the new category&apos;s required attributes — the save is refused, naming the
@@ -336,11 +378,13 @@ function VariantSection({
   variant,
   attrs,
   onSaved,
+  product,
 }: {
   productId: string;
   variant: ProductDetailVariant;
   attrs: CategoryAttribute[];
   onSaved: (p: ProductDetail) => void;
+  product: ProductDetail;
 }) {
   const [sku, setSku] = useState(variant.sku);
   const [attrValues, setAttrValues] = useState<Record<string, string>>(comboToStrings(variant.attribute_combo));
@@ -452,9 +496,7 @@ function VariantSection({
           Batch / expiry tracking
           {hasStock && <span className="text-xs text-muted-foreground">— can only be switched while this variant holds no stock</span>}
         </label>
-        <div className="text-xs text-muted-foreground">
-          Barcodes: {variant.original_barcode ?? "no original"} · {variant.generated_barcode ?? "no system barcode"}
-        </div>
+        <BarcodePacks variantId={variant.variant_id} barcodes={variant.barcodes ?? []} unit={product.unit} onChanged={reload} />
         <Button variant="outline" className="w-fit" disabled={busy || !variantDirty || !sku.trim()} onClick={saveVariant}>
           Save variant
         </Button>

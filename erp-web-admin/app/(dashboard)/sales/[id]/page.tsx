@@ -187,7 +187,10 @@ export default function SaleDetailPage() {
                           {l.open_price && ` · open price${l.price_approved_by ? `, approved by ${l.price_approved_by}` : ""}`}
                         </div>
                       </td>
-                      <td className="tabular py-2 text-right">{qty(l.quantity)}</td>
+                      <td className="tabular py-2 text-right">
+                        {qty(l.quantity)}
+                        {l.unit_symbol && l.unit_symbol !== "pcs" ? ` ${l.unit_symbol}` : ""}
+                      </td>
                       <td className="tabular py-2 text-right">{rupees(l.unit_price)}</td>
                       <td className="tabular py-2 text-right">{Number(l.discount_amount) ? rupees(l.discount_amount) : "—"}</td>
                       <td className="tabular py-2 text-right">{rupees(l.taxable_value)}</td>

@@ -23,6 +23,8 @@ const ENTITY_LABEL: Record<string, string> = {
   attribute_value: "Attribute value",
   price_list: "Price list",
   price_rule: "Price rule",
+  markup_rule: "Markup rule",
+  suggestion_rule: "Price suggestion rule",
   scheduled_change: "Scheduled price change",
   promotion: "Promotion",
   coupon: "Coupon",

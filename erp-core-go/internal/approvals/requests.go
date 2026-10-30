@@ -4,7 +4,8 @@ package approvals
 //
 //   - GET /approvals/waiting: what is waiting for someone right now —
 //     branch transfers to approve, journal vouchers submitted for approval,
-//     oversold offline sales to review. Each row says whether the caller
+//     oversold offline sales to review, and employees' leave, permission
+//     and attendance regularization requests (§3.78). Each row says whether the caller
 //     may act on it (can_act); acting goes through the item's own endpoint
 //     and permission, unchanged.
 //   - GET /approvals/given?from=&to=&kind=&branch_id=: what was approved,
@@ -29,7 +30,7 @@ import (
 )
 
 type waitingItem struct {
-	Kind        string  `json:"kind"` // transfer | voucher | stock_review
+	Kind        string  `json:"kind"` // transfer | voucher | stock_review | leave | permission | regularization
 	ID          string  `json:"id"`
 	Reference   string  `json:"reference"`
 	Summary     string  `json:"summary"`
@@ -38,7 +39,7 @@ type waitingItem struct {
 	Branch      *string `json:"branch"`
 	RequestedBy *string `json:"requested_by"`
 	RequestedAt string  `json:"requested_at"`
-	Amount      string  `json:"amount"`
+	Amount      *string `json:"amount"` // null for an HR request
 	// CanAct: the caller holds the permission the item's own approve /
 	// reject (or resolve) needs; Why says what stops them when not.
 	CanAct bool   `json:"can_act"`
@@ -80,6 +81,32 @@ const waitingSQL = `
 	JOIN branches b ON b.id = s.branch_id
 	LEFT JOIN users cu ON cu.id = so.cashier_id
 	WHERE s.status = 'open'
+	UNION ALL
+	SELECT 'leave', r.id::text, r.request_number, u.name || ' — ' || t.name,
+	       to_char(r.from_date, 'DD Mon YYYY') || CASE WHEN r.to_date > r.from_date THEN ' to ' || to_char(r.to_date, 'DD Mon YYYY') ELSE '' END ||
+	         ' (' || CASE WHEN r.half_day THEN 'half day' ELSE trim_scale(r.days)::text || ' day(s)' END || ') · ' || r.reason,
+	       r.branch_id::text, b.name, rb.name, r.requested_at, NULL, r.user_id::text
+	FROM leave_requests r JOIN users u ON u.id = r.user_id JOIN leave_types t ON t.id = r.leave_type_id
+	LEFT JOIN branches b ON b.id = r.branch_id LEFT JOIN users rb ON rb.id = r.requested_by
+	WHERE r.status = 'pending'
+	UNION ALL
+	SELECT 'permission', r.id::text, r.request_number, u.name || ' — permission',
+	       to_char(r.work_date, 'DD Mon YYYY') || ', ' || to_char(r.from_time, 'HH24:MI') || '–' || to_char(r.to_time, 'HH24:MI') ||
+	         ' (' || r.minutes || ' min) · ' || r.reason,
+	       r.branch_id::text, b.name, rb.name, r.requested_at, NULL, r.user_id::text
+	FROM permission_requests r JOIN users u ON u.id = r.user_id
+	LEFT JOIN branches b ON b.id = r.branch_id LEFT JOIN users rb ON rb.id = r.requested_by
+	WHERE r.status = 'pending'
+	UNION ALL
+	SELECT 'regularization', r.id::text, r.request_number,
+	       u.name || CASE WHEN r.session_id IS NULL THEN ' — add a missed check-in' ELSE ' — correct a check-in' END,
+	       to_char(r.work_date, 'DD Mon YYYY') ||
+	         COALESCE(', in ' || to_char(r.clock_in AT TIME ZONE app_merchant_tz(), 'HH24:MI'), '') ||
+	         COALESCE(', out ' || to_char(r.clock_out AT TIME ZONE app_merchant_tz(), 'HH24:MI'), '') || ' · ' || r.reason,
+	       r.branch_id::text, b.name, rb.name, r.requested_at, NULL, r.user_id::text
+	FROM attendance_regularizations r JOIN users u ON u.id = r.user_id
+	LEFT JOIN branches b ON b.id = r.branch_id LEFT JOIN users rb ON rb.id = r.requested_by
+	WHERE r.status = 'pending'
 	ORDER BY 9`
 
 // Waiting: GET /approvals/waiting (approvals.view).
@@ -108,13 +135,16 @@ func (h *Handler) Waiting(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			it.RequestedAt = at.UTC().Format(time.RFC3339)
-			need := map[string]string{"transfer": "branch_transfer.approve", "voucher": "accounting.jv_approve", "stock_review": "inventory.adjust"}[it.Kind]
+			need := map[string]string{"transfer": "branch_transfer.approve", "voucher": "accounting.jv_approve", "stock_review": "inventory.adjust",
+				"leave": "hr.manage", "permission": "hr.manage", "regularization": "hr.manage"}[it.Kind]
 			it.CanAct = authn.HasPermission(codes, need)
 			switch {
 			case !it.CanAct:
 				it.Why = "needs the " + need + " permission"
 			case it.Kind == "voucher" && it.selfID == claims.UserID:
 				it.CanAct, it.Why = false, "you made this voucher; someone else approves it"
+			case (it.Kind == "leave" || it.Kind == "permission" || it.Kind == "regularization") && it.selfID == claims.UserID:
+				it.CanAct, it.Why = false, "this is your own request; someone else approves it"
 			}
 			items = append(items, it)
 		}
@@ -124,7 +154,7 @@ func (h *Handler) Waiting(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not load the approvals waiting")
 		return
 	}
-	counts := map[string]int{"transfer": 0, "voucher": 0, "stock_review": 0}
+	counts := map[string]int{"transfer": 0, "voucher": 0, "stock_review": 0, "leave": 0, "permission": 0, "regularization": 0}
 	for _, it := range items {
 		counts[it.Kind]++
 	}
@@ -146,7 +176,7 @@ type givenItem struct {
 // GivenKinds is every kind GET /approvals/given lists, in the order the
 // screen offers them.
 var GivenKinds = []string{"manual_discount", "return", "open_price", "cash_variance", "stock_count", "stock_adjustment",
-	"cash_movement", "payment_correction", "transfer", "voucher", "loan"}
+	"cash_movement", "payment_correction", "transfer", "voucher", "loan", "leave", "permission", "regularization"}
 
 const givenSQL = `
 	SELECT * FROM (
@@ -199,6 +229,25 @@ const givenSQL = `
 	  UNION ALL
 	  SELECT 'loan', el.created_at, el.loan_number, el.branch_id, eu.name, au.name, el.principal, el.purpose
 	    FROM employee_loans el LEFT JOIN users eu ON eu.id = el.user_id JOIN users au ON au.id = el.approved_by
+	  UNION ALL
+	  SELECT 'leave', lr.decided_at, lr.request_number, lr.branch_id, eu.name, au.name, NULL::numeric,
+	         t.name || ', ' || to_char(lr.from_date, 'DD Mon') || CASE WHEN lr.to_date > lr.from_date THEN '–' || to_char(lr.to_date, 'DD Mon') ELSE '' END ||
+	         ' (' || trim_scale(lr.days)::text || ' day(s)' || CASE WHEN lr.unpaid_days > 0 THEN ', ' || trim_scale(lr.unpaid_days)::text || ' unpaid' ELSE '' END ||
+	         '): ' || lr.reason
+	    FROM leave_requests lr JOIN leave_types t ON t.id = lr.leave_type_id
+	    LEFT JOIN users eu ON eu.id = lr.user_id JOIN users au ON au.id = lr.decided_by
+	    WHERE lr.status IN ('approved', 'cancelled') AND lr.paid_days IS NOT NULL
+	  UNION ALL
+	  SELECT 'permission', pr.decided_at, pr.request_number, pr.branch_id, eu.name, au.name, NULL::numeric,
+	         to_char(pr.work_date, 'DD Mon') || ' ' || to_char(pr.from_time, 'HH24:MI') || '–' || to_char(pr.to_time, 'HH24:MI') ||
+	         CASE WHEN pr.unpaid_minutes > 0 THEN ' (' || pr.unpaid_minutes || ' min unpaid)' ELSE '' END || ': ' || pr.reason
+	    FROM permission_requests pr LEFT JOIN users eu ON eu.id = pr.user_id JOIN users au ON au.id = pr.decided_by
+	    WHERE pr.status IN ('approved', 'cancelled') AND pr.paid_minutes IS NOT NULL
+	  UNION ALL
+	  SELECT 'regularization', ar.decided_at, ar.request_number, ar.branch_id, eu.name, au.name, NULL::numeric,
+	         to_char(ar.work_date, 'DD Mon') || ': ' || ar.reason
+	    FROM attendance_regularizations ar LEFT JOIN users eu ON eu.id = ar.user_id JOIN users au ON au.id = ar.decided_by
+	    WHERE ar.status = 'approved'
 	) g
 	WHERE (g.at AT TIME ZONE app_merchant_tz())::date BETWEEN $1::date AND $2::date
 	  AND ($3 = '' OR g.kind = $3)

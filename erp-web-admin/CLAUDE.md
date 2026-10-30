@@ -94,6 +94,25 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 - **Parties:** `PARTY_LABEL` has `partner`.
 - **Tests:** `e2e/round12.spec.ts`.
 
+**Round 13 (2026-10-28, erp-core-go §3.78).**
+- **HR:** Organization › Leave & Requests (`/hr/leave`, hr.manage: requests, balances, leave types, rules). Access › My Leave & Payslips (`/my-hr`, everyone). The dialogs, balance card and request table are `components/hr/requests.tsx`; a time an employee types is the merchant's clock (`merchantStamp`, `merchantTime` in `lib/format.ts`).
+- **Approvals:** Waiting and Given include leave, permission and attendance corrections.
+- **Payroll:** a Leave column, a PDF per payslip, and "Print all payslips" (`/payroll/runs/[id]/print`).
+- **Reports:** the Report Library's Expenses group.
+- **Tests:** `e2e/round13.spec.ts` (leave and permission use next month, so a finalized payroll for this month doesn't block them).
+
+**Round 14 (2026-10-29, erp-core-go §3.79–§3.81).**
+- **Units:** Catalog › Units; "Counted in" on the product forms; each barcode's pack (`components/catalog/units.tsx`: `useUnits`, `UnitSelect`, `BarcodePacks`, `withUnit`). The GRN line form starts at a pack's contents; the sale pages show a non-piece unit.
+- **Branches:** what each branch does (`components/branches/business-types.tsx`), the shop icon on a row. `usePermissions().does("farm")` comes from `/me/features`; a `NavGroup.businessFeature` hides a group (and its palette entries) unless a branch has it. Only the Farm group uses it.
+- **Farm:** Farm › Farm Dashboard, Flocks & Herds (`/farm/batches/[id]`), Sheds & Ponds, Vaccination Schedules (`components/farm/farm.tsx`: labels, `EventDialog`, `BatchDialog`, `HouseDialog`; `components/farm/batch-table.tsx`). Report Library › Farm.
+- **Tests:** `e2e/round14.spec.ts`.
+
+**Round 15 (2026-10-30, erp-core-go §3.82–§3.83).**
+- **Farm:** Farm › Animals (`/farm/animals/[id]`), Milk Recording, Feed (`?tab=stock|plans|mixing`), Health & Medicine (`?tab=withdrawals|stock|treatments|items`), Water Quality. `components/farm/animals.tsx` (`AnimalTable`, `AnimalDialog`, `BreedingDialog`, `ExitDialog`, `MoveDialog`), `components/farm/tabs.tsx` (`useTab`, `TabStrip`). `EventDialog` takes an animal of the register, a treatment's dose / vet / withdrawal days (from the farm item), and shows the `WITHDRAWAL_PERIOD` refusal with a manager's override.
+- **Pricing:** Pricing › Price Suggestions (plan feature `price_suggestion`; the shell shows the plan preview without it). `components/pricing/suggestions.tsx` (`useSuggestionSettings`, `useLiveSuggestion`, `SuggestionHint`, `roundingLabel`). The Pricing list's Suggested column and the Edit pricing dialog (original barcode, cost, MRP, selling price filled in from the suggestion); New product fills its price the same way. A filled-in price is shown, never saved, until the user saves. Apply in bulk: each row's "New price" starts at the suggestion and can be typed over; only ticked rows are applied; narrow by category, brand, a search or chosen variants (`MultiVariantPick` in `components/data/multi-pick.tsx`).
+- **Catalog:** `UnitSelect` takes `current` (the product's saved unit) so "Counted in" shows it while the list loads or when it's switched off. Inventory shows the chosen variant's details (`VariantDetails`) and loads its stock on choosing it.
+- **Tests:** `e2e/round15.spec.ts`.
+
 **Reporting round (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60–§3.63):** the sales dashboard (`/dashboard`, recharts; widgets per role under `/dashboard/settings`), X & Z reports (`/reports/x-z`), the Report Library (`/reports/library`) and Saved Reports (`/reports/saved`). `e2e/reports-round10.spec.ts` covers them. The app shell puts focus back at the top after a navigation that left nothing focused (recharts' focusable charts otherwise sent the next Tab past the end of the new page).
 
 ## Working conventions to keep

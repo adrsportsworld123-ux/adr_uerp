@@ -20,6 +20,7 @@ import (
 	"erp-core-go/internal/approvals"
 	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
 )
@@ -175,6 +176,9 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 	resp.BranchID = req.BranchID
 	resp.VariantID = req.VariantID
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		if err := catalog.CheckQuantity(ctx, tx, req.VariantID, req.QuantityDelta); err != nil {
+			return err
+		}
 		// Phase 15 approval policy: large adjustments (by value at cost)
 		// need an approver who covers this branch.
 		policy, err := approvals.Load(ctx, tx)
@@ -282,6 +286,9 @@ func (h *Handler) AdjustStock(w http.ResponseWriter, r *http.Request) {
 
 		return nil
 	})
+	if catalog.WriteQuantityError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, errAdjustNotApproved):
 		httpx.Error(w, http.StatusForbidden, "ADJUSTMENT_NOT_APPROVED", "an adjustment this large needs a manager's employee code and PIN (approval policy)")

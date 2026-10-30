@@ -63,7 +63,7 @@ func (h *Handler) DownloadReceipt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, l := range resp.Lines {
-		in.Lines = append(in.Lines, documents.SaleLine{Name: l.ProductName, SKU: l.SKU, Quantity: l.Quantity,
+		in.Lines = append(in.Lines, documents.SaleLine{Name: l.ProductName, SKU: l.SKU, Quantity: l.Quantity, Unit: l.UnitSymbol,
 			UnitPrice: l.UnitPrice, Discount: l.DiscountAmount, Tax: l.TaxAmount, Total: l.LineTotal,
 			LineTax: documents.LineTax{HSN: l.HSNCode, Rate: l.TaxRate, Taxable: l.TaxableValue,
 				CGST: l.CGSTAmount, SGST: l.SGSTAmount, IGST: l.IGSTAmount}})

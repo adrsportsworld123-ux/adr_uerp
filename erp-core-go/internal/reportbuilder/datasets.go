@@ -78,6 +78,8 @@ var (
 	fSKU      = Field{"sku", "SKU", TText, "v.sku"}
 	fCategory = Field{"category", "Category", TText, "cat.name"}
 	fBrand    = Field{"brand", "Brand", TText, "br.name"}
+	// fUnit: what the product is counted in (migrations/076).
+	fUnit = Field{"unit", "Unit", TText, "un.symbol"}
 )
 
 const saleTime = "COALESCE(so.finalized_at, so.created_at)"
@@ -107,7 +109,8 @@ const productJoins = `
 	JOIN product_variants v ON v.id = %s
 	JOIN products p ON p.id = v.product_id
 	LEFT JOIN categories cat ON cat.id = p.category_id
-	LEFT JOIN brands br ON br.id = p.brand_id`
+	LEFT JOIN brands br ON br.id = p.brand_id
+	LEFT JOIN units un ON un.id = p.unit_id`
 
 // Datasets is the allow-list. Adding a dataset or field is a code review,
 // never a user action.
@@ -164,7 +167,7 @@ var Datasets = []Dataset{
 			{"date", "Date", TDate, "(" + saleTime + " " + istDate},
 			{"month", "Month", TText, "to_char(" + saleTime + " " + istMonth},
 			{"order_number", "Sale number", TText, "so.order_number"},
-			fChannel, fBranch, fTerminal, fProduct, fSKU, fCategory, fBrand,
+			fChannel, fBranch, fTerminal, fProduct, fSKU, fCategory, fBrand, fUnit,
 			{"hsn", "HSN", TText, "p.hsn_code"},
 			{"tax_rate", "GST rate %", TNumber, "COALESCE(l.tax_rate, ts.cgst_rate + ts.sgst_rate + ts.igst_rate, 0)"}, // as written (migrations/060)
 			{"quantity", "Quantity", TNumber, "l.quantity"},
@@ -206,7 +209,7 @@ var Datasets = []Dataset{
 			JOIN branches b ON b.id = sl.branch_id` + sprintf(productJoins, "sl.variant_id"),
 		where: "true",
 		Fields: []Field{
-			fBranch, fProduct, fSKU, fCategory, fBrand,
+			fBranch, fProduct, fSKU, fCategory, fBrand, fUnit,
 			{"item_status", "Item status", TText, "v.status"},
 			{"on_hand", "On hand", TNumber, "sl.on_hand"},
 			{"reserved", "Reserved", TNumber, "sl.reserved"},
@@ -226,7 +229,7 @@ var Datasets = []Dataset{
 		Fields: []Field{
 			{"date", "Date", TDate, "(sm.created_at " + istDate},
 			{"month", "Month", TText, "to_char(sm.created_at " + istMonth},
-			fBranch, fProduct, fSKU, fCategory, fBrand,
+			fBranch, fProduct, fSKU, fCategory, fBrand, fUnit,
 			{"movement_type", "Movement", TText, "sm.movement_type"},
 			{"reason", "Reason", TText, "sm.reason"},
 			{"quantity", "Quantity change", TNumber, "sm.quantity_delta"},
@@ -235,10 +238,10 @@ var Datasets = []Dataset{
 	},
 	{
 		Key: "products", Label: "Products", Description: "The catalogue: one row per item (variant) with its prices.",
-		from:  "product_variants v JOIN products p ON p.id = v.product_id LEFT JOIN categories cat ON cat.id = p.category_id LEFT JOIN brands br ON br.id = p.brand_id LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id",
+		from:  "product_variants v JOIN products p ON p.id = v.product_id LEFT JOIN categories cat ON cat.id = p.category_id LEFT JOIN brands br ON br.id = p.brand_id LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id LEFT JOIN units un ON un.id = p.unit_id",
 		where: "true",
 		Fields: []Field{
-			fProduct, fSKU, fCategory, fBrand,
+			fProduct, fSKU, fCategory, fBrand, fUnit,
 			{"status", "Status", TText, "v.status"},
 			{"hsn", "HSN", TText, "p.hsn_code"},
 			{"tax_rate", "GST rate %", TNumber, "COALESCE(ts.cgst_rate + ts.sgst_rate + ts.igst_rate, 0)"},
@@ -319,7 +322,7 @@ var Datasets = []Dataset{
 			{"month", "Month", TText, "to_char(g.completed_at " + istMonth},
 			{"grn_number", "GRN", TText, "g.grn_number"},
 			{"supplier", "Supplier", TText, "s.name"},
-			fBranch, fProduct, fSKU, fCategory, fBrand,
+			fBranch, fProduct, fSKU, fCategory, fBrand, fUnit,
 			{"quantity", "Quantity", TNumber, "gl.quantity"},
 			{"unit_cost", "Unit cost", TMoney, "gl.unit_cost"},
 			{"landed_unit_cost", "Landed unit cost", TMoney, "COALESCE(gl.landed_unit_cost, gl.unit_cost)"},
@@ -371,6 +374,123 @@ var Datasets = []Dataset{
 		}, ageingFields("pb.due_date", "(pb.grand_total - pb.amount_paid)")...),
 	},
 	{
+		// The farm's log (§3.81): every posted event of every batch.
+		Key: "farm_events", Label: "Farm log", Description: "One row per farm event — mortality, culls, feed, medicine, vaccination, weights, production, expenses — of every flock, herd and pond.",
+		HasDateRange: true, date: "e.event_date",
+		from: `farm_events e
+			JOIN farm_batches fb ON fb.id = e.batch_id
+			JOIN branches b ON b.id = e.branch_id
+			LEFT JOIN farm_houses fh ON fh.id = fb.house_id
+			LEFT JOIN product_variants v ON v.id = e.variant_id
+			LEFT JOIN products p ON p.id = v.product_id
+			LEFT JOIN units un ON un.id = p.unit_id
+			LEFT JOIN users u ON u.id = e.created_by
+			LEFT JOIN farm_animals fa ON fa.id = e.animal_id`,
+		where: "e.status = 'posted'",
+		Fields: []Field{
+			{"date", "Date", TDate, "e.event_date"},
+			{"month", "Month", TText, "to_char(e.event_date, 'YYYY-MM')"},
+			fBranch,
+			{"batch", "Batch", TText, "fb.batch_number"},
+			{"species", "Species", TText, "fb.species"},
+			{"purpose", "Purpose", TText, "fb.purpose"},
+			{"house", "Shed / pond", TText, "fh.name"},
+			{"event_type", "Event", TText, "initcap(e.event_type)"},
+			{"head_count", "Heads", TNumber, "e.head_count"},
+			{"product", "Item", TText, "p.name"},
+			fUnit,
+			{"quantity", "Quantity", TNumber, "e.quantity"},
+			{"amount", "Cost / value", TMoney, "e.amount"},
+			{"avg_weight", "Avg weight (kg)", TNumber, "e.avg_weight_kg"},
+			{"cause", "Cause", TText, "e.cause"},
+			{"vaccine", "Vaccine", TText, "e.vaccine"},
+			{"notes", "Notes", TText, "e.notes"},
+			{"entered_by", "Entered by", TText, "u.name"},
+			// §3.82
+			{"animal", "Animal", TText, "fa.tag"},
+			{"produce_kind", "Produce", TText, "initcap(e.produce_kind)"},
+			{"dose", "Dose", TText, "e.dose"},
+			{"vet", "Vet", TText, "e.vet"},
+			{"meat_until", "No meat until", TDate, "e.withdrawal_meat_until"},
+			{"milk_until", "No milk until", TDate, "e.withdrawal_milk_until"},
+			{"eggs_until", "No eggs until", TDate, "e.withdrawal_eggs_until"},
+			{"override", "Withdrawal override", TText, "e.withdrawal_override"},
+		},
+	},
+	{
+		// Milk per animal per milking (§3.82).
+		Key: "farm_milk", Label: "Milk by animal", Description: "One row per animal per milking: litres, with the herd and the day.",
+		HasDateRange: true, date: "m.milked_on",
+		from: `farm_milk_records m
+			JOIN farm_events e ON e.id = m.event_id
+			JOIN farm_animals fa ON fa.id = m.animal_id
+			JOIN farm_batches fb ON fb.id = m.batch_id
+			JOIN branches b ON b.id = m.branch_id`,
+		where: "e.status = 'posted'",
+		Fields: []Field{
+			{"date", "Date", TDate, "m.milked_on"},
+			{"month", "Month", TText, "to_char(m.milked_on, 'YYYY-MM')"},
+			fBranch,
+			{"batch", "Herd", TText, "fb.batch_number"},
+			{"species", "Species", TText, "fb.species"},
+			{"animal", "Animal", TText, "fa.tag"},
+			{"animal_name", "Name", TText, "fa.name"},
+			{"session", "Milking", TText, "upper(m.session)"},
+			{"litres", "Litres", TNumber, "m.litres"},
+		},
+	},
+	{
+		// Each batch's figures (§3.81), as of now.
+		Key: "farm_batches", Label: "Farm batches", Description: "One row per flock, herd or pond stocking with its counts, feed, cost and output so far. No date range: it's now.",
+		from: `farm_batches fb
+			JOIN branches b ON b.id = fb.branch_id
+			LEFT JOIN farm_houses fh ON fh.id = fb.house_id
+			CROSS JOIN LATERAL (
+			  SELECT COALESCE(sum(e.head_count) FILTER (WHERE e.event_type = 'mortality'), 0) AS dead,
+			         COALESCE(sum(e.head_count) FILTER (WHERE e.event_type = 'cull'), 0) AS culled,
+			         COALESCE(sum(e.head_count) FILTER (WHERE e.event_type = 'production'), 0) AS harvested,
+			         COALESCE(sum(e.quantity * COALESCE(un.factor, 1)) FILTER (WHERE e.event_type = 'feed' AND un.kind = 'weight'), 0) AS feed_kg,
+			         COALESCE(sum(e.amount) FILTER (WHERE e.event_type = 'feed'), 0) AS feed_cost,
+			         COALESCE(sum(e.amount) FILTER (WHERE e.event_type IN ('medicine', 'vaccination')), 0) AS health_cost,
+			         COALESCE(sum(e.amount) FILTER (WHERE e.event_type IN ('placement', 'addition')), 0) AS stock_cost,
+			         COALESCE(sum(e.head_count) FILTER (WHERE e.event_type = 'birth'), 0) AS born,
+			         COALESCE(sum(e.head_count) FILTER (WHERE e.event_type IN ('addition', 'transfer_in')), 0) AS added,
+			         COALESCE(sum(e.head_count) FILTER (WHERE e.event_type = 'transfer_out'), 0) AS moved_out,
+			         COALESCE(sum(e.amount) FILTER (WHERE e.event_type = 'expense'), 0) AS other_cost,
+			         COALESCE(sum(e.amount) FILTER (WHERE e.event_type = 'production'), 0) AS output_value
+			  FROM farm_events e LEFT JOIN product_variants v ON v.id = e.variant_id LEFT JOIN products p ON p.id = v.product_id
+			  LEFT JOIN units un ON un.id = p.unit_id
+			  WHERE e.batch_id = fb.id AND e.status = 'posted') k`,
+		where: "true",
+		Fields: []Field{
+			{"batch", "Batch", TText, "fb.batch_number"},
+			fBranch,
+			{"house", "Shed / pond", TText, "fh.name"},
+			{"species", "Species", TText, "fb.species"},
+			{"purpose", "Purpose", TText, "fb.purpose"},
+			{"breed", "Breed", TText, "fb.breed"},
+			{"placed_on", "Placed on", TDate, "fb.placed_on"},
+			{"status", "Status", TText, "fb.status"},
+			{"closed_on", "Closed on", TDate, "fb.closed_on"},
+			{"age_days", "Age (days)", TNumber, "(COALESCE(fb.closed_on, (now() AT TIME ZONE app_merchant_tz())::date) - fb.placed_on) + fb.age_at_placement_days"},
+			{"placed", "Placed", TNumber, "fb.initial_count"},
+			{"dead", "Died", TNumber, "k.dead"},
+			{"culled", "Culled", TNumber, "k.culled"},
+			{"harvested", "Harvested", TNumber, "k.harvested"},
+			{"born", "Born", TNumber, "k.born"},
+			{"added", "Added", TNumber, "k.added"},
+			{"alive", "Alive", TNumber, "fb.initial_count + k.born + k.added - k.dead - k.culled - k.harvested - k.moved_out"},
+			{"mortality_pct", "Mortality %", TNumber, "round(k.dead * 100.0 / fb.initial_count, 2)"},
+			{"feed_kg", "Feed (kg)", TNumber, "round(k.feed_kg, 3)"},
+			{"feed_cost", "Feed cost", TMoney, "k.feed_cost"},
+			{"health_cost", "Medicine & vaccines", TMoney, "k.health_cost"},
+			{"stock_cost", "Animals placed", TMoney, "k.stock_cost"},
+			{"other_cost", "Other costs", TMoney, "k.other_cost"},
+			{"output_value", "Produce value", TMoney, "k.output_value"},
+			{"net_cost", "Net cost", TMoney, "k.stock_cost + k.feed_cost + k.health_cost + k.other_cost - k.output_value"},
+		},
+	},
+	{
 		// Expenses recorded or imported (§3.77, §3.78). A cancelled one is
 		// kept with its status; the library's reports leave it out.
 		Key: "expenses", Label: "Expenses", Description: "One row per expense, with its head, branch, who paid it and whether it is still unpaid.",
@@ -383,6 +503,7 @@ var Datasets = []Dataset{
 			LEFT JOIN partners pt ON pt.id = e.partner_id
 			LEFT JOIN partners ppt ON ppt.id = e.paid_partner_id
 			LEFT JOIN users u ON u.id = e.created_by`,
+		where: "true",
 		Fields: []Field{
 			{"date", "Date", TDate, "e.expense_date"},
 			{"month", "Month", TText, "to_char(e.expense_date, 'YYYY-MM')"},

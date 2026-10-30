@@ -69,6 +69,9 @@ func insertQuotationLine(ctx context.Context, tx pgx.Tx, quotationID, customerID
 		}
 	}
 
+	if err := catalog.CheckQuantity(ctx, tx, variantID, quantity); err != nil {
+		return err
+	}
 	calc := taxcalc.ComputeLine(price, quantity, 0, taxRate, priceIncludesTax)
 	_, err := tx.Exec(ctx, `
 		INSERT INTO quotation_lines (id, quotation_id, variant_id, quantity, unit_price, tax_amount, line_total, price_includes_tax)
@@ -110,6 +113,9 @@ func lockDraft(ctx context.Context, tx pgx.Tx, quotationID string) (customerID s
 
 // respondEdit maps every draft-edit endpoint's errors the same way.
 func respondEdit(w http.ResponseWriter, err error, resp quotationResponse, notFound string) {
+	if catalog.WriteQuantityError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, errQuotationNotDraft):
 		httpx.Error(w, http.StatusConflict, "QUOTATION_NOT_DRAFT", "only a draft quotation can be edited — reject it and create a new one instead")

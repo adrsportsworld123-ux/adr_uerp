@@ -44,6 +44,7 @@ type detailLine struct {
 	PriceIncludesTax bool    `json:"price_includes_tax"`
 	OpenPrice        bool    `json:"open_price"`
 	PriceApprovedBy  *string `json:"price_approved_by"`
+	UnitSymbol       string  `json:"unit_symbol"` // the product's unit (migrations/076)
 }
 
 type taxBucket struct {
@@ -187,11 +188,12 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 			       l.line_total::text, l.price_includes_tax, l.open_price, au.name,
 			       COALESCE(l.tax_rate, 0), l.cess_amount, COALESCE(p.hsn_code, ''),
 			       gst_cgst(l.tax_amount, l.cess_amount, so.inter_state)::text, gst_sgst(l.tax_amount, l.cess_amount, so.inter_state)::text,
-			       gst_igst(l.tax_amount, l.cess_amount, so.inter_state)::text, l.cess_amount::text
+			       gst_igst(l.tax_amount, l.cess_amount, so.inter_state)::text, l.cess_amount::text, COALESCE(un.symbol, '')
 			FROM sales_order_lines l
 			JOIN sales_orders so ON so.id = l.sales_order_id
 			JOIN product_variants pv ON pv.id = l.variant_id
 			JOIN products p ON p.id = pv.product_id
+			LEFT JOIN units un ON un.id = p.unit_id
 			LEFT JOIN users au ON au.id = l.price_approved_by
 			WHERE l.sales_order_id::text = $1 ORDER BY l.created_at`, orderID)
 		if err != nil {
@@ -204,7 +206,7 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 			var taxable, tax, rate, cess float64
 			if err := rows.Scan(&l.LineID, &l.SKU, &l.ProductName, &l.Quantity, &l.ReturnedQuantity, &l.UnitPrice, &l.DiscountAmount,
 				&l.TaxableValue, &taxable, &l.TaxAmount, &tax, &l.LineTotal, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy,
-				&rate, &cess, &l.HSNCode, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount); err != nil {
+				&rate, &cess, &l.HSNCode, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount, &l.UnitSymbol); err != nil {
 				rows.Close()
 				return err
 			}

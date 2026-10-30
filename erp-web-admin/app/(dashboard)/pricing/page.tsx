@@ -24,6 +24,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { currencySymbol } from "@/lib/currency";
+import type { PriceSuggestion } from "@/lib/types";
+import { SuggestionChip, SuggestionHint, fetchSuggestions, useLiveSuggestion, useSuggestionSettings } from "@/components/pricing/suggestions";
+
 function marginClass(pct: number | null) {
   if (pct === null) return "";
   return pct < 0 ? "text-destructive font-medium" : "text-foreground";
@@ -63,6 +66,19 @@ function PricingList() {
   const filters = useCatalogFilters();
   const [editing, setEditing] = useState<PriceRow | null>(null);
   const rows = useMemo(() => list.rows?.flatMap((p) => p.variants.map((v) => ({ product: p, variant: v }))) ?? null, [list.rows]);
+  // Price suggestions (§3.83), when the plan has them and they're on.
+  const { enabled: suggestionsOn } = useSuggestionSettings();
+  const [suggested, setSuggested] = useState<Record<string, PriceSuggestion>>({});
+  useEffect(() => {
+    if (!suggestionsOn || !rows || rows.length === 0) return;
+    let live = true;
+    fetchSuggestions(rows.slice(0, 200).map((r) => ({ key: r.variant.variant_id, variant_id: r.variant.variant_id })))
+      .then((items) => live && setSuggested(Object.fromEntries(items.map((i) => [i.key, i]))))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [rows, suggestionsOn]);
 
   const columns: Column<PriceRow>[] = [
     {
@@ -96,6 +112,25 @@ function PricingList() {
         </div>
       ),
     },
+    ...(suggestionsOn
+      ? [
+          {
+            key: "suggested",
+            header: "Suggested",
+            align: "right" as const,
+            cell: ({ variant }: PriceRow) => {
+              const s = suggested[variant.variant_id];
+              if (!s) return <span className="text-xs text-muted-foreground">—</span>;
+              return (
+                <div className="flex flex-col items-end gap-0.5 leading-tight" title={s.note || s.rule || undefined}>
+                  {s.suggested_price != null && <span className="tabular">{rupees(s.suggested_price)}</span>}
+                  <SuggestionChip s={s} />
+                </div>
+              );
+            },
+          },
+        ]
+      : []),
     { key: "gst", header: "GST basis", cell: ({ product }) => <TaxBasisCell product={product} onChanged={list.reload} /> },
     {
       key: "margin",
@@ -168,7 +203,7 @@ function PricingList() {
         // No row-click editing: the GST basis and barcode cells are controls
         // of their own, and a click there must not open the price dialog.
         rowActions={(r) => (
-          <Button variant="ghost" size="icon-sm" aria-label={`Edit price of ${r.variant.sku}`} title="Edit price" onClick={() => setEditing(r)}>
+          <Button variant="ghost" size="icon-sm" aria-label={`Edit price of ${r.variant.sku}`} title="Edit pricing" onClick={() => setEditing(r)}>
             <Pencil />
           </Button>
         )}
@@ -176,6 +211,7 @@ function PricingList() {
       {editing && (
         <PriceDialog
           row={editing}
+          suggestionsOn={suggestionsOn}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -214,32 +250,48 @@ export default function PricingPage() {
   );
 }
 
-// Edit one variant's selling price: a reason is recorded with the price
-// history; a price below cost needs an explicit override
-// (NEGATIVE_MARGIN), same rule the API enforces.
-function PriceDialog({ row, onClose, onSaved }: { row: PriceRow; onClose: () => void; onSaved: () => void }) {
+// Edit one variant's pricing: its original barcode (the code printed on
+// the product), cost, MRP and selling price. With price suggestions on
+// (§3.83) the selling price starts at the suggestion for the cost and MRP
+// in the form, follows them as they change, and stays editable. A reason
+// is recorded with the price history; a price below cost needs an
+// explicit override (NEGATIVE_MARGIN), same rule the API enforces.
+function PriceDialog({ row, suggestionsOn, onClose, onSaved }: { row: PriceRow; suggestionsOn: boolean; onClose: () => void; onSaved: () => void }) {
   const { product, variant } = row;
-  const [sellingPrice, setSellingPrice] = useState(variant.selling_price);
+  const [barcode, setBarcode] = useState(variant.original_barcode ?? "");
+  const [cost, setCost] = useState(variant.cost_price);
+  const [mrp, setMrp] = useState(variant.mrp);
+  // null = not typed: the field shows the suggestion (else the current price).
+  const [typedPrice, setTypedPrice] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [override, setOverride] = useState(false);
   const [needsOverride, setNeedsOverride] = useState(false);
   const [busy, setBusy] = useState(false);
+  const suggestion = useLiveSuggestion({ key: variant.variant_id, variant_id: variant.variant_id, cost_price: Number(cost) || 0, mrp: Number(mrp) || 0 }, suggestionsOn);
+  const sellingPrice = typedPrice ?? (suggestion?.suggested_price != null ? String(suggestion.suggested_price) : variant.selling_price);
+  const prefilled = typedPrice === null && suggestion?.suggested_price != null && Number(sellingPrice) !== Number(variant.selling_price);
 
   async function save() {
     setBusy(true);
     try {
+      const code = barcode.trim();
+      if (code && code !== (variant.original_barcode ?? "")) {
+        await api.put(`/api/v1/products/variants/${variant.variant_id}/original-barcode`, { code });
+      }
       await api.patch(`/api/v1/pricing/variants/${variant.variant_id}`, {
+        cost_price: Number(cost) || 0,
+        mrp: Number(mrp),
         selling_price: Number(sellingPrice),
         reason,
         override,
       });
-      toast.success("Price updated");
+      toast.success("Pricing updated");
       onSaved();
     } catch (e) {
       if (e instanceof ApiError && e.code === "NEGATIVE_MARGIN") {
         setNeedsOverride(true);
       } else {
-        toast.error(e instanceof ApiError ? e.message : "Could not update price");
+        toast.error(e instanceof ApiError ? e.message : "Could not update pricing");
       }
     } finally {
       setBusy(false);
@@ -250,14 +302,15 @@ function PriceDialog({ row, onClose, onSaved }: { row: PriceRow; onClose: () => 
     <Modal
       open
       onOpenChange={(o) => !o && onClose()}
-      title="Edit selling price"
-      description={`${product.name} · ${variant.sku} · cost ${rupees(variant.cost_price)} · MRP ${rupees(variant.mrp)}`}
+      title="Edit pricing"
+      description={`${product.name} · ${variant.sku} · now sells at ${rupees(variant.selling_price)}`}
+      width={560}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={busy || !sellingPrice}>
+          <Button onClick={save} disabled={busy || !(Number(sellingPrice) > 0) || !(Number(mrp) > 0)}>
             Save
           </Button>
         </>
@@ -265,9 +318,42 @@ function PriceDialog({ row, onClose, onSaved }: { row: PriceRow; onClose: () => 
     >
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-2">
-          <Label htmlFor="sellingPrice">Selling price ({currencySymbol()}{product.price_includes_tax ? ", incl. GST" : ""})</Label>
-          <Input id="sellingPrice" type="number" step="0.01" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} className="w-40" autoFocus />
+          <Label htmlFor="originalBarcode">Original barcode</Label>
+          <Input
+            id="originalBarcode"
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+            placeholder="The code printed on the product"
+            className="w-64 font-mono"
+          />
+          {variant.generated_barcode && <p className="text-xs text-muted-foreground">Our own code {variant.generated_barcode} stays as it is.</p>}
         </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="costPrice">Cost price ({currencySymbol()})</Label>
+            <Input id="costPrice" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="mrpPrice">MRP ({currencySymbol()})</Label>
+            <Input id="mrpPrice" type="number" min="0.01" step="0.01" value={mrp} onChange={(e) => setMrp(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="sellingPrice">
+              Selling price ({currencySymbol()}
+              {product.price_includes_tax ? ", incl. GST" : ""})
+            </Label>
+            <Input id="sellingPrice" type="number" step="0.01" value={sellingPrice} onChange={(e) => setTypedPrice(e.target.value)} autoFocus />
+          </div>
+        </div>
+        {suggestion && <SuggestionHint s={suggestion} current={sellingPrice} onUse={(p) => setTypedPrice(String(p))} />}
+        {prefilled && (
+          <p className="text-xs text-muted-foreground">
+            Filled in from the suggestion.{" "}
+            <button type="button" className="underline underline-offset-2" onClick={() => setTypedPrice(variant.selling_price)}>
+              Keep {rupees(variant.selling_price)}
+            </button>
+          </p>
+        )}
         <div className="flex flex-col gap-2">
           <Label htmlFor="priceReason">Reason</Label>
           <Input id="priceReason" placeholder="e.g. New MRP from supplier" value={reason} onChange={(e) => setReason(e.target.value)} />

@@ -14,7 +14,8 @@ import (
 // API's NUMERIC strings.
 type SaleLine struct {
 	Name, SKU, Quantity, UnitPrice, Discount, Tax, Total string
-	LineTax                                              // GST split columns (used when Breakup splits)
+	Unit                                                 string // the product's unit symbol (migrations/076); "" or "pcs" prints none
+	LineTax                                                     // GST split columns (used when Breakup splits)
 }
 
 type SaleInput struct {
@@ -59,12 +60,13 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 		d.Party = p
 	}
 	for i, l := range in.Lines {
-		detail := Qty(l.Quantity) + " × " + Amount(l.UnitPrice)
+		qty := Qty(l.Quantity) + unitSuffix(l.Unit)
+		detail := qty + " × " + Amount(l.UnitPrice)
 		if isNonZero(l.Discount) {
 			detail += "  (−" + Amount(l.Discount) + ")"
 		}
 		cells := append([]string{itoa(i + 1), itemName(l.Name, skuFor(lh, l.SKU), l.HSN, in.Breakup)},
-			itemCells(in.Breakup, true, l.Quantity, l.UnitPrice, l.Discount, l.Tax, l.Total, l.LineTax)...)
+			itemCells(in.Breakup, true, qty, l.UnitPrice, l.Discount, l.Tax, l.Total, l.LineTax)...)
 		d.Rows = append(d.Rows, Row{
 			Cells:  cells,
 			Title:  l.Name,
@@ -315,6 +317,14 @@ func skuFor(lh Letterhead, sku string) string {
 		return ""
 	}
 	return sku
+}
+
+// unitSuffix: " kg" after a quantity, none for pieces (what every receipt showed before units).
+func unitSuffix(unit string) string {
+	if unit == "" || unit == "pcs" {
+		return ""
+	}
+	return " " + unit
 }
 
 func isNonZero(s string) bool {

@@ -9,6 +9,7 @@ import {
   Receipt,
   ShieldCheck,
   Sparkles,
+  Sprout,
   Tags,
   Truck,
   Users,
@@ -22,7 +23,9 @@ import {
 // `feature` (Phase 16): the plan feature the screen needs; the sidebar shows
 // a lock and the screen shows a plan-locked preview when the plan lacks it.
 export type NavItem = { href: string; label: string; match?: string[]; feature?: string };
-export type NavGroup = { id: string; label: string; icon: LucideIcon; items: NavItem[] };
+// businessFeature (erp-core-go §3.80): the group shows only when a branch the
+// user sees has it (a farm). Existing groups never have one.
+export type NavGroup = { id: string; label: string; icon: LucideIcon; items: NavItem[]; businessFeature?: string };
 
 export const NAV_GROUPS: NavGroup[] = [
   {
@@ -56,6 +59,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/catalog/categories", label: "Categories" },
       { href: "/catalog/brands", label: "Brands" },
       { href: "/catalog/tax-slabs", label: "Tax Slabs" },
+      { href: "/catalog/units", label: "Units" },
       { href: "/attributes", label: "Product Attributes" },
       { href: "/search", label: "Product Search" },
       { href: "/labels", label: "Label Studio" },
@@ -71,6 +75,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/pricing/scheduled-changes", label: "Scheduled Price Changes" },
       { href: "/pricing/rules", label: "Price Rules" },
       { href: "/pricing/markup-rules", label: "Markup Rules" },
+      { href: "/pricing/suggestions", label: "Price Suggestions", feature: "price_suggestion" },
       { href: "/promotions", label: "Promotions & Loyalty" },
     ],
   },
@@ -133,6 +138,24 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // Farm management (erp-core-go §3.81): only where a branch farms.
+    id: "farm",
+    label: "Farm",
+    icon: Sprout,
+    businessFeature: "farm",
+    items: [
+      { href: "/farm", label: "Farm Dashboard" },
+      { href: "/farm/batches", label: "Flocks & Herds", match: ["/farm/batches/"] },
+      { href: "/farm/animals", label: "Animals", match: ["/farm/animals/"] },
+      { href: "/farm/milk", label: "Milk Recording" },
+      { href: "/farm/feed", label: "Feed" },
+      { href: "/farm/health", label: "Health & Medicine" },
+      { href: "/farm/water", label: "Water Quality" },
+      { href: "/farm/houses", label: "Sheds & Ponds" },
+      { href: "/farm/schedules", label: "Vaccination Schedules" },
+    ],
+  },
+  {
     id: "reports",
     label: "Reports",
     icon: ChartColumn,
@@ -156,9 +179,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/hr/employees", label: "Employees" },
       { href: "/hr/shifts", label: "Shifts" },
       { href: "/hr/attendance", label: "Attendance" },
+      { href: "/hr/leave", label: "Leave & Requests" },
       { href: "/hr/loans", label: "Employee Loans", match: ["/hr/loans/"] },
       { href: "/hr/statutory-config", label: "Statutory Config", feature: "payroll" },
-      { href: "/payroll", label: "Payroll", feature: "payroll" },
+      { href: "/payroll", label: "Payroll", feature: "payroll", match: ["/payroll/"] },
     ],
   },
   {
@@ -168,6 +192,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/users", label: "Users" },
       { href: "/account", label: "My Account" },
+      { href: "/my-hr", label: "My Leave & Payslips" },
       { href: "/rbac", label: "Roles & Permissions" },
       { href: "/rbac/data-access", label: "Data Access" },
       { href: "/rbac/approval-policies", label: "Approval Policies" },

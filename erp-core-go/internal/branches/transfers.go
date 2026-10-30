@@ -13,6 +13,7 @@ import (
 
 	"erp-core-go/internal/accounting"
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
 )
@@ -88,6 +89,9 @@ func (h *Handler) CreateTransfer(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		for _, l := range req.Lines {
+			if err := catalog.CheckQuantity(ctx, tx, l.VariantID, l.Quantity); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO branch_transfer_lines (id, branch_transfer_id, variant_id, requested_quantity)
 				VALUES (gen_random_uuid(), $1, $2, $3)`, transferID, l.VariantID, l.Quantity); err != nil {
@@ -96,6 +100,9 @@ func (h *Handler) CreateTransfer(w http.ResponseWriter, r *http.Request) {
 		}
 		return loadTransfer(ctx, tx, transferID, &resp)
 	})
+	if catalog.WriteQuantityError(w, err) {
+		return
+	}
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not create transfer")
 		return

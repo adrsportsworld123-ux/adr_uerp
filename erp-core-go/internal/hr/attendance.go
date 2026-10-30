@@ -124,19 +124,29 @@ func scanAttendance(row pgx.Row, a *attendanceResponse) error {
 // ---------------------------------------------------------------------
 
 type attendanceSettings struct {
-	RequireLocation bool    `json:"require_location"`
-	GeofenceMode    string  `json:"geofence_mode"` // off | flag | block
-	AllowWeb        bool    `json:"allow_web"`
-	AllowPOS        bool    `json:"allow_pos"`
-	UpdatedAt       *string `json:"updated_at"`
+	RequireLocation bool   `json:"require_location"`
+	GeofenceMode    string `json:"geofence_mode"` // off | flag | block
+	AllowWeb        bool   `json:"allow_web"`
+	AllowPOS        bool   `json:"allow_pos"`
+	// Leave, permission and regularization rules (migrations/075).
+	LeaveYearStartMonth   int     `json:"leave_year_start_month"`
+	PermissionFreeCount   int     `json:"permission_free_count"`
+	PermissionFreeMinutes int     `json:"permission_free_minutes"`
+	PermissionMaxMinutes  int     `json:"permission_max_minutes"`
+	StandardDayHours      float64 `json:"standard_day_hours"`
+	RegularizeWithinDays  int     `json:"regularize_within_days"`
+	UpdatedAt             *string `json:"updated_at"`
 }
 
 func loadAttendanceSettings(ctx context.Context, tx pgx.Tx) (attendanceSettings, error) {
-	s := attendanceSettings{GeofenceMode: "flag", AllowWeb: true, AllowPOS: true}
+	s := attendanceSettings{GeofenceMode: "flag", AllowWeb: true, AllowPOS: true,
+		LeaveYearStartMonth: 1, PermissionFreeCount: 2, PermissionFreeMinutes: 240, PermissionMaxMinutes: 240, StandardDayHours: 8, RegularizeWithinDays: 30}
 	err := tx.QueryRow(ctx, `
-		SELECT require_location, geofence_mode, allow_web, allow_pos, updated_at::text
+		SELECT require_location, geofence_mode, allow_web, allow_pos, leave_year_start_month, permission_free_count,
+		       permission_free_minutes, permission_max_minutes, standard_day_hours::float8, regularize_within_days, updated_at::text
 		FROM attendance_settings WHERE merchant_id = current_setting('app.tenant_id')::uuid`,
-	).Scan(&s.RequireLocation, &s.GeofenceMode, &s.AllowWeb, &s.AllowPOS, &s.UpdatedAt)
+	).Scan(&s.RequireLocation, &s.GeofenceMode, &s.AllowWeb, &s.AllowPOS, &s.LeaveYearStartMonth, &s.PermissionFreeCount,
+		&s.PermissionFreeMinutes, &s.PermissionMaxMinutes, &s.StandardDayHours, &s.RegularizeWithinDays, &s.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return s, nil
 	}
@@ -906,6 +916,13 @@ func (h *Handler) UpdateAttendanceSettings(w http.ResponseWriter, r *http.Reques
 		GeofenceMode    *string `json:"geofence_mode"`
 		AllowWeb        *bool   `json:"allow_web"`
 		AllowPOS        *bool   `json:"allow_pos"`
+
+		LeaveYearStartMonth   *int     `json:"leave_year_start_month"`
+		PermissionFreeCount   *int     `json:"permission_free_count"`
+		PermissionFreeMinutes *int     `json:"permission_free_minutes"`
+		PermissionMaxMinutes  *int     `json:"permission_max_minutes"`
+		StandardDayHours      *float64 `json:"standard_day_hours"`
+		RegularizeWithinDays  *int     `json:"regularize_within_days"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "could not parse request body")
@@ -913,6 +930,24 @@ func (h *Handler) UpdateAttendanceSettings(w http.ResponseWriter, r *http.Reques
 	}
 	if req.GeofenceMode != nil && *req.GeofenceMode != "off" && *req.GeofenceMode != "flag" && *req.GeofenceMode != "block" {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "geofence_mode must be off, flag or block")
+		return
+	}
+	outside := func(v *int, lo, hi int) bool { return v != nil && (*v < lo || *v > hi) }
+	switch {
+	case outside(req.LeaveYearStartMonth, 1, 12):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "leave_year_start_month must be 1 to 12")
+		return
+	case outside(req.PermissionFreeCount, 0, 31), outside(req.PermissionFreeMinutes, 0, 6000):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "permission_free_count must be 0 to 31 and permission_free_minutes 0 to 6000")
+		return
+	case outside(req.PermissionMaxMinutes, 15, 720):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "permission_max_minutes must be 15 to 720")
+		return
+	case req.StandardDayHours != nil && (*req.StandardDayHours <= 0 || *req.StandardDayHours > 24):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "standard_day_hours must be more than 0 and at most 24")
+		return
+	case outside(req.RegularizeWithinDays, 1, 366):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "regularize_within_days must be 1 to 366")
 		return
 	}
 	var saved attendanceSettings
@@ -934,13 +969,33 @@ func (h *Handler) UpdateAttendanceSettings(w http.ResponseWriter, r *http.Reques
 		if req.AllowPOS != nil {
 			next.AllowPOS = *req.AllowPOS
 		}
+		for _, f := range []struct {
+			v   *int
+			dst *int
+		}{{req.LeaveYearStartMonth, &next.LeaveYearStartMonth}, {req.PermissionFreeCount, &next.PermissionFreeCount},
+			{req.PermissionFreeMinutes, &next.PermissionFreeMinutes}, {req.PermissionMaxMinutes, &next.PermissionMaxMinutes},
+			{req.RegularizeWithinDays, &next.RegularizeWithinDays}} {
+			if f.v != nil {
+				*f.dst = *f.v
+			}
+		}
+		if req.StandardDayHours != nil {
+			next.StandardDayHours = *req.StandardDayHours
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO attendance_settings (merchant_id, require_location, geofence_mode, allow_web, allow_pos, updated_by, updated_at)
-			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, now())
+			INSERT INTO attendance_settings (merchant_id, require_location, geofence_mode, allow_web, allow_pos,
+			    leave_year_start_month, permission_free_count, permission_free_minutes, permission_max_minutes,
+			    standard_day_hours, regularize_within_days, updated_by, updated_at)
+			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $6, $7, $8, $9, $10, $11, $5, now())
 			ON CONFLICT (merchant_id) DO UPDATE SET require_location = EXCLUDED.require_location,
 			    geofence_mode = EXCLUDED.geofence_mode, allow_web = EXCLUDED.allow_web, allow_pos = EXCLUDED.allow_pos,
+			    leave_year_start_month = EXCLUDED.leave_year_start_month, permission_free_count = EXCLUDED.permission_free_count,
+			    permission_free_minutes = EXCLUDED.permission_free_minutes, permission_max_minutes = EXCLUDED.permission_max_minutes,
+			    standard_day_hours = EXCLUDED.standard_day_hours, regularize_within_days = EXCLUDED.regularize_within_days,
 			    updated_by = EXCLUDED.updated_by, updated_at = now()`,
-			next.RequireLocation, next.GeofenceMode, next.AllowWeb, next.AllowPOS, claims.UserID); err != nil {
+			next.RequireLocation, next.GeofenceMode, next.AllowWeb, next.AllowPOS, claims.UserID,
+			next.LeaveYearStartMonth, next.PermissionFreeCount, next.PermissionFreeMinutes, next.PermissionMaxMinutes,
+			next.StandardDayHours, next.RegularizeWithinDays); err != nil {
 			return err
 		}
 		if saved, err = loadAttendanceSettings(ctx, tx); err != nil {

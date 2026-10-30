@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"erp-core-go/internal/authn"
+	"erp-core-go/internal/catalog"
 	"erp-core-go/internal/httpx"
 	"erp-core-go/internal/inventory"
 	"erp-core-go/internal/locale"
@@ -151,6 +152,9 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 		if status != "draft" {
 			return errGRNNotEditable
 		}
+		if err := catalog.CheckQuantity(ctx, tx, req.VariantID, req.Quantity); err != nil {
+			return err
+		}
 		if poID != nil {
 			// Against a PO: only its items, never past what is pending.
 			lineID := req.POLineID
@@ -191,6 +195,9 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 		return recalcGRNTotals(ctx, tx, grnID, &resp)
 	})
 
+	if catalog.WriteQuantityError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, errGRNNotEditable):
 		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "this GRN is no longer a draft")

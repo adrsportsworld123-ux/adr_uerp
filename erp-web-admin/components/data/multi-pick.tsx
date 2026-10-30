@@ -95,3 +95,31 @@ export function MultiProductPick({
     </div>
   );
 }
+
+/** Several variants (a product's sizes and colours one by one), as chips. */
+export function MultiVariantPick({
+  id,
+  value,
+  onChange,
+  emptyText,
+}: {
+  id: string;
+  value: PickedRef[];
+  onChange: (next: PickedRef[]) => void;
+  emptyText: string;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <ProductPicker
+        id={id}
+        ariaLabel="Add variants"
+        value={null}
+        onChange={(o) => {
+          if (!value.some((v) => v.id === o.variantId)) onChange([...value, { id: o.variantId, name: o.label }]);
+        }}
+        placeholder="Search a variant to add"
+      />
+      <Chips value={value} onChange={onChange} emptyText={emptyText} what="variants" />
+    </div>
+  );
+}

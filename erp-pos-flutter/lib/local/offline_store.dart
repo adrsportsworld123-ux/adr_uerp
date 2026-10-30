@@ -116,6 +116,9 @@ class OfflineStore {
         'open_price_max': (e['open_price'] as Map<String, dynamic>?)?['max'],
         'open_price_approval_above': (e['open_price'] as Map<String, dynamic>?)?['approval_above'],
         'pos_color': e['pos_color'] is String && (e['pos_color'] as String).isNotEmpty ? e['pos_color'] : null,
+        'pack_qty': double.tryParse(e['pack_qty'] as String? ?? '') ?? 1,
+        'unit_symbol': e['unit_symbol'] is String && (e['unit_symbol'] as String).isNotEmpty ? e['unit_symbol'] : null,
+        'unit_decimals': e['unit_decimals'] as int? ?? 3,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
@@ -170,6 +173,9 @@ class OfflineStore {
             ? null
             : OpenPriceRange(min: min, max: max, approvalAbove: r['open_price_approval_above'] as String?),
         posColor: r['pos_color'] as String?,
+        packQty: (r['pack_qty'] as num?)?.toDouble() ?? 1,
+        unitSymbol: r['unit_symbol'] as String?,
+        unitDecimals: r['unit_decimals'] as int? ?? 3,
       ),
       r['cgst_rate'] as double,
       r['sgst_rate'] as double,

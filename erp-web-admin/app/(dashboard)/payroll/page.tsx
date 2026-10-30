@@ -6,16 +6,33 @@
 // the number that goes on a real EPFO/ESIC/PT challan — it does not
 // produce or submit an actual government e-challan file (see
 // internal/payroll/payroll.go's GetChallanSummary doc comment).
+// Each payslip downloads as a PDF, and "Print all payslips" opens the run's
+// payslips to print together (erp-core-go §3.78). The Leave column is what
+// reduced the days paid: approved leave paid / unpaid, absences, and
+// permission minutes beyond the free limit.
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { Printer } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api-client";
-import { CommissionRule, PayrollRun, ChallanSummary } from "@/lib/types";
-import { Button } from "@/components/ui/button";
+import { CommissionRule, PayrollRun, ChallanSummary, Payslip } from "@/lib/types";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { DownloadPdfButton } from "@/components/data/document-actions";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+
+/** "4 paid, 1 unpaid · absent 1 · 90 min" — what reduced the days paid. */
+function leaveText(p: Payslip): string {
+  const n = (v?: string) => Number(v ?? 0);
+  const parts: string[] = [];
+  if (n(p.leave_paid_days) || n(p.leave_unpaid_days)) parts.push(`${n(p.leave_paid_days)} paid, ${n(p.leave_unpaid_days)} unpaid`);
+  if (n(p.absent_days)) parts.push(`absent ${n(p.absent_days)}`);
+  if (p.permission_unpaid_minutes) parts.push(`${p.permission_unpaid_minutes} min`);
+  return parts.join(" · ");
+}
 
 export default function PayrollPage() {
   const [rules, setRules] = useState<CommissionRule[]>([]);
@@ -220,6 +237,9 @@ export default function PayrollPage() {
               Payslips — {selectedRun.period_month}/{selectedRun.period_year}
               <Badge variant={selectedRun.status === "finalized" ? "default" : "outline"}>{selectedRun.status}</Badge>
               <Button size="sm" variant="outline" onClick={() => loadChallan(selectedRun.id)}>Challan summary</Button>
+              <Link href={`/payroll/runs/${selectedRun.id}/print`} target="_blank" className={buttonVariants({ size: "sm", variant: "outline" })}>
+                <Printer aria-hidden /> Print all payslips
+              </Link>
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -246,12 +266,14 @@ export default function PayrollPage() {
                   <TableHead>Employee</TableHead>
                   <TableHead>Gross</TableHead>
                   <TableHead>Days present</TableHead>
+                  <TableHead>Leave</TableHead>
                   <TableHead>PF</TableHead>
                   <TableHead>ESI</TableHead>
                   <TableHead>PT</TableHead>
                   <TableHead>TDS</TableHead>
                   <TableHead>Loan</TableHead>
                   <TableHead>Net pay</TableHead>
+                  <TableHead className="text-right">Payslip</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -260,12 +282,18 @@ export default function PayrollPage() {
                     <TableCell>{p.name}</TableCell>
                     <TableCell>{p.gross_earnings}</TableCell>
                     <TableCell>{p.days_present}/{p.days_in_period}</TableCell>
+                    <TableCell className="text-xs" title="Approved leave paid / unpaid days, absences, and permission minutes beyond the free limit">
+                      {leaveText(p) || "—"}
+                    </TableCell>
                     <TableCell>{p.pf_employee}</TableCell>
                     <TableCell>{p.esi_employee}</TableCell>
                     <TableCell>{p.pt_amount}</TableCell>
                     <TableCell>{p.tds_amount}</TableCell>
                     <TableCell title="Employee loan and advance instalments">{Number(p.loan_deduction ?? 0) > 0 ? p.loan_deduction : "—"}</TableCell>
                     <TableCell className="font-medium">{p.net_pay}</TableCell>
+                    <TableCell className="text-right">
+                      {p.payslip_id && <DownloadPdfButton path={`/api/v1/payroll/payslips/${p.payslip_id}/pdf`} label={`Payslip of ${p.name}`} size="icon-sm" />}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

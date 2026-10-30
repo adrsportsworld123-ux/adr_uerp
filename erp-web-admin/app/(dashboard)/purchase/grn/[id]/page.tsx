@@ -24,6 +24,10 @@ interface BarcodeLookup {
   product_name: string;
   variant_id: string;
   sku: string;
+  // A pack barcode (erp-core-go migrations/076): what one scan holds, in the product's unit.
+  unit?: { symbol: string } | null;
+  pack_qty?: string;
+  pack_label?: string;
 }
 
 export default function GRNDetailPage() {
@@ -62,6 +66,8 @@ export default function GRNDetailPage() {
     try {
       const product = await api.get<BarcodeLookup>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}`);
       setResolved(product);
+      // A pack (a bag of 25 kg, a box of 12) starts the quantity at its contents.
+      if (product.pack_qty && Number(product.pack_qty) !== 1 && !quantity) setQuantity(String(Number(product.pack_qty)));
     } catch (e) {
       setLookupError(e instanceof ApiError ? e.message : "Could not reach the server");
     }
@@ -263,14 +269,17 @@ export default function GRNDetailPage() {
               <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-muted/50">
                 <p className="text-sm font-medium">
                   {resolved.product_name} <span className="text-muted-foreground">({resolved.sku})</span>
+                  {resolved.pack_label && <span className="ms-2 rounded bg-muted px-1.5 py-0.5 text-xs">{resolved.pack_label}</span>}
                 </p>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="quantity">Quantity *</Label>
+                    <Label htmlFor="quantity">Quantity{resolved.unit ? ` (${resolved.unit.symbol})` : ""} *</Label>
                     <Input id="quantity" type="number" min="0.001" step="0.001" required value={quantity} onChange={(e) => setQuantity(e.target.value)} />
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="unitCost">Unit cost ({currencySymbol()}) *</Label>
+                    <Label htmlFor="unitCost">
+                      Cost per {resolved.unit?.symbol ?? "unit"} ({currencySymbol()}) *
+                    </Label>
                     <Input id="unitCost" type="number" min="0" step="0.01" required value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
                   </div>
                 </div>

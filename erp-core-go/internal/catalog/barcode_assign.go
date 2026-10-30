@@ -23,6 +23,9 @@ type BarcodeAssignHandler struct {
 type assignBarcodeRequest struct {
 	Code      string `json:"code"`      // optional — a real supplier barcode, if one exists
 	Symbology string `json:"symbology"` // optional; default EAN13 when Code is omitted, else CODE128
+	// A pack barcode (migrations/076): what one scan adds — see packFor.
+	PackUnitID *string  `json:"pack_unit_id"`
+	PackSize   *float64 `json:"pack_size"`
 }
 
 type assignBarcodeResponse struct {
@@ -33,6 +36,8 @@ type assignBarcodeResponse struct {
 	// Source mirrors Generated as the string the barcodes table itself
 	// stores ("original" | "generated") — see migrations/032_barcode_source.sql.
 	Source string `json:"source"`
+	// PackQty: base units one scan adds (migrations/076).
+	PackQty float64 `json:"pack_qty"`
 }
 
 var validSymbologies = map[string]bool{
@@ -128,11 +133,20 @@ func (h *BarcodeAssignHandler) AssignBarcode(w http.ResponseWriter, r *http.Requ
 			return err
 		}
 
-		resp = assignBarcodeResponse{Code: code, Symbology: symbology, IsPrimary: isPrimary, Generated: generated, Source: source}
+		resp = assignBarcodeResponse{Code: code, Symbology: symbology, IsPrimary: isPrimary, Generated: generated, Source: source, PackQty: 1}
+		if req.PackUnitID != nil || req.PackSize != nil {
+			if err := setPack(ctx, tx, variantID, code, req.PackUnitID, req.PackSize); err != nil {
+				return err
+			}
+			return tx.QueryRow(ctx, `SELECT pack_qty::float8 FROM barcodes WHERE variant_id = $1 AND code = $2`, variantID, code).Scan(&resp.PackQty)
+		}
 		return nil
 	})
 
+	var ue *unitError
 	switch {
+	case errors.As(err, &ue):
+		httpx.Error(w, ue.status, ue.code, ue.msg)
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "variant not found")
 	case isUniqueViolation(err):

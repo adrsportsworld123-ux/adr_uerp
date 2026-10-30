@@ -27,7 +27,7 @@ function readCollapsed(): string[] {
 function Sidebar({ onNavigate, onOpenPalette }: { onNavigate?: () => void; onOpenPalette: () => void }) {
   const pathname = usePathname();
   const active = findActive(pathname);
-  const { has } = usePermissions();
+  const { has, does } = usePermissions();
   // Every group starts expanded: the sidebar shows exactly the same links
   // the old flat list did until someone chooses to collapse a group.
   const [collapsed, setCollapsed] = useState<string[]>([]);
@@ -69,7 +69,7 @@ function Sidebar({ onNavigate, onOpenPalette }: { onNavigate?: () => void; onOpe
         <kbd className="rounded border bg-muted px-1.5 font-mono text-[11px]">Ctrl K</kbd>
       </button>
       <nav aria-label="Main" className="-mx-1 flex-1 overflow-y-auto px-1 pb-4">
-        {NAV_GROUPS.map((group) => {
+        {NAV_GROUPS.filter((g) => !g.businessFeature || does(g.businessFeature)).map((group) => {
           const isCollapsed = collapsed.includes(group.id) && active?.group.id !== group.id;
           const Icon = group.icon;
           return (
