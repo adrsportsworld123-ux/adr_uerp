@@ -142,7 +142,7 @@ function NewCountSection({ branches, defaultBranchId }: { branches: Branch[]; de
           (opening + sales): <span className="tabular">{rupees(systemExpected)}</span>
         </p>
 
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {denomList.map((d) => (
             <div key={d} className="flex flex-col gap-1">
               <Label className="text-xs">{currencySymbol()}{d}</Label>

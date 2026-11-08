@@ -183,8 +183,8 @@ export function AnimalDialog({ batches, batchId: initialBatch, onClose, onSaved 
       {batches.length === 0 ? (
         <p className="text-sm text-muted-foreground">Place a cattle, goat, pig or rabbit herd first (Flocks & Herds).</p>
       ) : (
-        <form id="farm-animal" onSubmit={save} className="grid grid-cols-2 gap-3">
-          <Field label="Herd" htmlFor="fa-batch" className="col-span-2">
+        <form id="farm-animal" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="Herd" htmlFor="fa-batch" className="col-span-full sm:col-span-2">
             <select id="fa-batch" value={batchId} onChange={(e) => setBatchId(e.target.value)} className={`${selectClass} w-full`}>
               {batches.map((b) => (
                 <option key={b.batch_id} value={b.batch_id}>
@@ -222,12 +222,12 @@ export function AnimalDialog({ batches, batchId: initialBatch, onClose, onSaved 
               <Field label="Joined on" htmlFor="fa-joined">
                 <Input id="fa-joined" type="date" value={joinedOn} min={batch?.placed_on} max={localDate()} onChange={(e) => setJoinedOn(e.target.value)} />
               </Field>
-              <Field label="From stock (optional)" htmlFor="fa-stock" className="col-span-2">
+              <Field label="From stock (optional)" htmlFor="fa-stock" className="col-span-full sm:col-span-2">
                 <ProductPicker id="fa-stock" value={fromStock} onChange={setFromStock} placeholder="The animal bought on a goods receipt" />
               </Field>
             </>
           )}
-          {full && <p className="col-span-2 text-xs text-muted-foreground">Every head of this herd is on the register, so a new animal is a purchase.</p>}
+          {full && <p className="col-span-full sm:col-span-2 text-xs text-muted-foreground">Every head of this herd is on the register, so a new animal is a purchase.</p>}
         </form>
       )}
     </Modal>
@@ -290,7 +290,7 @@ export function BreedingDialog({ animal, males, onClose, onSaved }: { animal: Fa
         </>
       }
     >
-      <form id="farm-breeding" onSubmit={save} className="grid grid-cols-2 gap-3">
+      <form id="farm-breeding" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="What" htmlFor="fbr-type">
           <select id="fbr-type" value={type} onChange={(e) => setType(e.target.value as FarmBreedingType)} className={`${selectClass} w-full`}>
             {(Object.keys(BREEDING_LABEL) as FarmBreedingType[]).map((t) => (
@@ -322,7 +322,7 @@ export function BreedingDialog({ animal, males, onClose, onSaved }: { animal: Fa
                 ))}
               </select>
             </Field>
-            <Field label="Bull / buck / semen straw" htmlFor="fbr-sire-note" className="col-span-2">
+            <Field label="Bull / buck / semen straw" htmlFor="fbr-sire-note" className="col-span-full sm:col-span-2">
               <Input id="fbr-sire-note" value={sireNote} onChange={(e) => setSireNote(e.target.value)} placeholder="HF straw 1123" />
             </Field>
           </>
@@ -343,7 +343,7 @@ export function BreedingDialog({ animal, males, onClose, onSaved }: { animal: Fa
             <Field label="Born dead" htmlFor="fbr-dead">
               <Input id="fbr-dead" type="number" min="0" step="1" value={dead} onChange={(e) => setDead(e.target.value)} />
             </Field>
-            <div className="col-span-2 space-y-2">
+            <div className="col-span-full sm:col-span-2 space-y-2">
               <p className="text-xs text-muted-foreground">The live young are added to the herd. Tag the ones to keep on the register (the rest are counted only).</p>
               {young.map((y, i) => (
                 <div key={i} className="flex items-end gap-2">
@@ -380,7 +380,7 @@ export function BreedingDialog({ animal, males, onClose, onSaved }: { animal: Fa
             </div>
           </>
         )}
-        <Field label="Notes" htmlFor="fbr-notes" className="col-span-2">
+        <Field label="Notes" htmlFor="fbr-notes" className="col-span-full sm:col-span-2">
           <Input id="fbr-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
       </form>
@@ -440,7 +440,7 @@ export function ExitDialog({ animal, onClose, onSaved }: { animal: FarmAnimal; o
         </>
       }
     >
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="How" htmlFor="fx-how">
           <select id="fx-how" value={how} onChange={(e) => setHow(e.target.value as "died" | "culled" | "harvested")} className={`${selectClass} w-full`}>
             <option value="died">Died</option>
@@ -451,12 +451,12 @@ export function ExitDialog({ animal, onClose, onSaved }: { animal: FarmAnimal; o
         <Field label="Date" htmlFor="fx-date">
           <Input id="fx-date" type="date" value={date} max={localDate()} onChange={(e) => setDate(e.target.value)} />
         </Field>
-        <Field label="Cause / note" htmlFor="fx-cause" className="col-span-2">
+        <Field label="Cause / note" htmlFor="fx-cause" className="col-span-full sm:col-span-2">
           <Input id="fx-cause" value={cause} onChange={(e) => setCause(e.target.value)} />
         </Field>
         {how === "harvested" && (
           <>
-            <Field label="Into stock as (optional)" htmlFor="fx-item" className="col-span-2">
+            <Field label="Into stock as (optional)" htmlFor="fx-item" className="col-span-full sm:col-span-2">
               <ProductPicker id="fx-item" value={item} onChange={setItem} placeholder="Live goat, mutton…" />
             </Field>
             {item && (
@@ -472,7 +472,7 @@ export function ExitDialog({ animal, onClose, onSaved }: { animal: FarmAnimal; o
           </>
         )}
         {blocked && (
-          <div role="alert" className="col-span-2 space-y-2 rounded-md border border-destructive/40 bg-destructive-soft p-3 text-sm">
+          <div role="alert" className="col-span-full sm:col-span-2 space-y-2 rounded-md border border-destructive/40 bg-destructive-soft p-3 text-sm">
             <p>{blocked}</p>
             {can("farm.manage") && (
               <div className="flex items-end gap-2">

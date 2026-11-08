@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/data/page-header";
 
 // A small dependency-free bar chart — this codebase has no charting
 // library yet, and the data here (at most a couple dozen points) doesn't
@@ -195,12 +196,16 @@ function CopilotPanel() {
 export default function AIAssistantPage() {
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Ask AI / Copilot</h1>
-      <p className="text-sm text-muted-foreground">
+      <PageHeader
+        title="Ask AI / Copilot"
+        description={
+          <>
         Both panels below go through a configurable LLM backend (a self-hosted Ollama server or the Anthropic API —
         see <code>LLM_PROVIDER</code>). If neither is configured yet, both will show a plain &quot;LLM isn&apos;t
         configured&quot; error rather than failing silently.
-      </p>
+          </>
+        }
+      />
       <AskAIPanel />
       <CopilotPanel />
     </div>

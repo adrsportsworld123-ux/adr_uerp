@@ -604,4 +604,15 @@ const Map<String, String> stringsFr = {
   'Dec': 'déc.',
   // Units (erp-core-go §3.79).
   '{0} is counted in whole {1}': '{0} se compte en nombres entiers ({1})',
+  'MRP {0}': 'Prix max. {0}',
+  'Discount on MRP': 'Remise sur le prix max.',
+  'You saved': 'Vous économisez',
+  'Mobile: {0}': 'Mobile : {0}',
+  'Back to items (Esc)': 'Retour aux articles (Échap)',
+  'Find a product (F3)': 'Trouver un produit (F3)',
+  'Customer added': 'Client ajouté',
+  'No customer': 'Aucun client',
+  'Add one for credit, loyalty points, or their name on the receipt': 'Ajoutez-en un pour le crédit, les points fidélité ou son nom sur le reçu',
+  'Add customer': 'Ajouter un client',
+  'Change': 'Changer',
 };

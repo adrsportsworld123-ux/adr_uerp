@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PlaceOfSupply, TaxRowsDl } from "@/components/tax/tax-breakup";
 import { PageHeader } from "@/components/data/page-header";
+import { MrpDiscountNote, MrpNote, SavingsRowsDl } from "@/components/sales/mrp";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
 import { currencySymbol } from "@/lib/currency";
@@ -458,6 +459,7 @@ export default function NewSalePage() {
                           Offer −{rupees(l.discount_amount)}
                         </div>
                       )}
+                      <MrpDiscountNote line={l} show={order?.show_mrp_discount} />
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex items-center justify-center gap-1">
@@ -473,7 +475,10 @@ export default function NewSalePage() {
                         </Button>
                       </div>
                     </td>
-                    <td className="tabular px-2 py-2 text-right">{rupees(l.unit_price)}</td>
+                    <td className="tabular px-2 py-2 text-right">
+                      {rupees(l.unit_price)}
+                      <MrpNote line={l} />
+                    </td>
                     <td className="tabular px-2 py-2 text-right">{rupees(l.tax_amount)}</td>
                     <td className="tabular px-4 py-2 text-right font-medium">{rupees(l.line_total)}</td>
                   </tr>
@@ -590,7 +595,7 @@ export default function NewSalePage() {
               </p>
             )}
             {needsDiscountApproval && (
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Input aria-label="Approver employee code" placeholder="Manager's code" value={approverCode} onChange={(e) => setApproverCode(e.target.value.toUpperCase())} />
                 <Input aria-label="Approver PIN" placeholder="PIN" type="password" inputMode="numeric" value={approverPin} onChange={(e) => setApproverPin(e.target.value.replace(/\D/g, ""))} />
               </div>
@@ -604,7 +609,7 @@ export default function NewSalePage() {
           </div>
 
           <div className="flex flex-col gap-3 rounded-xl border bg-card p-4">
-            <dl className="grid grid-cols-2 gap-y-1 text-sm">
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-1 text-sm">
               <dt className="text-muted-foreground">Subtotal</dt>
               <dd className="tabular text-right">{rupees(order?.subtotal ?? 0)}</dd>
               <dt className="text-muted-foreground">Discount</dt>
@@ -626,6 +631,7 @@ export default function NewSalePage() {
                   </dd>
                 </>
               )}
+              <SavingsRowsDl order={order} />
             </dl>
             {roundOffMax > 0 && total > 0 && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 p-2 text-sm">

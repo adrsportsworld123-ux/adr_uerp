@@ -377,7 +377,7 @@ function CloseDialog({ batch, onClose, onDone }: { batch: FarmBatch; onClose: ()
         </>
       }
     >
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Closed on" htmlFor="fx-date">
           <Input id="fx-date" type="date" value={date} min={batch.placed_on} max={localDate()} onChange={(e) => setDate(e.target.value)} />
         </Field>

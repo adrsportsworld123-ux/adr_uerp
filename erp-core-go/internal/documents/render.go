@@ -558,6 +558,9 @@ func drawThermal(pdf *fpdf.Fpdf, lh Letterhead, d Document) float64 {
 	}
 	if d.Party != nil {
 		kv(d.Party.Label, d.Party.Name)
+		for _, l := range d.Party.Lines { // GSTIN, mobile
+			kv("", l)
+		}
 	}
 	rule()
 

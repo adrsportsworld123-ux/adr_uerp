@@ -604,4 +604,15 @@ const Map<String, String> stringsTa = {
   'Dec': 'டிச',
   // Units (erp-core-go §3.79).
   '{0} is counted in whole {1}': '{0} முழு எண்ணிக்கையில் கணக்கிடப்படுகிறது ({1})',
+  'MRP {0}': 'MRP {0}',
+  'Discount on MRP': 'MRP-யில் தள்ளுபடி',
+  'You saved': 'நீங்கள் சேமித்தது',
+  'Mobile: {0}': 'மொபைல்: {0}',
+  'Back to items (Esc)': 'பொருட்களுக்குத் திரும்பு (Esc)',
+  'Find a product (F3)': 'பொருளைத் தேடு (F3)',
+  'Customer added': 'வாடிக்கையாளர் சேர்க்கப்பட்டார்',
+  'No customer': 'வாடிக்கையாளர் இல்லை',
+  'Add one for credit, loyalty points, or their name on the receipt': 'கடன், லாயல்டி புள்ளிகள் அல்லது ரசீதில் அவர்கள் பெயருக்காகச் சேர்க்கவும்',
+  'Add customer': 'வாடிக்கையாளரைச் சேர்',
+  'Change': 'மாற்று',
 };

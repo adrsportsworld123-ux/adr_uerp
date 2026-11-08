@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
+import { PageHeader } from "@/components/data/page-header";
 export default function NewBillPage() {
   return (
     <Suspense>
@@ -61,10 +62,11 @@ function NewBillForm() {
   }
 
   return (
-    <div className="max-w-lg">
+    <div className="flex max-w-2xl flex-col gap-6">
+      <PageHeader title="New purchase bill" description="A supplier's bill for a completed goods receipt (once per receipt)." />
       <Card>
         <CardHeader>
-          <CardTitle>New purchase bill</CardTitle>
+          <CardTitle>Bill</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -108,7 +110,7 @@ function NewBillForm() {
                     : "IGST when the supplier's GSTIN is from another state than the branch, else CGST + SGST."}
               </p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="tax">GST on this bill ({currencySymbol()})</Label>
                 <Input id="tax" type="number" min="0" step="0.01" value={taxTotal} onChange={(e) => setTaxTotal(e.target.value)} />

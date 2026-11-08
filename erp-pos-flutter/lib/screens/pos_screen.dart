@@ -52,8 +52,12 @@ class PosScreen extends StatefulWidget {
 class _PosScreenState extends State<PosScreen> {
   final _scanController = TextEditingController();
   final _scanFocus = FocusNode(debugLabel: 'scan');
+  final _searchFocus = FocusNode(debugLabel: 'product search');
   bool _busy = false;
   String? _selectedLineId;
+
+  /// The full product search is open in place of the grid; the cart stays.
+  bool _searchOpen = false;
 
   @override
   void initState() {
@@ -77,6 +81,7 @@ class _PosScreenState extends State<PosScreen> {
   void dispose() {
     _scanController.dispose();
     _scanFocus.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -100,6 +105,17 @@ class _PosScreenState extends State<PosScreen> {
 
   void _refocusScan() {
     if (mounted) _scanFocus.requestFocus();
+  }
+
+  void _openSearch() {
+    if (context.read<AppSession>().offlineMode) return; // the search is the server's
+    setState(() => _searchOpen = true);
+  }
+
+  void _closeSearch() {
+    if (!_searchOpen) return;
+    setState(() => _searchOpen = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refocusScan());
   }
 
   /// Dialogs and sheets are routes above this screen; hand them the
@@ -372,8 +388,7 @@ class _PosScreenState extends State<PosScreen> {
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const TillReportsScreen())));
         _refocusScan();
       case _MenuAction.productSearch:
-        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ProductSearchScreen()));
-        _refocusScan();
+        _openSearch();
       case _MenuAction.productLookup:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => _scoped(const ProductSearchScreen(lookupMode: true))));
         _refocusScan();
@@ -409,6 +424,7 @@ class _PosScreenState extends State<PosScreen> {
 
   Map<ShortcutActivator, VoidCallback> get _shortcuts => {
         const SingleActivator(LogicalKeyboardKey.f2): () {
+          _closeSearch();
           _scanController.selection = TextSelection(baseOffset: 0, extentOffset: _scanController.text.length);
           _scanFocus.requestFocus();
         },
@@ -429,6 +445,7 @@ class _PosScreenState extends State<PosScreen> {
           if (l != null) _removeLine(l);
         },
         const SingleActivator(LogicalKeyboardKey.escape): () => setState(() => _selectedLineId = null),
+        const SingleActivator(LogicalKeyboardKey.f3): _openSearch,
       };
 
   void _stepSelected(double delta) {
@@ -444,6 +461,8 @@ class _PosScreenState extends State<PosScreen> {
     final k = event.logicalKey;
     final editingKey = k == LogicalKeyboardKey.minus || k == LogicalKeyboardKey.equal || k == LogicalKeyboardKey.delete;
     if (editingKey && _scanFocus.hasFocus && _scanController.text.isNotEmpty) return KeyEventResult.skipRemainingHandlers;
+    // Typing in the product search: + − Delete are text there too.
+    if (editingKey && _searchFocus.hasFocus) return KeyEventResult.skipRemainingHandlers;
     return KeyEventResult.ignored;
   }
 
@@ -454,13 +473,31 @@ class _PosScreenState extends State<PosScreen> {
     final session = context.watch<AppSession>();
     final theme = Theme.of(context);
 
-    final productPane = _ProductPane(
-      scanController: _scanController,
-      scanFocus: _scanFocus,
-      busy: _busy,
-      onScanSubmitted: _onScanSubmitted,
-      onAdd: _addFromGrid,
-    );
+    // The full search takes the grid's place, never the cart's; the grid
+    // stays built underneath so its category and query are kept.
+    final productPane = Stack(fit: StackFit.expand, children: [
+      Offstage(
+        offstage: _searchOpen,
+        child: _ProductPane(
+          scanController: _scanController,
+          scanFocus: _scanFocus,
+          busy: _busy,
+          onScanSubmitted: _onScanSubmitted,
+          onAdd: _addFromGrid,
+          onOpenSearch: _openSearch,
+        ),
+      ),
+      if (_searchOpen)
+        Material(
+          key: const Key('embedded-product-search'),
+          color: theme.colorScheme.surface,
+          child: ProductSearchView(
+            focusNode: _searchFocus,
+            onClose: _closeSearch,
+            onBarcode: _onScanSubmitted,
+          ),
+        ),
+    ]);
     Widget cartPanel() => _CartPanel(
           busy: _busy,
           selectedLineId: _selectedLineId,

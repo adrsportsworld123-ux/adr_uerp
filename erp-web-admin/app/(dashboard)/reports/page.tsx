@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
+import { PageHeader } from "@/components/data/page-header";
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -35,7 +36,7 @@ function today() {
 export default function ReportsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Reports</h1>
+      <PageHeader title="Reports" description="Daily sales, stock and the consolidated views across branches." />
       <BranchDateReports />
       <ConsolidatedSalesSection />
       <ConsolidatedStockSection />

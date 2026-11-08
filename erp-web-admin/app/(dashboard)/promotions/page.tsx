@@ -31,7 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { currencySymbol } from "@/lib/currency";
 export default function PromotionsPage() {
   return (
-    <div className="flex max-w-6xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <PageHeader title="Promotions & Loyalty" description="Discounts the POS applies automatically, coupon codes, and how loyalty points are earned and redeemed." />
       {/* Jump bar: all three sections stay on the page (nothing hidden behind
           tabs), so this is navigation, not state. */}

@@ -604,4 +604,15 @@ const Map<String, String> stringsMl = {
   'Dec': 'ഡിസം',
   // Units (erp-core-go §3.79).
   '{0} is counted in whole {1}': '{0} പൂർണ്ണ സംഖ്യയിലാണ് എണ്ണുന്നത് ({1})',
+  'MRP {0}': 'MRP {0}',
+  'Discount on MRP': 'MRP-യിൽ കിഴിവ്',
+  'You saved': 'നിങ്ങൾ ലാഭിച്ചത്',
+  'Mobile: {0}': 'മൊബൈൽ: {0}',
+  'Back to items (Esc)': 'ഇനങ്ങളിലേക്ക് മടങ്ങുക (Esc)',
+  'Find a product (F3)': 'ഉൽപ്പന്നം തിരയുക (F3)',
+  'Customer added': 'ഉപഭോക്താവിനെ ചേർത്തു',
+  'No customer': 'ഉപഭോക്താവില്ല',
+  'Add one for credit, loyalty points, or their name on the receipt': 'ക്രെഡിറ്റ്, ലോയൽറ്റി പോയിന്റുകൾ, അല്ലെങ്കിൽ രസീതിൽ പേരിനായി ചേർക്കുക',
+  'Add customer': 'ഉപഭോക്താവിനെ ചേർക്കുക',
+  'Change': 'മാറ്റുക',
 };

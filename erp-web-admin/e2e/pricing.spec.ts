@@ -20,7 +20,7 @@ test("calculator, single-variant negative-margin override, and bulk update", asy
     await page.fill("#cost", "1200");
     await page.fill("#pct", "40");
     await page.click("text=Calculate");
-    await expect(page.getByText("₹2000")).toBeVisible();
+    await expect(page.getByText("₹2,000.00")).toBeVisible();
   });
 
   await test.step("editing a variant to sell below cost is blocked, then allowed with override", async () => {

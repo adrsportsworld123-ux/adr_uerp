@@ -43,13 +43,18 @@ type receiptResponse struct {
 	// ShowSKU: whether the branch prints SKUs under item names
 	// (migrations/062). Additive.
 	ShowSKU bool `json:"show_sku"`
+	// migrations/081: the MRP savings and whether the branch prints them;
+	// each line carries its mrp and mrp_discount. Additive.
+	mrpSavings
+	// CustomerPhone: the customer's mobile, printed on every receipt
+	// format. Additive (it was internal only before).
+	CustomerPhone *string `json:"customer_phone"`
 
 	// Not part of the public JSON contract (GetReceipt already predates
 	// notifications and other clients may depend on its exact shape) —
 	// only used internally by notify_receipt.go to know where to send a
 	// receipt notification.
 	CustomerEmail *string `json:"-"`
-	CustomerPhone *string `json:"-"`
 	// Also internal: the downloadable PDF (receipt_pdf.go) needs the
 	// branch for its letterhead and the sale's date in branch local time.
 	BranchID string `json:"-"`
@@ -135,6 +140,16 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 		RoundOff:      resp.RoundOff,
 		PayableTotal:  resp.PayableTotal,
 		HideSKU:       lh.HideSKU,
+
+		ShowMRPDiscount:  resp.ShowMRPDiscount,
+		MRPDiscountTotal: resp.MRPDiscountTotal,
+		TotalSavings:     resp.TotalSavings,
+	}
+	if resp.CustomerName != nil {
+		data.CustomerName = *resp.CustomerName
+	}
+	if resp.CustomerPhone != nil {
+		data.CustomerPhone = *resp.CustomerPhone
 	}
 	if b := resp.TaxBreakup; b != nil {
 		for _, t := range b.Rows {
@@ -155,9 +170,14 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 		if l.UnitSymbol != "" && l.UnitSymbol != "pcs" { // a weight or volume prints its unit (migrations/076)
 			qty += " " + l.UnitSymbol
 		}
-		data.Lines = append(data.Lines, printing.ReceiptLine{
+		line := printing.ReceiptLine{
 			ProductName: l.ProductName, SKU: l.SKU, Quantity: qty, UnitPrice: l.UnitPrice, LineTotal: l.LineTotal,
-		})
+			MRPDiscount: l.MRPDiscount,
+		}
+		if l.MRP != nil {
+			line.MRP = *l.MRP
+		}
+		data.Lines = append(data.Lines, line)
 	}
 	for _, p := range resp.Payments {
 		data.Payments = append(data.Payments, printing.ReceiptPayment{Method: p.Method, Amount: p.Amount})
@@ -213,6 +233,10 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 		return resp, err
 	}
 	resp.Lines = lines
+	resp.mrpSavings = savingsFor(lineMRPDiscounts(lines), resp.DiscountTotal)
+	if resp.ShowMRPDiscount, err = showMRPDiscount(ctx, tx, orderID); err != nil {
+		return resp, err
+	}
 	if resp.TaxBreakup, err = orderTaxBreakup(ctx, tx, orderID, lines); err != nil {
 		return resp, err
 	}

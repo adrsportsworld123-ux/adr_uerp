@@ -372,8 +372,8 @@ export function LeaveDialog({ forUser, onClose, onSaved }: { forUser?: For; onCl
       title={forUser?.name ? `Leave for ${forUser.name}` : "Ask for leave"}
       footer={<SubmitFooter form="leave-form" busy={busy} disabled={!typeId || !reason.trim() || to < from} label="Ask for leave" onClose={onClose} />}
     >
-      <form id="leave-form" onSubmit={save} className="grid grid-cols-2 gap-3">
-        <Field label="Leave type *" htmlFor="lv-type" className="col-span-2">
+      <form id="leave-form" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="Leave type *" htmlFor="lv-type" className="col-span-full sm:col-span-2">
           <select id="lv-type" value={typeId} onChange={(e) => setTypeId(e.target.value)} className={`${selectClass} w-full`}>
             <option value="">Choose…</option>
             {types.map((t) => (
@@ -399,11 +399,11 @@ export function LeaveDialog({ forUser, onClose, onSaved }: { forUser?: For; onCl
           <Input id="lv-to" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
         </Field>
         {canHalf && (
-          <label className="col-span-2 flex items-center gap-2 text-sm">
+          <label className="col-span-full sm:col-span-2 flex items-center gap-2 text-sm">
             <input type="checkbox" checked={half} onChange={(e) => setHalf(e.target.checked)} /> Half day
           </label>
         )}
-        <Field label="Reason *" htmlFor="lv-reason" className="col-span-2">
+        <Field label="Reason *" htmlFor="lv-reason" className="col-span-full sm:col-span-2">
           <Input id="lv-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
       </form>
@@ -439,7 +439,7 @@ export function PermissionDialog({ forUser, onClose, onSaved }: { forUser?: For;
       description="A few hours off in a working day: free up to the month's limit, unpaid beyond it."
       footer={<SubmitFooter form="perm-form" busy={busy} disabled={!from || !to || to <= from || !reason.trim()} label="Ask for permission" onClose={onClose} />}
     >
-      <form id="perm-form" onSubmit={save} className="grid grid-cols-3 gap-3">
+      <form id="perm-form" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Field label="Date *" htmlFor="pr-date">
           <Input id="pr-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
@@ -449,7 +449,7 @@ export function PermissionDialog({ forUser, onClose, onSaved }: { forUser?: For;
         <Field label="To *" htmlFor="pr-to">
           <Input id="pr-to" type="time" value={to} onChange={(e) => setTo(e.target.value)} />
         </Field>
-        <Field label="Reason *" htmlFor="pr-reason" className="col-span-3">
+        <Field label="Reason *" htmlFor="pr-reason" className="col-span-full sm:col-span-3">
           <Input id="pr-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
       </form>
@@ -522,8 +522,8 @@ export function RegularizeDialog({ forUser, onClose, onSaved }: { forUser?: For;
       width={560}
       footer={<SubmitFooter form="reg-form" busy={busy} disabled={!ready || !reason.trim()} label="Ask for the correction" onClose={onClose} />}
     >
-      <form id="reg-form" onSubmit={save} className="grid grid-cols-2 gap-3">
-        <Field label="Day *" htmlFor="rg-date" className="col-span-2">
+      <form id="reg-form" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="Day *" htmlFor="rg-date" className="col-span-full sm:col-span-2">
           <Input
             id="rg-date"
             type="date"
@@ -536,7 +536,7 @@ export function RegularizeDialog({ forUser, onClose, onSaved }: { forUser?: For;
             }}
           />
         </Field>
-        <fieldset className="col-span-2 space-y-1.5" aria-label="What to correct">
+        <fieldset className="col-span-full sm:col-span-2 space-y-1.5" aria-label="What to correct">
           <span className="text-xs font-medium text-muted-foreground">What to correct</span>
           {(day?.sessions ?? []).map((s) => (
             <label key={s.id} className="flex items-center gap-2 text-sm">
@@ -556,8 +556,8 @@ export function RegularizeDialog({ forUser, onClose, onSaved }: { forUser?: For;
         <Field label={sessionId ? "Correct check-out" : "Check-out *"} htmlFor="rg-out">
           <Input id="rg-out" type="time" value={outTime} onChange={(e) => setOutTime(e.target.value)} />
         </Field>
-        {sessionId && <p className="col-span-2 -mt-1 text-xs text-muted-foreground">Leave a time empty to keep it as it is.</p>}
-        <Field label="Reason *" htmlFor="rg-reason" className="col-span-2">
+        {sessionId && <p className="col-span-full sm:col-span-2 -mt-1 text-xs text-muted-foreground">Leave a time empty to keep it as it is.</p>}
+        <Field label="Reason *" htmlFor="rg-reason" className="col-span-full sm:col-span-2">
           <Input id="rg-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
       </form>

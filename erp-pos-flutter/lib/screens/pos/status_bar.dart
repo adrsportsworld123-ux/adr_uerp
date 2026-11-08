@@ -219,7 +219,7 @@ class _StatusBar extends StatelessWidget implements PreferredSizeWidget {
                   PopupMenuItem(
                     value: _MenuAction.productSearch,
                     enabled: !offline,
-                    child: ListTile(leading: const Icon(Icons.manage_search), title: Text(tr('Full product search'))),
+                    child: ListTile(leading: const Icon(Icons.manage_search), title: Text(tr('Full product search')), trailing: const _KeyHint('F3')),
                   ),
                   PopupMenuItem(
                     value: _MenuAction.productLookup,

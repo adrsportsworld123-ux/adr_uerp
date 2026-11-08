@@ -95,7 +95,7 @@ export function EditDialog({
         }
       >
         <form
-          className="grid grid-cols-2 gap-x-3 gap-y-4"
+          className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-4"
           onSubmit={(e) => {
             e.preventDefault();
             save();
@@ -123,7 +123,7 @@ export function EditDialog({
             </div>
           ))}
           {error && (
-            <p role="alert" className="col-span-2 text-sm text-destructive">
+            <p role="alert" className="col-span-full sm:col-span-2 text-sm text-destructive">
               {error}
             </p>
           )}

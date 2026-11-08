@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/data/page-header";
 
 export default function ExpiringBatchesPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -51,15 +52,19 @@ export default function ExpiringBatchesPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Expiring Batches</h1>
-      <p className="text-sm text-muted-foreground">
+      <PageHeader
+        title="Expiring Batches"
+        description={
+          <>
         Every batch-tracked variant&apos;s remaining stock, soonest-to-expire first. A sale already refuses to draw
         from an expired batch — this is the visibility to act before it gets there.
-      </p>
+          </>
+        }
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
-        <CardContent className="flex items-end gap-4 flex-wrap pt-6">
+        <CardContent className="flex items-end gap-4 flex-wrap">
           <div className="flex flex-col gap-2 w-48">
             <Label>Branch</Label>
             <Select value={branchId} onValueChange={(v) => setBranchId(v ?? "")} items={Object.fromEntries(branches.map((b) => [b.branch_id, b.name]))}>
@@ -82,7 +87,7 @@ export default function ExpiringBatchesPage() {
       </Card>
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>

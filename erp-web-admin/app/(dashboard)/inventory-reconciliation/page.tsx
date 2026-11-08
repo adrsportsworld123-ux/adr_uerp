@@ -27,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ProductPicker, VariantOption as PickerOption } from "@/components/data/product-picker";
 
 import { rupees } from "@/lib/format";
+import { PageHeader } from "@/components/data/page-header";
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -44,8 +45,8 @@ interface VariantOption {
 
 export default function InventoryReconciliationPage() {
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
-      <h1 className="text-2xl font-semibold">Inventory Reconciliation</h1>
+    <div className="flex flex-col gap-6 max-w-5xl">
+      <PageHeader title="Inventory Reconciliation" description="Count stock, compare it with the books and post the differences." />
       <NewCountSection />
       <HistorySection />
     </div>

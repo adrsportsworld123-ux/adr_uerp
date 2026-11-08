@@ -180,7 +180,7 @@ function ReadingDialog({ ponds, houseId, onClose, onSaved }: { ponds: FarmHouse[
         </>
       }
     >
-      <form id="water-reading" onSubmit={save} className="grid grid-cols-3 gap-3">
+      <form id="water-reading" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Field label="Pond" htmlFor="wr-pond">
           <select id="wr-pond" value={pond} onChange={(e) => setPond(e.target.value)} className={`${selectClass} w-full`}>
             {ponds.map((p) => (
@@ -201,7 +201,7 @@ function ReadingDialog({ ponds, houseId, onClose, onSaved }: { ponds: FarmHouse[
             <Input id={`wr-${k}`} type="number" min="0" step="any" value={values[k] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))} />
           </Field>
         ))}
-        <Field label="Notes" htmlFor="wr-notes" className="col-span-3">
+        <Field label="Notes" htmlFor="wr-notes" className="col-span-full sm:col-span-3">
           <Input id="wr-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Aerator on, water exchanged…" />
         </Field>
       </form>

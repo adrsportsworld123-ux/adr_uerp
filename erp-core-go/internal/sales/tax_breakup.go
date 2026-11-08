@@ -20,6 +20,10 @@ func loadLinesAndTax(ctx context.Context, tx pgx.Tx, resp *orderResponse) error 
 	if err := tx.QueryRow(ctx, `SELECT ship_to_state FROM sales_orders WHERE id::text = $1`, resp.OrderID).Scan(&resp.ShipToState); err != nil {
 		return err
 	}
+	resp.mrpSavings = savingsFor(lineMRPDiscounts(lines), resp.DiscountTotal)
+	if resp.ShowMRPDiscount, err = showMRPDiscount(ctx, tx, resp.OrderID); err != nil {
+		return err
+	}
 	resp.TaxBreakup, err = orderTaxBreakup(ctx, tx, resp.OrderID, lines)
 	return err
 }

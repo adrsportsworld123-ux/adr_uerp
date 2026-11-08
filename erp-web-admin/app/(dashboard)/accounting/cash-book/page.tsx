@@ -63,7 +63,7 @@ export default function CashBookPage() {
 
       {book && (
         <Panel>
-          <div className="grid grid-cols-3 gap-4 border-b pb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-b pb-4">
             <Stat label="Money in (debit)" value={rupees(book.total_debit)} testId="cash-total-debit" />
             <Stat label="Money out (credit)" value={rupees(book.total_credit)} testId="cash-total-credit" />
             <Stat label="Net movement" value={rupees(book.net_movement)} strong testId="cash-net" />

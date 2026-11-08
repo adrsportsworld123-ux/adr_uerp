@@ -104,7 +104,7 @@ export default function MarkupRulesPage() {
   }
 
   return (
-    <div className="flex max-w-6xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title="Markup Rules"
         description="A price from the cost: cost plus a percentage or an amount, never above MRP. Which price the till charges is each branch's Customer price in Sales Policy: as today the markup price acts as the selling price; Customer benefit or Shop benefit compare MRP, selling, markup and price-rule prices."

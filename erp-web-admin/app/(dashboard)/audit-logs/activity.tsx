@@ -73,7 +73,7 @@ export function ActivityLog() {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardContent className="flex flex-wrap items-end gap-4 pt-6">
+        <CardContent className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="act-client">App</Label>
             <Select id="act-client" value={client} onChange={reset(setClient)} options={[["", "All"], ["pos", "POS"], ["web", "Web admin"], ["api", "API"]]} />
@@ -104,7 +104,7 @@ export function ActivityLog() {
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
           {rows == null && !error ? (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…

@@ -390,8 +390,8 @@ function ItemDialog({ item, onClose, onSaved }: { item: FarmItem | null; onClose
         </>
       }
     >
-      <form id="farm-item" onSubmit={save} className="grid grid-cols-2 gap-3">
-        <Field label="Product *" htmlFor="fi-product" className="col-span-2">
+      <form id="farm-item" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="Product *" htmlFor="fi-product" className="col-span-full sm:col-span-2">
           {item ? <p className="text-sm font-medium">{item.product}</p> : <ProductPicker id="fi-product" mode="product" value={product} onChange={setProduct} placeholder="Search the product" />}
         </Field>
         <Field label="It is" htmlFor="fi-role">
@@ -404,7 +404,7 @@ function ItemDialog({ item, onClose, onSaved }: { item: FarmItem | null; onClose
         <Field label="Dose" htmlFor="fi-dose">
           <Input id="fi-dose" value={dose} onChange={(e) => setDose(e.target.value)} placeholder="1 ml / 10 kg" />
         </Field>
-        <fieldset className="col-span-2 flex flex-wrap gap-3 text-sm">
+        <fieldset className="col-span-full sm:col-span-2 flex flex-wrap gap-3 text-sm">
           <legend className="mb-1 text-xs text-muted-foreground">For (none = any)</legend>
           {ALL_SPECIES.map((s) => (
             <label key={s} className="flex items-center gap-1">
@@ -414,7 +414,7 @@ function ItemDialog({ item, onClose, onSaved }: { item: FarmItem | null; onClose
           ))}
         </fieldset>
         {role !== "feed" && (
-          <fieldset className="col-span-2 grid grid-cols-3 gap-3 rounded-md border p-3">
+          <fieldset className="col-span-full sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-md border p-3">
             <legend className="px-1 text-xs text-muted-foreground">Withdrawal days — no produce for this long after a dose</legend>
             <Field label="Milk" htmlFor="fi-milk">
               <Input id="fi-milk" type="number" min="0" step="1" value={milk} onChange={(e) => setMilk(e.target.value)} />

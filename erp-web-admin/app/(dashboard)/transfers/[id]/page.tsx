@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/data/page-header";
 
 export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -64,15 +65,15 @@ export default function TransferDetailPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">{transfer.transfer_number}</h1>
-          <p className="text-sm text-muted-foreground">
-            {branches[transfer.from_branch_id] ?? transfer.from_branch_id} → {branches[transfer.to_branch_id] ?? transfer.to_branch_id}
-          </p>
-        </div>
-        <Badge>{s}</Badge>
-      </div>
+      <PageHeader
+        title={
+          <>
+            {transfer.transfer_number}
+            <Badge>{s}</Badge>
+          </>
+        }
+        description={`${branches[transfer.from_branch_id] ?? transfer.from_branch_id} → ${branches[transfer.to_branch_id] ?? transfer.to_branch_id}`}
+      />
 
       {transfer.notes && <p className="text-sm text-muted-foreground">Notes: {transfer.notes}</p>}
       {transfer.rejection_reason && <p className="text-sm text-destructive">Rejected: {transfer.rejection_reason}</p>}
@@ -154,7 +155,7 @@ export default function TransferDetailPage() {
 
       {showReject && (
         <Card>
-          <CardContent className="pt-6 flex flex-col gap-3">
+          <CardContent className="flex flex-col gap-3">
             <Label htmlFor="reason">Rejection reason</Label>
             <Input id="reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
             <Button

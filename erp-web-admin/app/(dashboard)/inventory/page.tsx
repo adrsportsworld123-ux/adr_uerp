@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/data/page-header";
 
 /** Everything that tells this variant apart: its product, options, codes, unit and prices. */
 function VariantDetails({ detail, variantId }: { detail: ProductDetail | null; variantId: string }) {
@@ -166,7 +167,7 @@ export default function InventoryPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
-      <h1 className="text-2xl font-semibold">Inventory</h1>
+      <PageHeader title="Inventory" description="Look up a variant's stock in a branch and correct it with a recorded reason." />
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Stock lookup</CardTitle>

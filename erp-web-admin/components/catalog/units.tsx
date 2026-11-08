@@ -166,9 +166,9 @@ function PackDialog({
         </>
       }
     >
-      <form id="pack-form" onSubmit={save} className="grid grid-cols-2 gap-3">
+      <form id="pack-form" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {!barcode && (
-          <Field label="Barcode" htmlFor="pk-code" className="col-span-2">
+          <Field label="Barcode" htmlFor="pk-code" className="col-span-full sm:col-span-2">
             <Input id="pk-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Empty = generate one" />
           </Field>
         )}
@@ -192,7 +192,7 @@ function PackDialog({
           <Input id="pk-size" type="number" min="0" step="any" value={size} onChange={(e) => setSize(e.target.value)} />
         </Field>
         {effective && effective.kind !== "pack" && effective.factor && unit && Number(size) > 0 && (
-          <p className="col-span-2 text-xs text-muted-foreground">
+          <p className="col-span-full sm:col-span-2 text-xs text-muted-foreground">
             {size} {effective.symbol} = {withUnit((Number(size) * effective.factor) / (units.find((u) => u.unit_id === unit.unit_id)?.factor ?? 1), unit.symbol)} per scan.
           </p>
         )}

@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ProductPicker, VariantOption } from "@/components/data/product-picker";
+import { PageHeader } from "@/components/data/page-header";
 
 interface DraftLine {
   variant_id: string;
@@ -78,13 +79,14 @@ export default function NewTransferPage() {
   }
 
   return (
-    <div className="max-w-lg flex flex-col gap-6">
+    <div className="flex max-w-2xl flex-col gap-6">
+      <PageHeader title="New branch transfer" description="Ask to move stock from one branch to another." />
       <Card>
         <CardHeader>
-          <CardTitle>New branch transfer</CardTitle>
+          <CardTitle>Transfer</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
               <Label>From branch *</Label>
               <Select

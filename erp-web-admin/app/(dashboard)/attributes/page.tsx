@@ -25,6 +25,7 @@ import { SearchSelect, categoryOption } from "@/components/data/search-select";
 import { StatusChip } from "@/components/data/status-chip";
 import { EditDialog } from "@/components/data/edit-dialog";
 import { MasterRowActions } from "@/components/data/master-actions";
+import { PageHeader } from "@/components/data/page-header";
 
 const INPUT_TYPE_LABEL: Record<string, string> = { select: "Select (controlled list)", text: "Free text", number: "Number" };
 
@@ -124,13 +125,17 @@ export default function AttributesPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
-      <h1 className="text-2xl font-semibold">Product Attributes</h1>
-      <p className="text-sm text-muted-foreground">
+      <PageHeader
+        title="Product Attributes"
+        description={
+          <>
         Define an attribute once (e.g. &quot;Purity&quot;, a select with 18K/22K/24K), then assign it to whichever
         category needs it — required or optional, with an optional display unit. New Product renders the right
         fields automatically once a category with a declared set is picked. The same mechanism works for any
         vertical: jewelry&apos;s Purity/Weight, electronics&apos; RAM/Storage, sports&apos; Material, etc.
-      </p>
+          </>
+        }
+      />
 
       <Card>
         <CardHeader>

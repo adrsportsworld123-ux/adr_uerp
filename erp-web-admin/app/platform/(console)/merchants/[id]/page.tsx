@@ -143,7 +143,7 @@ export default function MerchantDetailPage() {
       <section className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-xl border bg-card p-5">
           <h2 className="text-sm font-semibold">Lifecycle</h2>
-          <dl className="mt-3 grid grid-cols-2 gap-y-1.5 text-sm">
+          <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 text-sm">
             <dt className="text-muted-foreground">Trial ends</dt>
             <dd>{d(m.trial_ends_at)}</dd>
             <dt className="text-muted-foreground">Period ends</dt>

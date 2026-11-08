@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PageHeader } from "@/components/data/page-header";
 
 export default function StatutoryConfigPage() {
   const [cfg, setCfg] = useState<StatutoryConfig | null>(null);
@@ -53,12 +54,16 @@ export default function StatutoryConfigPage() {
   if (!cfg) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
-      <h1 className="text-2xl font-semibold">Statutory Configuration</h1>
-      <p className="text-sm text-muted-foreground">
+    <div className="flex flex-col gap-6 max-w-2xl">
+      <PageHeader
+        title="Statutory Configuration"
+        description={
+          <>
         Editable defaults for this merchant. Verify against the current EPFO/ESIC/state PT notification before relying
         on these for a real filing — rates change over time and PT/LWF vary by state.
-      </p>
+          </>
+        }
+      />
 
       <Card>
         <CardHeader>

@@ -74,6 +74,7 @@ class _CartPanel extends StatelessWidget {
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (context, i) => _CartLine(
                       line: lines[i],
+                      showMrpDiscount: order?.savings.show ?? false,
                       selected: lines[i].lineId == selectedLineId,
                       editable: isCart && !busy,
                       quantityEditable: live && !busy,
@@ -193,6 +194,8 @@ class _EmptyCart extends StatelessWidget {
 
 class _CartLine extends StatelessWidget {
   final OrderLine line;
+  // The branch shows "Discount on MRP" (erp-core-go migrations/081).
+  final bool showMrpDiscount;
   final bool selected;
   final bool editable;
   final bool quantityEditable;
@@ -203,6 +206,7 @@ class _CartLine extends StatelessWidget {
 
   const _CartLine({
     required this.line,
+    this.showMrpDiscount = false,
     required this.selected,
     required this.editable,
     required this.quantityEditable,
@@ -239,10 +243,23 @@ class _CartLine extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                        line.openPrice
-                            ? tr('{0} · qty {1} · open price {2}', [line.sku, formatQty(line.quantity) + unitSuffix(line.unitSymbol), formatRupees(line.unitPrice)])
-                            : tr('{0} · qty {1}', [line.sku, formatQty(line.quantity) + unitSuffix(line.unitSymbol)]),
+                    child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(
+                              text: line.openPrice
+                                  ? tr('{0} · qty {1} · open price {2}', [line.sku, formatQty(line.quantity) + unitSuffix(line.unitSymbol), formatRupees(line.unitPrice)])
+                                  : tr('{0} · qty {1}', [line.sku, formatQty(line.quantity) + unitSuffix(line.unitSymbol)])),
+                          // The MRP beside the price, struck through when the item sells below it.
+                          if (line.mrp != null) ...[
+                            if (!line.openPrice) TextSpan(text: ' · ${tr('{0} each', [formatRupees(line.unitPrice)])}'),
+                            const TextSpan(text: ' · '),
+                            TextSpan(
+                              text: tr('MRP {0}', [formatRupees(line.mrp!)]).replaceAll(' ', ' '), // a no-break space (U+00A0): never split "MRP" from its amount
+                              style: line.belowMrp ? const TextStyle(decoration: TextDecoration.lineThrough) : null,
+                            ),
+                          ],
+                        ]),
+                        key: Key('cart-line-${line.lineId}-detail'),
                         style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                   ),
                   _Stepper(
@@ -258,6 +275,10 @@ class _CartLine extends StatelessWidget {
                   ),
                 ],
               ),
+              if (showMrpDiscount && line.belowMrp)
+                Text('${tr('Discount on MRP')} −${formatRupees(line.mrpDiscount)}',
+                    key: Key('cart-line-${line.lineId}-mrp-discount'),
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.pos.pay, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
@@ -332,6 +353,12 @@ class _Totals extends StatelessWidget {
         const SizedBox(height: 4),
         row(tr('Total'), formatRupees(order.grandTotal),
             style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
+        // What the customer saves against MRP (the branch's choice); never part of the total.
+        if (order.savings.visible) ...[
+          if (order.savings.hasMrpDiscount) row(tr('Discount on MRP'), formatRupees(order.savings.mrpDiscountTotal), valueColor: theme.pos.pay),
+          row(tr('You saved'), formatRupees(order.savings.totalSavings),
+              style: muted?.copyWith(fontWeight: FontWeight.w700, color: theme.pos.pay), valueColor: theme.pos.pay),
+        ],
         if (order.status != 'cart')
           Padding(
             padding: const EdgeInsets.only(top: 4),

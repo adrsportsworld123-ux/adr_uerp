@@ -37,6 +37,7 @@ import { PageHeader } from "@/components/data/page-header";
 import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-actions";
 import { StatusChip } from "@/components/data/status-chip";
 import { EInvoiceDocuments } from "@/components/sales/einvoice-documents";
+import { MrpDiscountNote, MrpNote, SavingsRowsDl } from "@/components/sales/mrp";
 import { PlaceOfSupply, TaxRowsDl, TaxSummaryTable, splitColumns } from "@/components/tax/tax-breakup";
 
 const DISCOUNT_LABEL: Record<string, string> = { manual: "Manual", coupon: "Coupon", promotion: "Promotion", loyalty: "Loyalty points" };
@@ -48,7 +49,7 @@ function newKey() {
 // A manager's employee code + PIN, the same pair the till's PIN pad asks for.
 function ApproverFields({ code, pin, onCode, onPin, idPrefix }: { code: string; pin: string; onCode: (v: string) => void; onPin: (v: string) => void; idPrefix: string }) {
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${idPrefix}-code`}>Manager&apos;s employee code</Label>
         <Input id={`${idPrefix}-code`} value={code} onChange={(e) => onCode(e.target.value.toUpperCase())} autoComplete="off" />
@@ -186,12 +187,16 @@ export default function SaleDetailPage() {
                           {Number(l.returned_quantity) > 0 && ` · ${qty(l.returned_quantity)} returned`}
                           {l.open_price && ` · open price${l.price_approved_by ? `, approved by ${l.price_approved_by}` : ""}`}
                         </div>
+                        <MrpDiscountNote line={l} show={sale.show_mrp_discount} />
                       </td>
                       <td className="tabular py-2 text-right">
                         {qty(l.quantity)}
                         {l.unit_symbol && l.unit_symbol !== "pcs" ? ` ${l.unit_symbol}` : ""}
                       </td>
-                      <td className="tabular py-2 text-right">{rupees(l.unit_price)}</td>
+                      <td className="tabular py-2 text-right">
+                        {rupees(l.unit_price)}
+                        <MrpNote line={l} />
+                      </td>
                       <td className="tabular py-2 text-right">{Number(l.discount_amount) ? rupees(l.discount_amount) : "—"}</td>
                       <td className="tabular py-2 text-right">{rupees(l.taxable_value)}</td>
                       {split === "intra" ? (
@@ -282,7 +287,7 @@ export default function SaleDetailPage() {
 
         <div className="flex flex-col gap-5">
           <Section title="Totals">
-            <dl className="grid grid-cols-2 gap-y-1.5 text-sm">
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 text-sm">
               <dt className="text-muted-foreground">Subtotal</dt>
               <dd className="tabular text-right">{rupees(sale.subtotal)}</dd>
               <dt className="text-muted-foreground">Discount</dt>
@@ -307,6 +312,7 @@ export default function SaleDetailPage() {
                   <dd className="tabular text-right text-lg font-semibold">{rupees(sale.grand_total)}</dd>
                 </>
               )}
+              <SavingsRowsDl order={sale} />
               {Number(sale.credit_amount) > 0 && (
                 <>
                   <dt className="text-muted-foreground">On credit · paid</dt>
@@ -559,7 +565,7 @@ function ReturnDialog({ sale, onClose, onDone }: { sale: SaleDetail; onClose: ()
           <Label htmlFor="ret-reason">Reason</Label>
           <Input id="ret-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Wrong size, defective …" />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ret-method">Refund by</Label>
             <select id="ret-method" value={method} onChange={(e) => setMethod(e.target.value)} className="h-9 rounded-lg border bg-card px-2 text-sm">
@@ -639,7 +645,7 @@ function CorrectDialog({ sale, payment, onClose, onDone }: { sale: SaleDetail; p
       }
     >
       <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="cor-to">Actually paid by</Label>
             <select id="cor-to" value={to} onChange={(e) => setTo(e.target.value)} className="h-9 rounded-lg border bg-card px-2 text-sm">

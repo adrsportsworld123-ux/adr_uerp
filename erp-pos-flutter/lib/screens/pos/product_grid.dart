@@ -16,12 +16,16 @@ class _ProductPane extends StatefulWidget {
   final ValueChanged<String> onScanSubmitted;
   final ValueChanged<GridProduct> onAdd;
 
+  /// Opens the full product search beside the cart (F3).
+  final VoidCallback? onOpenSearch;
+
   const _ProductPane({
     required this.scanController,
     required this.scanFocus,
     required this.busy,
     required this.onScanSubmitted,
     required this.onAdd,
+    this.onOpenSearch,
   });
 
   @override
@@ -116,12 +120,22 @@ class _ProductPaneState extends State<_ProductPane> {
               labelText: tr('Scan or enter barcode'),
               hintText: tr('or type a name / SKU to search'),
               prefixIcon: Icon(Icons.qr_code_scanner, color: theme.colorScheme.primary),
-              suffixIcon: widget.busy
-                  ? const Padding(
-                      padding: EdgeInsets.all(14),
-                      child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-                    )
-                  : const Padding(padding: EdgeInsets.all(14), child: _KeyHint('F2')),
+              suffixIcon: Row(mainAxisSize: MainAxisSize.min, children: [
+                if (widget.busy)
+                  const Padding(
+                    padding: EdgeInsets.all(14),
+                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                else
+                  const Padding(padding: EdgeInsets.all(14), child: _KeyHint('F2')),
+                if (widget.onOpenSearch != null && !session.offlineMode)
+                  IconButton(
+                    key: const Key('open-product-search'),
+                    tooltip: tr('Find a product (F3)'),
+                    icon: const Icon(Icons.manage_search),
+                    onPressed: widget.onOpenSearch,
+                  ),
+              ]),
             ),
             onSubmitted: widget.onScanSubmitted,
           ),
@@ -204,7 +218,7 @@ class _ProductPaneState extends State<_ProductPane> {
           crossAxisCount: columns,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
-          mainAxisExtent: 112,
+          mainAxisExtent: 128,
         ),
         itemCount: _items.length,
         itemBuilder: (context, i) => _ProductTile(item: _items[i], enabled: !widget.busy, onTap: () => widget.onAdd(_items[i])),
@@ -238,9 +252,15 @@ class _ProductTile extends StatelessWidget {
     // standard one, marks the tile — a tint, a coloured edge and (for an
     // open-price item) a label, so colour is never the only signal.
     final accent = tileAccent(item, pos);
+    final hasMrp = (double.tryParse(item.lookup.mrp) ?? 0) > 0;
     return Semantics(
       button: true,
-      label: tr('{0}{1}, {2}{3}. Add to cart.', [item.lookup.productName, item.openPrice ? tr(', open price') : '', formatRupees(item.lookup.sellingPrice), stockText != null ? ', $stockText' : '']),
+      label: tr('{0}{1}, {2}{3}. Add to cart.', [
+        item.lookup.productName,
+        item.openPrice ? tr(', open price') : '',
+        formatRupees(item.lookup.sellingPrice) + (hasMrp ? ' (${tr('MRP {0}', [formatRupees(item.lookup.mrp)])})' : ''),
+        stockText != null ? ', $stockText' : ''
+      ]),
       excludeSemantics: true,
       child: Opacity(
         opacity: out ? 0.55 : 1,
@@ -281,6 +301,8 @@ class _ProductTile extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(formatRupees(item.lookup.sellingPrice),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
                       ),
                       if (stockText != null)
@@ -291,6 +313,13 @@ class _ProductTile extends StatelessWidget {
                             )),
                     ],
                   ),
+                  // The MRP on a line of its own under the price, so a narrow tile never cuts it.
+                  if (hasMrp)
+                    Text(tr('MRP {0}', [formatRupees(item.lookup.mrp)]),
+                        key: Key('tile-mrp-${item.lookup.variantId}'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, fontFeatures: const [FontFeature.tabularFigures()])),
                 ],
               ),
             ),

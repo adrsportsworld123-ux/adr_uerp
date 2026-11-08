@@ -52,6 +52,7 @@ func (h *Handler) DownloadReceipt(w http.ResponseWriter, r *http.Request) {
 		OrderNumber: resp.OrderNumber, Status: resp.Status, Date: resp.DateText, Cashier: resp.CashierName,
 		Subtotal: resp.Subtotal, Discount: resp.DiscountTotal, Tax: resp.TaxTotal, Grand: resp.GrandTotal,
 		RoundOff: resp.RoundOff, Payable: resp.PayableTotal, Breakup: resp.TaxBreakup,
+		ShowMRPDiscount: resp.ShowMRPDiscount, MRPDiscountTotal: resp.MRPDiscountTotal, TotalSavings: resp.TotalSavings,
 	}
 	if resp.CustomerName != nil {
 		in.CustomerName = *resp.CustomerName
@@ -66,7 +67,11 @@ func (h *Handler) DownloadReceipt(w http.ResponseWriter, r *http.Request) {
 		in.Lines = append(in.Lines, documents.SaleLine{Name: l.ProductName, SKU: l.SKU, Quantity: l.Quantity, Unit: l.UnitSymbol,
 			UnitPrice: l.UnitPrice, Discount: l.DiscountAmount, Tax: l.TaxAmount, Total: l.LineTotal,
 			LineTax: documents.LineTax{HSN: l.HSNCode, Rate: l.TaxRate, Taxable: l.TaxableValue,
-				CGST: l.CGSTAmount, SGST: l.SGSTAmount, IGST: l.IGSTAmount}})
+				CGST: l.CGSTAmount, SGST: l.SGSTAmount, IGST: l.IGSTAmount},
+			MRPDiscount: l.MRPDiscount})
+		if l.MRP != nil {
+			in.Lines[len(in.Lines)-1].MRP = *l.MRP
+		}
 	}
 	for _, p := range resp.Payments {
 		in.Payments = append(in.Payments, [2]string{p.Method, p.Amount})

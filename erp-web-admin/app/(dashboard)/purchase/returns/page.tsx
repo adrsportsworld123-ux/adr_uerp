@@ -9,6 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { DownloadPdfButton } from "@/components/data/document-actions";
 
 import { rupees } from "@/lib/format";
+import { PageHeader } from "@/components/data/page-header";
+import { Panel } from "@/components/data/panel";
 export default function PurchaseReturnsPage() {
   const [returns, setReturns] = useState<PurchaseReturnSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,41 +24,46 @@ export default function PurchaseReturnsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Purchase Returns</h1>
-        <Link href="/purchase/returns/new" className={buttonVariants()}>
-          New return
-        </Link>
-      </div>
+      <PageHeader
+        title="Purchase Returns"
+        description="Goods sent back to suppliers, out of stock."
+        actions={
+          <Link href="/purchase/returns/new" className={buttonVariants()}>
+            New return
+          </Link>
+        }
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
       {returns && returns.length === 0 && <p className="text-sm text-muted-foreground">No purchase returns yet.</p>}
       {returns && returns.length > 0 && (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Return Number</TableHead>
-              <TableHead>Reason</TableHead>
-              <TableHead>Grand Total</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {returns.map((r) => (
-              <TableRow key={r.return_id}>
-                <TableCell className="font-medium">{r.return_number}</TableCell>
-                <TableCell>{r.reason}</TableCell>
-                <TableCell>{rupees(r.grand_total)}</TableCell>
-                <TableCell>{r.status}</TableCell>
-                <TableCell>{new Date(r.created_at).toLocaleString()}</TableCell>
-                <TableCell>
-                  <DownloadPdfButton path={`/api/v1/purchase/returns/${r.return_id}/pdf`} label={`Download ${r.return_number}`} size="icon-sm" />
-                </TableCell>
+        <Panel>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Return Number</TableHead>
+                <TableHead>Reason</TableHead>
+                <TableHead>Grand Total</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead></TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {returns.map((r) => (
+                <TableRow key={r.return_id}>
+                  <TableCell className="font-medium">{r.return_number}</TableCell>
+                  <TableCell>{r.reason}</TableCell>
+                  <TableCell>{rupees(r.grand_total)}</TableCell>
+                  <TableCell>{r.status}</TableCell>
+                  <TableCell>{new Date(r.created_at).toLocaleString()}</TableCell>
+                  <TableCell>
+                    <DownloadPdfButton path={`/api/v1/purchase/returns/${r.return_id}/pdf`} label={`Download ${r.return_number}`} size="icon-sm" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Panel>
       )}
     </div>
   );

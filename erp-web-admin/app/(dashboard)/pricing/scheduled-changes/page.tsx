@@ -74,7 +74,7 @@ export default function ScheduledChangesPage() {
   }
 
   return (
-    <div className="flex max-w-6xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title="Scheduled Price Changes"
         description="Set a price to change at a future date and time. It's applied automatically within a minute of that time, with the same below-cost check as an immediate edit; a change that would sell below cost on the day is marked failed with the reason, never skipped silently."

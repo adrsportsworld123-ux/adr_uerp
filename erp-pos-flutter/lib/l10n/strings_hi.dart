@@ -604,4 +604,15 @@ const Map<String, String> stringsHi = {
   'Dec': 'दिसं',
   // Units (erp-core-go §3.79).
   '{0} is counted in whole {1}': '{0} पूरी संख्या में गिना जाता है ({1})',
+  'MRP {0}': 'MRP {0}',
+  'Discount on MRP': 'MRP पर छूट',
+  'You saved': 'आपकी बचत',
+  'Mobile: {0}': 'मोबाइल: {0}',
+  'Back to items (Esc)': 'आइटम पर वापस (Esc)',
+  'Find a product (F3)': 'उत्पाद खोजें (F3)',
+  'Customer added': 'ग्राहक जोड़ा गया',
+  'No customer': 'कोई ग्राहक नहीं',
+  'Add one for credit, loyalty points, or their name on the receipt': 'उधार, लॉयल्टी पॉइंट या रसीद पर उनके नाम के लिए जोड़ें',
+  'Add customer': 'ग्राहक जोड़ें',
+  'Change': 'बदलें',
 };

@@ -144,6 +144,8 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                     child: Chip(label: Text(statusLabel(r.status))),
                   ),
                 if (r.customerName != null) Text(tr('Customer: {0}', [r.customerName]), style: Theme.of(context).textTheme.bodySmall),
+                if (r.customerPhone != null)
+                  Text(tr('Mobile: {0}', [r.customerPhone]), key: const Key('receipt-customer-mobile'), style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
           ),
@@ -158,6 +160,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                       '${line.productName}\n${r.showSku && line.sku.trim().toLowerCase() != line.productName.trim().toLowerCase() ? '${line.sku} · ' : ''}'
                           '${line.quantity} × ${formatRupees(line.unitPrice)}',
                       if (line.openPrice) line.priceApprovedBy == null ? tr(' · open price') : tr(' · open price, approved by {0}', [line.priceApprovedBy]),
+                      // The branch prints each item's MRP and its discount on it (migrations/081).
+                      if (r.savings.show && line.mrp != null) ' · ${tr('MRP {0}', [formatRupees(line.mrp!)])}',
+                      if (r.savings.show && line.belowMrp) '\n${tr('Discount on MRP')} −${formatRupees(line.mrpDiscount)}',
                     ].join()),
                   ),
                   Text(formatRupees(line.lineTotal)),
@@ -187,6 +192,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             _totalRow(tr('Net payable'), r.payableTotal, emphasize: true),
           ] else
             _totalRow(tr('Total'), r.grandTotal, emphasize: true),
+          if (r.savings.visible) ...[
+            if (r.savings.hasMrpDiscount) _totalRow(tr('Discount on MRP'), r.savings.mrpDiscountTotal, key: const Key('receipt-mrp-discount')),
+            _totalRow(tr('You saved'), r.savings.totalSavings, key: const Key('receipt-you-saved')),
+          ],
           const SizedBox(height: 16),
           for (final p in r.payments)
             _totalRow(p.method.toUpperCase(), p.amount),

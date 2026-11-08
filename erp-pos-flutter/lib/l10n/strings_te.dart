@@ -604,4 +604,15 @@ const Map<String, String> stringsTe = {
   'Dec': 'డిసెం',
   // Units (erp-core-go §3.79).
   '{0} is counted in whole {1}': '{0} పూర్తి సంఖ్యలలో లెక్కించబడుతుంది ({1})',
+  'MRP {0}': 'MRP {0}',
+  'Discount on MRP': 'MRPపై తగ్గింపు',
+  'You saved': 'మీరు ఆదా చేసింది',
+  'Mobile: {0}': 'మొబైల్: {0}',
+  'Back to items (Esc)': 'అంశాలకు తిరిగి (Esc)',
+  'Find a product (F3)': 'ఉత్పత్తిని వెతకండి (F3)',
+  'Customer added': 'కస్టమర్ జోడించబడ్డారు',
+  'No customer': 'కస్టమర్ లేరు',
+  'Add one for credit, loyalty points, or their name on the receipt': 'క్రెడిట్, లాయల్టీ పాయింట్లు లేదా రసీదుపై వారి పేరు కోసం జోడించండి',
+  'Add customer': 'కస్టమర్‌ను జోడించండి',
+  'Change': 'మార్చు',
 };

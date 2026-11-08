@@ -61,7 +61,7 @@ function useCatalog() {
 }
 
 export default function PriceSuggestionsPage() {
-  const { settings, reload } = useSuggestionSettings();
+  const { settings, setSettings, reload } = useSuggestionSettings();
   const { can } = usePermissions();
   const catalog = useCatalog();
   const [rules, setRules] = useState<SuggestionRule[]>([]);
@@ -80,6 +80,8 @@ export default function PriceSuggestionsPage() {
 
   async function save(body: { enabled?: boolean; cost_includes_tax?: boolean }) {
     setBusy(true);
+    // The box ticks at once; a failed save puts it back (reload).
+    if (settings) setSettings({ ...settings, ...body });
     try {
       await api.put("/api/v1/pricing/suggestion-settings", body);
       toast.success(body.enabled === undefined ? "Saved" : body.enabled ? "Price suggestions are on" : "Price suggestions are off");
@@ -87,6 +89,7 @@ export default function PriceSuggestionsPage() {
       loadRules();
     } catch (e) {
       toast.error(errorText(e, "Could not save"));
+      reload();
     } finally {
       setBusy(false);
     }
@@ -319,8 +322,8 @@ function RuleDialog({
         </>
       }
     >
-      <form id="suggestion-rule" onSubmit={save} className="grid grid-cols-2 gap-3">
-        <Field label="Name *" htmlFor="sr-name" className="col-span-2">
+      <form id="suggestion-rule" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="Name *" htmlFor="sr-name" className="col-span-full sm:col-span-2">
           <Input id="sr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Consumables & accessories" />
         </Field>
         <Field label="Category (and under it)" htmlFor="sr-category">

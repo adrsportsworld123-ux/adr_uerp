@@ -262,7 +262,7 @@ function PlanDialog({ plan, onClose, onSaved }: { plan: FarmFeedPlan | null; onC
       }
     >
       <form id="feed-plan" onSubmit={save} className="space-y-3">
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Field label="Species" htmlFor="fp-species">
             <select id="fp-species" value={species} disabled={!!plan} onChange={(e) => setSpecies(e.target.value as FarmSpecies)} className={`${selectClass} w-full`}>
               {Object.entries(SPECIES_LABEL).map(([k, v]) => (
@@ -520,7 +520,7 @@ function RecipeDialog({ recipe, onClose, onSaved }: { recipe: FarmRecipe | null;
       }
     >
       <form id="feed-recipe" onSubmit={save} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Name *" htmlFor="rc-name">
             <Input id="rc-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Layer mash" />
           </Field>
@@ -601,7 +601,7 @@ function MixDialog({ recipe, onClose, onSaved }: { recipe: FarmRecipe; onClose: 
         </>
       }
     >
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Field label="Farm" htmlFor="mx-branch">
           <FarmBranchSelect id="mx-branch" value={branchId} onChange={setBranchId} />
         </Field>

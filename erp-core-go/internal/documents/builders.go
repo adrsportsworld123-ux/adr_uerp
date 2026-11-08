@@ -16,6 +16,9 @@ type SaleLine struct {
 	Name, SKU, Quantity, UnitPrice, Discount, Tax, Total string
 	Unit                                                 string // the product's unit symbol (migrations/076); "" or "pcs" prints none
 	LineTax                                                     // GST split columns (used when Breakup splits)
+	// MRP per unit and the line's discount on it (migrations/081); printed
+	// only when SaleInput.ShowMRPDiscount. "" = none.
+	MRP, MRPDiscount string
 }
 
 type SaleInput struct {
@@ -27,6 +30,11 @@ type SaleInput struct {
 	Subtotal, Discount, Tax, Grand     string
 	RoundOff, Payable                  string      // checkout waiver (signed) and the total after it; "" / "0.00" = none
 	Payments                           [][2]string // method code, amount
+	// ShowMRPDiscount: the branch prints each item's MRP, "Discount on
+	// MRP" and "You saved" (branch_print_settings.show_mrp_discount,
+	// migrations/081). false = the receipt as before.
+	ShowMRPDiscount                bool
+	MRPDiscountTotal, TotalSavings string
 }
 
 // SaleReceipt: a finalized sale is a "TAX INVOICE" when the branch has a
@@ -55,7 +63,7 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 			p.Lines = append(p.Lines, "GSTIN: "+in.CustomerGSTIN)
 		}
 		if in.CustomerPhone != "" {
-			p.Lines = append(p.Lines, "Ph: "+in.CustomerPhone)
+			p.Lines = append(p.Lines, "Mobile: "+in.CustomerPhone)
 		}
 		d.Party = p
 	}
@@ -65,11 +73,20 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 		if isNonZero(l.Discount) {
 			detail += "  (−" + Amount(l.Discount) + ")"
 		}
-		cells := append([]string{itoa(i + 1), itemName(l.Name, skuFor(lh, l.SKU), l.HSN, in.Breakup)},
+		name, title := itemName(l.Name, skuFor(lh, l.SKU), l.HSN, in.Breakup), l.Name
+		if in.ShowMRPDiscount && l.MRP != "" {
+			mrp := "MRP " + Amount(l.MRP)
+			if isNonZero(l.MRPDiscount) {
+				mrp += " · save " + Amount(l.MRPDiscount)
+			}
+			name += "\n" + mrp
+			title += "\n" + mrp
+		}
+		cells := append([]string{itoa(i + 1), name},
 			itemCells(in.Breakup, true, qty, l.UnitPrice, l.Discount, l.Tax, l.Total, l.LineTax)...)
 		d.Rows = append(d.Rows, Row{
 			Cells:  cells,
-			Title:  l.Name,
+			Title:  title,
 			Detail: detail,
 			Amount: Amount(l.Total),
 		})
@@ -87,6 +104,13 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 			Total{Label: "Net payable", Value: INR(in.Payable), Bold: true})
 	} else {
 		d.Totals = append(d.Totals, Total{Label: "Total", Value: INR(in.Grand), Bold: true})
+	}
+	// What the customer saved: shown under the total, never part of it.
+	if in.ShowMRPDiscount && isNonZero(in.TotalSavings) {
+		if isNonZero(in.MRPDiscountTotal) {
+			d.Totals = append(d.Totals, Total{Label: "Discount on MRP", Value: INR(in.MRPDiscountTotal)})
+		}
+		d.Totals = append(d.Totals, Total{Label: "You saved", Value: INR(in.TotalSavings), Bold: true})
 	}
 	for _, p := range in.Payments {
 		d.Payments = append(d.Payments, [2]string{Label(p[0]), INR(p[1])})

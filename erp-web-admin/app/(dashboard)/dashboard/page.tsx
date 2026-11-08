@@ -242,10 +242,7 @@ export default function DashboardHome() {
 function Shortcuts() {
   return (
     <div className="flex max-w-3xl flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Your role doesn&apos;t include the sales dashboard. These shortcuts get you to the everyday screens.</p>
-      </div>
+      <PageHeader title="Dashboard" description="Your role doesn't include the sales dashboard. These shortcuts get you to the everyday screens." />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {SHORTCUTS.map((s) => (
           <Link key={s.href} href={s.href}>

@@ -117,7 +117,7 @@ export default function PriceRulesPage() {
   }
 
   return (
-    <div className="flex max-w-6xl flex-col gap-6">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title="Price Rules"
         description="Happy hours, weekend specials and seasonal prices. A rule sets the item's price at the till (up or down, never above MRP). A customer's wholesale price list always wins over a rule. Days and hours are each branch's local time. Quotations don't use rules."

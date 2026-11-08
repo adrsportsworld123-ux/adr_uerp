@@ -604,4 +604,15 @@ const Map<String, String> stringsKn = {
   'Dec': 'ಡಿಸೆಂ',
   // Units (erp-core-go §3.79).
   '{0} is counted in whole {1}': '{0} ಪೂರ್ಣ ಸಂಖ್ಯೆಗಳಲ್ಲಿ ಎಣಿಸಲಾಗುತ್ತದೆ ({1})',
+  'MRP {0}': 'MRP {0}',
+  'Discount on MRP': 'MRP ಮೇಲೆ ರಿಯಾಯಿತಿ',
+  'You saved': 'ನೀವು ಉಳಿಸಿದ್ದು',
+  'Mobile: {0}': 'ಮೊಬೈಲ್: {0}',
+  'Back to items (Esc)': 'ಐಟಂಗಳಿಗೆ ಹಿಂತಿರುಗಿ (Esc)',
+  'Find a product (F3)': 'ಉತ್ಪನ್ನ ಹುಡುಕಿ (F3)',
+  'Customer added': 'ಗ್ರಾಹಕರನ್ನು ಸೇರಿಸಲಾಗಿದೆ',
+  'No customer': 'ಗ್ರಾಹಕರಿಲ್ಲ',
+  'Add one for credit, loyalty points, or their name on the receipt': 'ಸಾಲ, ಲಾಯಲ್ಟಿ ಅಂಕಗಳು ಅಥವಾ ರಸೀದಿಯಲ್ಲಿ ಅವರ ಹೆಸರಿಗಾಗಿ ಸೇರಿಸಿ',
+  'Add customer': 'ಗ್ರಾಹಕರನ್ನು ಸೇರಿಸಿ',
+  'Change': 'ಬದಲಿಸಿ',
 };

@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Inbox, RotateCw, Search, SearchX } from "lucide-react";
 import { cn } from "cn";
 import { Button } from "@/components/ui/button";
@@ -56,11 +56,30 @@ export function DataTable<T>(props: DataTableProps<T>) {
   const { columns, rows, total, loading, error, state, update } = props;
   const [search, setSearch] = useState(state.q);
   const debounced = useDebounced(search, 300);
+  // The search last written to the URL, so the debounced write never
+  // repeats one already applied by applySearch.
+  const sent = useRef(state.q);
+  useEffect(() => {
+    sent.current = state.q; // the URL moved on (Back, Clear filters): follow it
+  }, [state.q]);
 
   useEffect(() => {
-    if (debounced !== state.q) update({ q: debounced });
+    if (debounced !== state.q && debounced !== sent.current) {
+      sent.current = debounced;
+      update({ q: debounced });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to the debounced text
   }, [debounced]);
+
+  // Pressing on a row (Edit, a row click) applies a search still waiting
+  // for its debounce first. Otherwise its URL update could land after the
+  // row's own navigation and cancel it (type, then click Edit at once).
+  function applySearch() {
+    if (search !== state.q && search !== sent.current) {
+      sent.current = search;
+      update({ q: search });
+    }
+  }
 
   const pages = Math.max(1, Math.ceil(total / state.limit));
   const from = total === 0 ? 0 : (state.page - 1) * state.limit + 1;
@@ -223,7 +242,9 @@ export function DataTable<T>(props: DataTableProps<T>) {
                 {props.rowActions && <th className="w-px" aria-label="Actions" />}
               </tr>
             </thead>
-            <tbody>{body}</tbody>
+            <tbody onPointerDownCapture={applySearch} onKeyDownCapture={applySearch}>
+              {body}
+            </tbody>
           </table>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t px-3 py-2.5 text-sm text-muted-foreground">

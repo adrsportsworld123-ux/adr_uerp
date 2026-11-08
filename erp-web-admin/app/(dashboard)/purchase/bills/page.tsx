@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { DownloadPdfButton } from "@/components/data/document-actions";
 
 import { rupees } from "@/lib/format";
+import { PageHeader } from "@/components/data/page-header";
+import { Panel } from "@/components/data/panel";
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
   unpaid: "outline",
   partially_paid: "secondary",
@@ -29,46 +31,51 @@ export default function BillsListPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Purchase Bills</h1>
-        <Link href="/purchase/bills/new" className={buttonVariants()}>
-          New bill
-        </Link>
-      </div>
+      <PageHeader
+        title="Purchase Bills"
+        description="Supplier bills made from completed goods receipts, and what is still to pay."
+        actions={
+          <Link href="/purchase/bills/new" className={buttonVariants()}>
+            New bill
+          </Link>
+        }
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
       {bills && bills.length === 0 && <p className="text-sm text-muted-foreground">No bills yet.</p>}
       {bills && bills.length > 0 && (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Bill Number</TableHead>
-              <TableHead>Date</TableHead>
-              <TableHead>Grand Total</TableHead>
-              <TableHead>Paid</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {bills.map((b) => (
-              <TableRow key={b.bill_id}>
-                <TableCell className="font-medium">{b.bill_number}</TableCell>
-                <TableCell>{b.bill_date}</TableCell>
-                <TableCell>{rupees(b.grand_total)}</TableCell>
-                <TableCell>{rupees(b.amount_paid)}</TableCell>
-                <TableCell>
-                  <Badge variant={STATUS_VARIANT[b.status] ?? "outline"}>{b.status}</Badge>
-                </TableCell>
-                <TableCell className="flex items-center gap-2">
-                  <Link href={`/purchase/bills/${b.bill_id}`} className="text-sm underline">
-                    View
-                  </Link>
-                  <DownloadPdfButton path={`/api/v1/purchase/bills/${b.bill_id}/pdf`} label={`Download ${b.bill_number}`} size="icon-sm" />
-                </TableCell>
+        <Panel>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Bill Number</TableHead>
+                <TableHead>Date</TableHead>
+                <TableHead>Grand Total</TableHead>
+                <TableHead>Paid</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead></TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {bills.map((b) => (
+                <TableRow key={b.bill_id}>
+                  <TableCell className="font-medium">{b.bill_number}</TableCell>
+                  <TableCell>{b.bill_date}</TableCell>
+                  <TableCell>{rupees(b.grand_total)}</TableCell>
+                  <TableCell>{rupees(b.amount_paid)}</TableCell>
+                  <TableCell>
+                    <Badge variant={STATUS_VARIANT[b.status] ?? "outline"}>{b.status}</Badge>
+                  </TableCell>
+                  <TableCell className="flex items-center gap-2">
+                    <Link href={`/purchase/bills/${b.bill_id}`} className="text-sm underline">
+                      View
+                    </Link>
+                    <DownloadPdfButton path={`/api/v1/purchase/bills/${b.bill_id}/pdf`} label={`Download ${b.bill_number}`} size="icon-sm" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Panel>
       )}
     </div>
   );

@@ -2886,6 +2886,22 @@ Migration 080. `internal/pricing/suggest.go`; `internal/catalog/barcode_original
 
 Verified: `price_flow.py` 52 (edited prices, the search and chosen variants too; the plan gate, Merchant Admin only, the playbook's prices, at MRP / hold / check, rule specificity, figures for a new product, GST basis, bulk preview and apply, the original barcode); Go `TestSuggestMatchesThePlaybook`, `TestSuggestRules`, `TestRoundUp`. Every API script on one fresh database: about 1,050 checks.
 
+### 3.84 MRP on the sales grid, discount on MRP, customer mobile on receipts (2026-11-01)
+
+Migration 081. `internal/sales` (`mrpDiscountSQL`, `savingsFor`, `showMRPDiscount`), `internal/documents/builders.go` (`SaleReceipt`), `internal/printing/receipt.go`.
+
+**No amount changes:** subtotal, discount, tax and total are worked out exactly as before. The MRP and the savings are information, shown beside them.
+
+- **MRP snapshot:** `sales_order_lines.mrp` is the item's MRP (with GST, per unit) when the line was written. A `BEFORE INSERT` trigger copies it from `product_variants` for every writer (till, web sale, `/sync/push`), so no insert changed. NULL on existing lines and for an item without an MRP; a later MRP change doesn't alter a sale.
+- **Lines** (order, receipt and sale-detail JSON, additive): `mrp` (null without one) and `mrp_discount` = (MRP − the price with GST) × quantity, before any discount, never below 0. A GST-exclusive price takes the line's own tax ratio (cess included).
+- **Order / receipt / detail** (additive): `mrp_discount_total`, `total_savings` (= `mrp_discount_total` + `discount_total`), `show_mrp_discount`. The receipt JSON also gains `customer_phone`.
+- **Branch switch:** `branch_print_settings.show_mrp_discount` (`GET/PUT /branches/{id}/print-settings`; omitted in a PUT keeps what is saved). Default false: receipts and screens are as before. On: each item prints "MRP 999.00 · save 200.00", and under the total "Discount on MRP" (when any) and "You saved", on the A4 and 80 mm PDFs, the ESC/POS slip, the POS cart and receipt, and the web New sale and sale pages.
+- **MRP in the sales grid:** always shown (small, struck through when the item sells below it) on the web New sale and sale pages and the POS cart line ("₹899 each · MRP ₹999").
+- **Customer mobile:** the A4 receipt's "Bill to" says "Mobile:"; the 80 mm PDF now prints the customer's lines (GSTIN, mobile) under "Bill to"; the ESC/POS slip prints "Customer:" and "Mobile:" under the cashier; the POS receipt screen shows it.
+- **Offline carts** have no MRP until synced (the local line has none); a synced line gets it from the trigger.
+
+Verified: `mrp_flow.py` 29 (inclusive, at MRP, GST-exclusive and no-MRP lines; the snapshot; the switch, kept by an older save; a manual discount in the savings; receipt JSON, sale detail, both PDFs, the ESC/POS text with the switch on and off; a synced line); Go `TestReceiptMRPDiscountAndMobile`, `TestSaleReceiptMRPDiscount`; Flutter `test/mrp_savings_test.dart`.
+
 ## 4. What Phase 0 concretely delivers against this design
 
 1. Run `migrations/001_schema.sql` against your local Postgres (already verified to execute cleanly, RLS included).

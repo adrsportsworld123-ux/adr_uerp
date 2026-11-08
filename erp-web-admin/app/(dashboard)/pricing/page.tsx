@@ -285,7 +285,7 @@ function PriceDialog({ row, suggestionsOn, onClose, onSaved }: { row: PriceRow; 
         reason,
         override,
       });
-      toast.success("Pricing updated");
+      toast.success("Price updated");
       onSaved();
     } catch (e) {
       if (e instanceof ApiError && e.code === "NEGATIVE_MARGIN") {
@@ -328,7 +328,7 @@ function PriceDialog({ row, suggestionsOn, onClose, onSaved }: { row: PriceRow; 
           />
           {variant.generated_barcode && <p className="text-xs text-muted-foreground">Our own code {variant.generated_barcode} stays as it is.</p>}
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="flex flex-col gap-2">
             <Label htmlFor="costPrice">Cost price ({currencySymbol()})</Label>
             <Input id="costPrice" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} />

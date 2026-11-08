@@ -24,6 +24,7 @@ import { PlaceOfSupply, TaxRowsDl } from "@/components/tax/tax-breakup";
 import { rupees } from "@/lib/format";
 
 import { currencySymbol } from "@/lib/currency";
+import { PageHeader } from "@/components/data/page-header";
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   draft: "outline",
   sent: "secondary",
@@ -153,20 +154,24 @@ export default function QuotationsPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
-      <h1 className="text-2xl font-semibold">B2B Quotations</h1>
-      <p className="text-sm text-muted-foreground">
+      <PageHeader
+        title="B2B Quotations"
+        description={
+          <>
         A quote is a pricing proposal for a customer — it never touches stock until it&apos;s accepted and converted,
         at which point it becomes a real order through the same cart pipeline any walk-in sale uses. Leave a
         line&apos;s price blank to auto-resolve the customer&apos;s wholesale price (if assigned one) or plain retail
         price.
-      </p>
+          </>
+        }
+      />
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">New quotation</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="flex flex-col gap-2">
               <Label>Branch</Label>
               <Select value={branchId} onValueChange={(v) => setBranchId(v ?? "")} items={Object.fromEntries(branches.map((b) => [b.branch_id, b.name]))}>
@@ -527,7 +532,7 @@ function DraftEditor({
 function QuoteTotals({ q }: { q: Quotation }) {
   return (
     <div className="ml-auto w-full max-w-xs space-y-1 text-sm">
-      <dl className="grid grid-cols-2 gap-y-1">
+      <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-1">
         <dt className="text-muted-foreground">Subtotal</dt>
         <dd className="tabular text-right">{rupees(q.subtotal)}</dd>
         <TaxRowsDl breakup={q.tax_breakup} taxTotal={q.tax_total} label="GST" />

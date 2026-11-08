@@ -254,6 +254,12 @@ class OrderLine {
   final String? unitSymbol;
   final int unitDecimals;
 
+  /// The item's MRP (with GST, per unit) when it went in the cart, and
+  /// MRP × qty less the price with GST (erp-core-go migrations/081).
+  /// null / '0.00' from an older server or a cart built offline.
+  final String? mrp;
+  final String mrpDiscount;
+
   OrderLine({
     required this.lineId,
     required this.variantId,
@@ -267,7 +273,11 @@ class OrderLine {
     this.openPrice = false,
     this.unitSymbol,
     this.unitDecimals = 3,
+    this.mrp,
+    this.mrpDiscount = '0.00',
   });
+
+  bool get belowMrp => (double.tryParse(mrpDiscount) ?? 0) > 0;
 
   factory OrderLine.fromJson(Map<String, dynamic> json) => OrderLine(
         lineId: json['line_id'] as String,
@@ -282,6 +292,8 @@ class OrderLine {
         openPrice: json['open_price'] as bool? ?? false,
         unitSymbol: (json['unit_symbol'] as String?)?.isEmpty == true ? null : json['unit_symbol'] as String?,
         unitDecimals: json['unit_decimals'] as int? ?? 3,
+        mrp: json['mrp'] as String?,
+        mrpDiscount: json['mrp_discount'] as String? ?? '0.00',
       );
 }
 
@@ -461,6 +473,10 @@ class OrderSummary {
   /// built offline.
   final TaxBreakup? taxBreakup;
 
+  /// What the customer saves against MRP (migrations/081) and whether the
+  /// branch shows it. Information only: no total includes it.
+  final MrpSavings savings;
+
   OrderSummary({
     required this.orderId,
     required this.orderNumber,
@@ -474,6 +490,7 @@ class OrderSummary {
     this.lines = const [],
     this.discountsCleared = false,
     this.taxBreakup,
+    this.savings = const MrpSavings(),
   }) : payableTotal = payableTotal ?? grandTotal;
 
   factory OrderSummary.fromJson(Map<String, dynamic> json) => OrderSummary(
@@ -491,7 +508,31 @@ class OrderSummary {
             .toList(),
         discountsCleared: json['discounts_cleared'] as bool? ?? false,
         taxBreakup: TaxBreakup.fromJson(json['tax_breakup'] as Map<String, dynamic>?),
+        savings: MrpSavings.fromJson(json),
       );
+}
+
+/// erp-core-go migrations/081: the order's discount on MRP, that plus its
+/// discounts (totalSavings), and whether the branch shows them
+/// (branch_print_settings.show_mrp_discount). An older server sends none:
+/// nothing shows.
+class MrpSavings {
+  final String mrpDiscountTotal;
+  final String totalSavings;
+  final bool show;
+
+  const MrpSavings({this.mrpDiscountTotal = '0.00', this.totalSavings = '0.00', this.show = false});
+
+  factory MrpSavings.fromJson(Map<String, dynamic> j) => MrpSavings(
+        mrpDiscountTotal: j['mrp_discount_total'] as String? ?? '0.00',
+        totalSavings: j['total_savings'] as String? ?? '0.00',
+        show: j['show_mrp_discount'] as bool? ?? false,
+      );
+
+  bool get hasMrpDiscount => (double.tryParse(mrpDiscountTotal) ?? 0) > 0;
+
+  /// The savings rows are worth showing: the branch shows them and there is something saved.
+  bool get visible => show && (double.tryParse(totalSavings) ?? 0) > 0;
 }
 
 /// A line Recall couldn't get stock back for — see internal/sales/hold.go's
@@ -642,6 +683,10 @@ class ReceiptLineData {
   final bool openPrice;
   final String? priceApprovedBy;
 
+  /// MRP per unit and the line's discount on it (migrations/081).
+  final String? mrp;
+  final String mrpDiscount;
+
   ReceiptLineData({
     required this.productName,
     required this.sku,
@@ -650,7 +695,11 @@ class ReceiptLineData {
     required this.lineTotal,
     this.openPrice = false,
     this.priceApprovedBy,
+    this.mrp,
+    this.mrpDiscount = '0.00',
   });
+
+  bool get belowMrp => (double.tryParse(mrpDiscount) ?? 0) > 0;
 
   factory ReceiptLineData.fromJson(Map<String, dynamic> json) => ReceiptLineData(
         productName: json['product_name'] as String,
@@ -660,6 +709,8 @@ class ReceiptLineData {
         lineTotal: json['line_total'] as String,
         openPrice: json['open_price'] as bool? ?? false,
         priceApprovedBy: json['price_approved_by'] as String?,
+        mrp: json['mrp'] as String?,
+        mrpDiscount: json['mrp_discount'] as String? ?? '0.00',
       );
 }
 
@@ -690,6 +741,9 @@ class ReceiptData {
   final String branchName;
   final String cashierName;
   final String? customerName;
+
+  /// The customer's mobile (an additive receipt field); null without one.
+  final String? customerPhone;
   final List<ReceiptLineData> lines;
   final String subtotal;
   final String discountTotal;
@@ -707,6 +761,9 @@ class ReceiptData {
   /// Whether the branch prints SKUs under item names (migrations/062).
   final bool showSku;
 
+  /// MRP savings and whether the branch prints them (migrations/081).
+  final MrpSavings savings;
+
   ReceiptData({
     required this.orderNumber,
     required this.status,
@@ -715,6 +772,7 @@ class ReceiptData {
     required this.branchName,
     required this.cashierName,
     required this.customerName,
+    this.customerPhone,
     required this.lines,
     required this.subtotal,
     required this.discountTotal,
@@ -725,6 +783,7 @@ class ReceiptData {
     required this.payments,
     this.taxBreakup,
     this.showSku = true,
+    this.savings = const MrpSavings(),
   }) : payableTotal = payableTotal ?? grandTotal;
 
   bool get hasRoundOff => (double.tryParse(roundOff) ?? 0) < 0;
@@ -737,6 +796,7 @@ class ReceiptData {
         branchName: json['branch_name'] as String,
         cashierName: json['cashier_name'] as String,
         customerName: json['customer_name'] as String?,
+        customerPhone: (json['customer_phone'] as String?)?.trim().isEmpty == true ? null : json['customer_phone'] as String?,
         lines: (json['lines'] as List<dynamic>? ?? const [])
             .map((e) => ReceiptLineData.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -751,6 +811,7 @@ class ReceiptData {
             .toList(),
         taxBreakup: TaxBreakup.fromJson(json['tax_breakup'] as Map<String, dynamic>?),
         showSku: json['show_sku'] as bool? ?? true,
+        savings: MrpSavings.fromJson(json),
       );
 }
 

@@ -11,6 +11,10 @@ type ReceiptLine struct {
 	Quantity    string
 	UnitPrice   string
 	LineTotal   string
+	// MRP per unit and the line's discount on it (migrations/081); printed
+	// only when ReceiptData.ShowMRPDiscount. "" = none.
+	MRP         string
+	MRPDiscount string
 }
 
 type ReceiptPayment struct {
@@ -55,9 +59,24 @@ type ReceiptData struct {
 	// prints none.
 	Header []string
 	Footer []string
+	// The customer, when the sale has one: name and mobile print under
+	// the cashier.
+	CustomerName  string
+	CustomerPhone string
+	// ShowMRPDiscount (branch_print_settings.show_mrp_discount,
+	// migrations/081): each item's MRP, then "Discount on MRP" and "You
+	// saved" under the total. false = the slip as before.
+	ShowMRPDiscount  bool
+	MRPDiscountTotal string
+	TotalSavings     string
 }
 
 const ruleLine = "--------------------------------"
+
+// nonZero: an amount string that is set and not zero ("", "0", "0.00" are).
+func nonZero(s string) bool {
+	return strings.Trim(strings.TrimSpace(s), "0.") != ""
+}
 
 // BuildReceipt renders a finalized sale as an ESC/POS print job for a
 // standard thermal receipt printer — the "printer integration" half of
@@ -78,6 +97,12 @@ func BuildReceipt(d ReceiptData) []byte {
 	if d.PlaceOfSupply != "" {
 		b.Line("Place of supply: " + d.PlaceOfSupply)
 	}
+	if d.CustomerName != "" {
+		b.Line("Customer: " + d.CustomerName)
+	}
+	if d.CustomerPhone != "" {
+		b.Line("Mobile: " + d.CustomerPhone)
+	}
 	b.AlignLeft().
 		Line(ruleLine)
 
@@ -88,6 +113,13 @@ func BuildReceipt(d ReceiptData) []byte {
 			b.Line(fmt.Sprintf("%s (%s)", l.ProductName, l.SKU))
 		}
 		b.Line(fmt.Sprintf("  %s x %s = %s", l.Quantity, l.UnitPrice, l.LineTotal))
+		if d.ShowMRPDiscount && l.MRP != "" {
+			if nonZero(l.MRPDiscount) {
+				b.Line(fmt.Sprintf("  MRP %s, save %s", l.MRP, l.MRPDiscount))
+			} else {
+				b.Line("  MRP " + l.MRP)
+			}
+		}
 	}
 
 	b.Line(ruleLine)
@@ -110,6 +142,12 @@ func BuildReceipt(d ReceiptData) []byte {
 		b.Bold(true).DoubleSize(true).Line("Net payable: " + d.PayableTotal).DoubleSize(false).Bold(false)
 	} else {
 		b.Bold(true).DoubleSize(true).Line("Total: " + d.GrandTotal).DoubleSize(false).Bold(false)
+	}
+	if d.ShowMRPDiscount && nonZero(d.TotalSavings) {
+		if nonZero(d.MRPDiscountTotal) {
+			b.Line("Discount on MRP: " + d.MRPDiscountTotal)
+		}
+		b.Bold(true).Line("You saved: " + d.TotalSavings).Bold(false)
 	}
 	b.Line(ruleLine)
 

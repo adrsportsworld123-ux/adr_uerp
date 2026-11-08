@@ -185,7 +185,7 @@ export default function SubscriptionPage() {
             <h2 className="text-lg font-semibold">{s.plan.name}</h2>
             <StatusChip status={s.status} tone={st.tone} label={st.label} />
           </div>
-          <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <dl className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
             {s.status === "trial" && (
               <>
                 <dt className="text-muted-foreground">Trial ends</dt>

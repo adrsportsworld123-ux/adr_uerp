@@ -315,7 +315,7 @@ function AllowanceDialog({
         </>
       }
     >
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Days *" htmlFor="al-days">
           <Input id="al-days" type="number" step="0.5" min="0" value={days} onChange={(e) => setDays(e.target.value)} />
         </Field>
@@ -432,7 +432,7 @@ function TypeDialog({ type, onClose, onSaved }: { type: LeaveType | null; onClos
         </>
       }
     >
-      <form id="lt-form" onSubmit={save} className="grid grid-cols-2 gap-3">
+      <form id="lt-form" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Code *" htmlFor="lt-code">
           <Input id="lt-code" value={code} maxLength={10} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="EL" />
         </Field>
@@ -448,7 +448,7 @@ function TypeDialog({ type, onClose, onSaved }: { type: LeaveType | null; onClos
         <Field label="Days a year" htmlFor="lt-quota">
           <Input id="lt-quota" type="number" step="0.5" min="0" value={quota} onChange={(e) => setQuota(e.target.value)} placeholder="No limit" />
         </Field>
-        <label className="col-span-2 flex items-center gap-2 text-sm">
+        <label className="col-span-full sm:col-span-2 flex items-center gap-2 text-sm">
           <input type="checkbox" checked={half} onChange={(e) => setHalf(e.target.checked)} /> Can be taken as a half day
         </label>
       </form>
@@ -495,7 +495,7 @@ function Rules() {
   }
   return (
     <Panel title="Rules" className="max-w-2xl">
-      <form onSubmit={save} className="grid grid-cols-2 gap-4">
+      <form onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label="Leave year starts in" htmlFor="ru-start">
           <select id="ru-start" value={s.leave_year_start_month} onChange={num("leave_year_start_month")} className={`${selectClass} w-full`}>
             {MONTHS.map((m, i) => (
@@ -520,10 +520,10 @@ function Rules() {
         <Field label="Corrections allowed for the last (days)" htmlFor="ru-window">
           <Input id="ru-window" type="number" min="1" max="366" value={s.regularize_within_days} onChange={num("regularize_within_days")} />
         </Field>
-        <p className="col-span-2 text-xs text-muted-foreground">
+        <p className="col-span-full sm:col-span-2 text-xs text-muted-foreground">
           Permission beyond the free count or minutes is unpaid, as a part of the employee&apos;s shift (or the working day above when they have no shift).
         </p>
-        <div className="col-span-2">
+        <div className="col-span-full sm:col-span-2">
           <Button type="submit" disabled={busy}>
             {busy && <Loader2 className="animate-spin" aria-hidden />} Save rules
           </Button>

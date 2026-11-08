@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/data/page-header";
 
 export default function PrescriptionsPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -71,12 +72,16 @@ export default function PrescriptionsPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Prescriptions</h1>
-      <p className="text-sm text-muted-foreground">
+      <PageHeader
+        title="Prescriptions"
+        description={
+          <>
         A scheduled-drug sale (anything with a &quot;Drug Schedule&quot; other than OTC) refuses at checkout unless a
         prescription like this is attached to the order — attaching one to a specific sale is done via the API
         directly (this app has no checkout screen), the same way an existing credit sale is created.
-      </p>
+          </>
+        }
+      />
 
       <Card>
         <CardHeader>
@@ -94,7 +99,7 @@ export default function PrescriptionsPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="flex flex-col gap-2">
               <Label htmlFor="doctorName">Doctor name</Label>
               <Input id="doctorName" value={doctorName} onChange={(e) => setDoctorName(e.target.value)} />

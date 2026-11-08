@@ -45,6 +45,10 @@ type detailLine struct {
 	OpenPrice        bool    `json:"open_price"`
 	PriceApprovedBy  *string `json:"price_approved_by"`
 	UnitSymbol       string  `json:"unit_symbol"` // the product's unit (migrations/076)
+	// migrations/081: MRP per unit when sold (null without one) and the
+	// line's discount on it, as on the cart's lines. Additive.
+	MRP         *string `json:"mrp"`
+	MRPDiscount string  `json:"mrp_discount"`
 }
 
 type taxBucket struct {
@@ -127,6 +131,7 @@ type orderDetail struct {
 	CreditAmount    string           `json:"credit_amount"`
 	CreditPaid      string           `json:"credit_paid"`
 	Lines           []detailLine     `json:"lines"`
+	mrpSavings                       // migrations/081, additive
 	TaxSummary      []taxBucket      `json:"tax_summary"`
 	TaxBreakup      *taxes.Breakup   `json:"tax_breakup"`
 	Payments        []detailPayment  `json:"payments"`
@@ -188,7 +193,8 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 			       l.line_total::text, l.price_includes_tax, l.open_price, au.name,
 			       COALESCE(l.tax_rate, 0), l.cess_amount, COALESCE(p.hsn_code, ''),
 			       gst_cgst(l.tax_amount, l.cess_amount, so.inter_state)::text, gst_sgst(l.tax_amount, l.cess_amount, so.inter_state)::text,
-			       gst_igst(l.tax_amount, l.cess_amount, so.inter_state)::text, l.cess_amount::text, COALESCE(un.symbol, '')
+			       gst_igst(l.tax_amount, l.cess_amount, so.inter_state)::text, l.cess_amount::text, COALESCE(un.symbol, ''),
+			       l.mrp::text, `+mrpDiscountOf("l")+`
 			FROM sales_order_lines l
 			JOIN sales_orders so ON so.id = l.sales_order_id
 			JOIN product_variants pv ON pv.id = l.variant_id
@@ -206,7 +212,8 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 			var taxable, tax, rate, cess float64
 			if err := rows.Scan(&l.LineID, &l.SKU, &l.ProductName, &l.Quantity, &l.ReturnedQuantity, &l.UnitPrice, &l.DiscountAmount,
 				&l.TaxableValue, &taxable, &l.TaxAmount, &tax, &l.LineTotal, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy,
-				&rate, &cess, &l.HSNCode, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount, &l.UnitSymbol); err != nil {
+				&rate, &cess, &l.HSNCode, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount, &l.UnitSymbol,
+				&l.MRP, &l.MRPDiscount); err != nil {
 				rows.Close()
 				return err
 			}
@@ -216,6 +223,14 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
+			return err
+		}
+		var mrpDiscounts []string
+		for _, l := range d.Lines {
+			mrpDiscounts = append(mrpDiscounts, l.MRPDiscount)
+		}
+		d.mrpSavings = savingsFor(mrpDiscounts, d.DiscountTotal)
+		if d.ShowMRPDiscount, err = showMRPDiscount(ctx, tx, orderID); err != nil {
 			return err
 		}
 		var pos string

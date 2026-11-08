@@ -64,7 +64,7 @@ export default function DayBookPage() {
       )}
       {book && book.entries.length > 0 && (
         <Panel>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Stat label="Entries" value={book.entries.length} />
             <Stat label="Total debit" value={rupees(book.total_debit)} testId="day-total-debit" />
             <Stat label="Total credit" value={rupees(book.total_credit)} testId="day-total-credit" />

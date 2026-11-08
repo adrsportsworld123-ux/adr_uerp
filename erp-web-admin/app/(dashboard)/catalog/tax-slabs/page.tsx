@@ -60,7 +60,7 @@ const config: MasterConfig<TaxSlab, TaxSlabForm> = {
   fromRow: (t) => ({ name: t.name, cgst_rate: t.cgst_rate, sgst_rate: t.sgst_rate, igst_rate: t.igst_rate, cess_rate: t.cess_rate }),
   editNote: "Rates can't be edited once a slab exists. To change a rate, create a new slab, move products to it, then deactivate this one.",
   createOnlyFields: (f, set) => (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       {RATE_FIELDS.map(([key, label]) => (
         <div key={key} className="flex flex-col gap-1.5">
           <label htmlFor={`slab-${key}`} className="text-sm font-medium">
@@ -80,7 +80,7 @@ const config: MasterConfig<TaxSlab, TaxSlabForm> = {
           />
         </div>
       ))}
-      <p className="col-span-2 text-xs text-muted-foreground">
+      <p className="col-span-full sm:col-span-2 text-xs text-muted-foreground">
         A slab is either intra-state (CGST + SGST, e.g. 6 + 6 for GST 12%) or inter-state (IGST only). Every rate entered is
         charged, so don&apos;t fill both.
       </p>

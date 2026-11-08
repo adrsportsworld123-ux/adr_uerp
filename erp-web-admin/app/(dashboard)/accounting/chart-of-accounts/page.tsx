@@ -172,12 +172,12 @@ export default function ChartOfAccountsPage() {
         }
       >
         <form id="account-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="flex flex-col gap-2">
               <Label htmlFor="code">Code *</Label>
               <Input id="code" required value={code} onChange={(e) => setCode(e.target.value)} placeholder="5010" />
             </div>
-            <div className="col-span-2 flex flex-col gap-2">
+            <div className="col-span-full sm:col-span-2 flex flex-col gap-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Rent Expense" />
             </div>

@@ -56,7 +56,7 @@ export function useSuggestionSettings() {
       });
   }, []);
   useEffect(reload, [reload]);
-  return { settings, locked, reload, enabled: !!settings?.enabled };
+  return { settings, setSettings, locked, reload, enabled: !!settings?.enabled };
 }
 
 export type SuggestInput = {

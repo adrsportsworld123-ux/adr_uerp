@@ -255,7 +255,7 @@ export function EventDialog({
         </>
       }
     >
-      <form id="farm-event" onSubmit={save} className="grid grid-cols-2 gap-3">
+      <form id="farm-event" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="What" htmlFor="fe-type">
           <select id="fe-type" value={type} onChange={(e) => setType(e.target.value as FarmEventType)} className={`${selectClass} w-full`}>
             {RECORDABLE.map((t) => (
@@ -269,7 +269,7 @@ export function EventDialog({
           <Input id="fe-date" type="date" value={date} min={batch.placed_on} max={localDate()} onChange={(e) => setDate(e.target.value)} />
         </Field>
         {forAnimal && (
-          <Field label={treatment || type === "weight" || type === "note" ? "Animal (empty = the whole batch)" : "Which animal"} htmlFor="fe-animal" className="col-span-2">
+          <Field label={treatment || type === "weight" || type === "note" ? "Animal (empty = the whole batch)" : "Which animal"} htmlFor="fe-animal" className="col-span-full sm:col-span-2">
             <select id="fe-animal" value={animalId} onChange={(e) => setAnimalId(e.target.value)} className={`${selectClass} w-full`}>
               <option value="">{type === "mortality" || type === "cull" || type === "production" ? "Not on the register" : "The whole batch"}</option>
               {animals.map((a) => (
@@ -339,7 +339,7 @@ export function EventDialog({
                       : `${EVENT_LABEL[type]} from stock *`
               }
               htmlFor="fe-item"
-              className="col-span-2"
+              className="col-span-full sm:col-span-2"
             >
               <ProductPicker id="fe-item" value={item} onChange={pickItem} placeholder="Search the item" />
             </Field>
@@ -381,7 +381,7 @@ export function EventDialog({
                 <Input id="fe-diagnosis" value={cause} onChange={(e) => setCause(e.target.value)} placeholder="Mastitis, coccidiosis…" />
               </Field>
             )}
-            <fieldset className="col-span-2 grid grid-cols-3 gap-3 rounded-md border p-3">
+            <fieldset className="col-span-full sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-md border p-3">
               <legend className="px-1 text-xs text-muted-foreground">Withdrawal — days before produce may be taken again</legend>
               <Field label="Milk" htmlFor="fe-w-milk">
                 <Input id="fe-w-milk" type="number" min="0" step="1" value={wMilk} onChange={(e) => setWMilk(e.target.value)} />
@@ -400,14 +400,14 @@ export function EventDialog({
             <Input id="fe-amount" type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
           </Field>
         )}
-        <Field label={type === "expense" ? "What it was for *" : type === "note" ? "Note *" : "Notes"} htmlFor="fe-notes" className="col-span-2">
+        <Field label={type === "expense" ? "What it was for *" : type === "note" ? "Note *" : "Notes"} htmlFor="fe-notes" className="col-span-full sm:col-span-2">
           <Input id="fe-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
         {type === "expense" && (
-          <p className="col-span-2 text-xs text-muted-foreground">Counts in the batch&apos;s cost only; pay it in Finance › Expenses.</p>
+          <p className="col-span-full sm:col-span-2 text-xs text-muted-foreground">Counts in the batch&apos;s cost only; pay it in Finance › Expenses.</p>
         )}
         {blocked && (
-          <div role="alert" className="col-span-2 space-y-2 rounded-md border border-destructive/40 bg-destructive-soft p-3 text-sm">
+          <div role="alert" className="col-span-full sm:col-span-2 space-y-2 rounded-md border border-destructive/40 bg-destructive-soft p-3 text-sm">
             <p>{blocked}</p>
             {can("farm.manage") ? (
               <div className="flex items-end gap-2">
@@ -523,7 +523,7 @@ export function BatchDialog({ onClose, onSaved }: { onClose: () => void; onSaved
       {branches.length === 0 ? (
         <p className="text-sm text-muted-foreground">No branch is set up as a farm yet. Give one a farm business type in Organization › Branches.</p>
       ) : (
-        <form id="farm-batch" onSubmit={save} className="grid grid-cols-2 gap-3">
+        <form id="farm-batch" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Farm" htmlFor="fb-branch">
             <select
               id="fb-branch"
@@ -620,7 +620,7 @@ export function BatchDialog({ onClose, onSaved }: { onClose: () => void; onSaved
               ))}
             </select>
           </Field>
-          <Field label="From stock (optional)" htmlFor="fb-stock" className="col-span-2">
+          <Field label="From stock (optional)" htmlFor="fb-stock" className="col-span-full sm:col-span-2">
             <ProductPicker id="fb-stock" value={fromStock} onChange={setFromStock} placeholder="Day-old chicks, kids, fingerlings… in this branch's stock" />
           </Field>
           <Field label="Source" htmlFor="fb-source">
@@ -680,7 +680,7 @@ export function HouseDialog({ house, onClose, onSaved }: { house: FarmHouse | nu
         </>
       }
     >
-      <form id="farm-house" onSubmit={save} className="grid grid-cols-2 gap-3">
+      <form id="farm-house" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {!house && (
           <Field label="Farm" htmlFor="fh-branch">
             <select id="fh-branch" value={branchId} onChange={(e) => setBranchId(e.target.value)} className={`${selectClass} w-full`}>
@@ -719,7 +719,7 @@ export function HouseDialog({ house, onClose, onSaved }: { house: FarmHouse | nu
         <Field label="Area (sq ft)" htmlFor="fh-area">
           <Input id="fh-area" type="number" min="0" step="any" value={area} onChange={(e) => setArea(e.target.value)} />
         </Field>
-        <Field label="Notes" htmlFor="fh-notes" className="col-span-2">
+        <Field label="Notes" htmlFor="fh-notes" className="col-span-full sm:col-span-2">
           <Input id="fh-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
       </form>

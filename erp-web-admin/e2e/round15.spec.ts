@@ -66,7 +66,7 @@ test("price suggestions: switched on, filled into the pricing dialog with the ba
     await dialog.locator("#mrpPrice").fill("599");
     await dialog.locator("#originalBarcode").fill(`OB${tag}`);
     await dialog.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByText("Pricing updated")).toBeVisible();
+    await expect(page.getByText("Price updated")).toBeVisible();
 
     const scan = await (await request.get(`${API}/products/barcode/OB${tag}`, { headers: auth })).json();
     expect(scan.variant_id).toBe(variant);
@@ -95,10 +95,10 @@ test("a dairy herd: an animal added, a calving, milk refused in a withdrawal, an
         })
       ).json()
     ) as { product_id: string; variants: { variant_id: string }[] };
-  await product("E2E Raw milk", "L", 0); // picked by name on the milk sheet
+  await product("E2E Raw milk", "L", 30); // picked by name on the milk sheet
   const med = await product("E2E Oxytet", "PCS", 50);
   const maize = await product("E2E Maize", "KG", 20);
-  const mash = await product("E2E Cattle mash", "KG", 0);
+  const mash = await product("E2E Cattle mash", "KG", 25);
   for (const [v, q] of [
     [med.variants[0].variant_id, 10],
     [maize.variants[0].variant_id, 500],
@@ -153,7 +153,7 @@ test("a dairy herd: an animal added, a calving, milk refused in a withdrawal, an
     await pick(page, "#mk-item", `E2E Raw milk ${tag}`);
     await page.getByLabel(`Litres from LAK-${tag}`).fill("9");
     await page.getByRole("button", { name: /Save 9 L/ }).click();
-    await expect(page.getByRole("alert")).toContainText("no milk until");
+    await expect(page.getByRole("alert").filter({ hasText: "was given" })).toContainText("no milk until");
     await page.fill("#mk-override", "Recorded, then discarded");
     await page.getByRole("button", { name: "Record anyway" }).click();
     await expect(page.getByText(/Morning milking: 9 L into stock/)).toBeVisible();

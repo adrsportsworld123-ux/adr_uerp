@@ -141,14 +141,14 @@ function UnitDialog({ unit, onClose, onSaved }: { unit: Unit | null; onClose: ()
         </>
       }
     >
-      <form id="unit-form" onSubmit={save} className="grid grid-cols-2 gap-3">
+      <form id="unit-form" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Code *" htmlFor="un-code">
           <Input id="un-code" value={code} maxLength={10} disabled={unit?.is_system} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="SACK" />
         </Field>
         <Field label="Symbol *" htmlFor="un-symbol">
           <Input id="un-symbol" value={symbol} maxLength={10} onChange={(e) => setSymbol(e.target.value)} placeholder="sack" />
         </Field>
-        <Field label="Name *" htmlFor="un-name" className="col-span-2">
+        <Field label="Name *" htmlFor="un-name" className="col-span-full sm:col-span-2">
           <Input id="un-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Sack" />
         </Field>
         <Field label="Kind" htmlFor="un-kind">
@@ -169,11 +169,11 @@ function UnitDialog({ unit, onClose, onSaved }: { unit: Unit | null; onClose: ()
           </select>
         </Field>
         {kind !== "pack" && (
-          <Field label={`1 of it is how many ${REFERENCE[kind]} *`} htmlFor="un-factor" className="col-span-2">
+          <Field label={`1 of it is how many ${REFERENCE[kind]} *`} htmlFor="un-factor" className="col-span-full sm:col-span-2">
             <Input id="un-factor" type="number" step="any" min="0" value={factor} disabled={!!unit} onChange={(e) => setFactor(e.target.value)} />
           </Field>
         )}
-        {kind === "pack" && <p className="col-span-2 text-xs text-muted-foreground">A pack has no fixed size: each barcode says how much is in it (a tray of 30, a bag of 25 kg).</p>}
+        {kind === "pack" && <p className="col-span-full sm:col-span-2 text-xs text-muted-foreground">A pack has no fixed size: each barcode says how much is in it (a tray of 30, a bag of 25 kg).</p>}
       </form>
     </Modal>
   );

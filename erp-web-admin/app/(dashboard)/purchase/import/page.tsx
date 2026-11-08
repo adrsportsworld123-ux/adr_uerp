@@ -428,7 +428,7 @@ function ImportInvoice() {
       {shown && s && (
         <>
           <Card>
-            <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-3 pt-6 text-sm">
+            <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
               <div>
                 <div className="text-muted-foreground">Lines</div>
                 <div className="font-medium">
@@ -561,7 +561,7 @@ function ImportInvoice() {
           )}
 
           <Card>
-            <CardContent className="pt-6">
+            <CardContent>
               <Table>
                 <TableHeader>
                   <TableRow>

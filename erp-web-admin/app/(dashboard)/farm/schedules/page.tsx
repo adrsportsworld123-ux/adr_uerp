@@ -133,7 +133,7 @@ function ScheduleDialog({ schedule, onClose, onSaved }: { schedule: FarmSchedule
       }
     >
       <form id="farm-schedule" onSubmit={save} className="space-y-3">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Species" htmlFor="fs-species">
             <select id="fs-species" value={species} disabled={!!schedule} onChange={(e) => setSpecies(e.target.value as FarmSpecies)} className={`${selectClass} w-full`}>
               {Object.entries(SPECIES_LABEL).map(([k, v]) => (

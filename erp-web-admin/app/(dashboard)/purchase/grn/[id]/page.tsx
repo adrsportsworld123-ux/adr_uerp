@@ -19,6 +19,7 @@ import { DeleteDocumentButton } from "@/components/purchase/delete-document-dial
 
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
+import { PageHeader } from "@/components/data/page-header";
 interface BarcodeLookup {
   product_id: string;
   product_name: string;
@@ -118,57 +119,61 @@ export default function GRNDetailPage() {
   const isDraft = grn.status === "draft";
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">{grn.grn_number}</h1>
-          <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col gap-6 max-w-4xl">
+      <PageHeader
+        title={
+          <>
+            {grn.grn_number}
             <Badge variant={isDraft ? "outline" : "default"}>{grn.status}</Badge>
-            {grn.purchase_order_id && (
-              <Link href={`/purchase/orders/${grn.purchase_order_id}`} className="text-sm text-muted-foreground underline-offset-2 hover:underline" data-testid="grn-po-link">
-                Against {grn.po_number}
-              </Link>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {grn.lines.length > 0 && (
-            <>
-              <DownloadPdfButton path={`/api/v1/purchase/grn/${grn.grn_id}/pdf`} label={isDraft ? "Draft PDF" : "Download PDF"} size="default" />
-              <PrintPdfButton path={`/api/v1/purchase/grn/${grn.grn_id}/pdf`} />
-            </>
-          )}
-          {isDraft && (
-            <DeleteDocumentButton
-              path={`/api/v1/purchase/grn/${grn.grn_id}`}
-              what="GRN"
-              number={grn.grn_number}
-              disabled={busy}
-              note={
-                grn.purchase_order_id
-                  ? `Nothing has been received yet, so stock is unchanged and ${grn.po_number}'s pending quantity is free again. You can restore it from the Recycle Bin.`
-                  : "Nothing has been received yet, so stock is unchanged. You can restore it from the Recycle Bin."
-              }
-              onDeleted={() => router.push(grn.purchase_order_id ? `/purchase/orders/${grn.purchase_order_id}` : "/purchase/grn")}
-            />
-          )}
-          {isDraft && grn.lines.length > 0 && (
-            <Button onClick={handleComplete} disabled={busy}>
-              Complete GRN
-            </Button>
-          )}
-          {grn.status === "completed" &&
-            (grn.bill_id ? (
-              <Link href={`/purchase/bills/${grn.bill_id}`} className={buttonVariants({ variant: "outline" })}>
-                Bill {grn.bill_number}
-              </Link>
-            ) : (
-              <Link href={`/purchase/bills/new?grn_id=${grn.grn_id}`} className={buttonVariants({ variant: "outline" })}>
-                Enter purchase bill
-              </Link>
-            ))}
-        </div>
-      </div>
+          </>
+        }
+        description={
+          grn.purchase_order_id ? (
+            <Link href={`/purchase/orders/${grn.purchase_order_id}`} className="underline-offset-2 hover:underline" data-testid="grn-po-link">
+              Against {grn.po_number}
+            </Link>
+          ) : undefined
+        }
+        actions={
+          <>
+              {grn.lines.length > 0 && (
+                <>
+                  <DownloadPdfButton path={`/api/v1/purchase/grn/${grn.grn_id}/pdf`} label={isDraft ? "Draft PDF" : "Download PDF"} size="default" />
+                  <PrintPdfButton path={`/api/v1/purchase/grn/${grn.grn_id}/pdf`} />
+                </>
+              )}
+              {isDraft && (
+                <DeleteDocumentButton
+                  path={`/api/v1/purchase/grn/${grn.grn_id}`}
+                  what="GRN"
+                  number={grn.grn_number}
+                  disabled={busy}
+                  note={
+                    grn.purchase_order_id
+                      ? `Nothing has been received yet, so stock is unchanged and ${grn.po_number}'s pending quantity is free again. You can restore it from the Recycle Bin.`
+                      : "Nothing has been received yet, so stock is unchanged. You can restore it from the Recycle Bin."
+                  }
+                  onDeleted={() => router.push(grn.purchase_order_id ? `/purchase/orders/${grn.purchase_order_id}` : "/purchase/grn")}
+                />
+              )}
+              {isDraft && grn.lines.length > 0 && (
+                <Button onClick={handleComplete} disabled={busy}>
+                  Complete GRN
+                </Button>
+              )}
+              {grn.status === "completed" &&
+                (grn.bill_id ? (
+                  <Link href={`/purchase/bills/${grn.bill_id}`} className={buttonVariants({ variant: "outline" })}>
+                    Bill {grn.bill_number}
+                  </Link>
+                ) : (
+                  <Link href={`/purchase/bills/new?grn_id=${grn.grn_id}`} className={buttonVariants({ variant: "outline" })}>
+                    Enter purchase bill
+                  </Link>
+                ))}
+          </>
+        }
+      />
 
       <Card>
         <CardHeader>
@@ -271,7 +276,7 @@ export default function GRNDetailPage() {
                   {resolved.product_name} <span className="text-muted-foreground">({resolved.sku})</span>
                   {resolved.pack_label && <span className="ms-2 rounded bg-muted px-1.5 py-0.5 text-xs">{resolved.pack_label}</span>}
                 </p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="quantity">Quantity{resolved.unit ? ` (${resolved.unit.symbol})` : ""} *</Label>
                     <Input id="quantity" type="number" min="0.001" step="0.001" required value={quantity} onChange={(e) => setQuantity(e.target.value)} />
@@ -283,7 +288,7 @@ export default function GRNDetailPage() {
                     <Input id="unitCost" type="number" min="0" step="0.01" required value={unitCost} onChange={(e) => setUnitCost(e.target.value)} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="batchNo">Batch/lot no. (only if this product tracks batches)</Label>
                     <Input id="batchNo" value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="e.g. LOT-2026-09-A" />

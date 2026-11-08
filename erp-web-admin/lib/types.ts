@@ -149,6 +149,8 @@ export interface PrintSettings {
   show_gstin: boolean;
   /** Print the SKU under each item on receipts and invoices (migrations/062). */
   show_sku?: boolean;
+  /** Show "Discount on MRP" and "You saved" on the sales screen and receipts (migrations/081). */
+  show_mrp_discount?: boolean;
   receipt_format: "a4" | "thermal";
   has_logo: boolean;
   logo_updated_at: string | null;
@@ -1902,6 +1904,9 @@ export interface SaleDetailLine {
   open_price: boolean;
   price_approved_by: string | null;
   unit_symbol?: string; // erp-core-go migrations/076
+  /** MRP per unit when sold (null without one) and the line's discount on it (migrations/081). */
+  mrp?: string | null;
+  mrp_discount?: string;
 }
 
 export interface SaleDetailPayment {
@@ -1955,6 +1960,10 @@ export interface SaleDetail {
   credit_amount: string;
   credit_paid: string;
   lines: SaleDetailLine[];
+  /** migrations/081: savings against MRP, and whether the branch shows them. */
+  mrp_discount_total?: string;
+  total_savings?: string;
+  show_mrp_discount?: boolean;
   tax_summary: { rate: string; taxable_value: string; tax_amount: string; cgst: string; sgst: string; igst?: string; cess?: string }[];
   tax_breakup?: TaxBreakup;
   payments: SaleDetailPayment[];
@@ -1995,8 +2004,12 @@ export interface CartOrder {
   round_off: string;
   payable_total: string;
   /** product_name is an open-price line's own description when it has one (description), else catalog_name (migrations/062). */
-  lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean; description?: string | null; catalog_name?: string; unit_symbol?: string; unit_decimals?: number }[];
+  lines: { line_id: string; variant_id: string; sku: string; product_name: string; quantity: string; unit_price: string; discount_amount: string; tax_amount: string; line_total: string; open_price?: boolean; description?: string | null; catalog_name?: string; unit_symbol?: string; unit_decimals?: number; mrp?: string | null; mrp_discount?: string }[];
   tax_breakup?: TaxBreakup;
+  /** migrations/081: savings against MRP, and whether the branch shows them. */
+  mrp_discount_total?: string;
+  total_savings?: string;
+  show_mrp_discount?: boolean;
   /** The delivery state set on the cart (migrations/061); null = the usual rule. */
   ship_to_state?: string | null;
 }

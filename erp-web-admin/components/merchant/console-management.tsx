@@ -91,7 +91,7 @@ export function ConsoleMerchantManagement({ merchantId }: { merchantId: string }
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             Account <StatusChip status={p.status} tone={STATUS_TONE[p.status as keyof typeof STATUS_TONE]} label={STATUS_LABEL[p.status] ?? p.status} />
           </h2>
-          <dl className="mt-3 grid grid-cols-2 gap-y-1.5 text-sm">
+          <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 text-sm">
             <dt className="text-muted-foreground">Active branches</dt>
             <dd className="tabular">{o.branches}</dd>
             <dt className="text-muted-foreground">Active users</dt>

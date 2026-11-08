@@ -131,6 +131,22 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     return null;
   }
 
+  /// Adds (or changes) the sale's customer from the payment step — for a
+  /// credit sale, loyalty, or a receipt with their name and mobile. The
+  /// same picker and attach call as the cart's customer button (F4).
+  Future<void> _pickCustomer(AppSession s) async {
+    final result = await showDialog<_CustomerPickResult>(
+      context: context,
+      builder: (_) => ChangeNotifierProvider<AppSession>.value(value: s, child: const _CustomerPickerDialog()),
+    );
+    if (result == null || !mounted) return;
+    await _run(
+        () => result.existing != null
+            ? s.attachCustomer(customerId: result.existing!.customerId, name: result.existing!.name)
+            : s.attachCustomer(name: result.walkInName, phone: result.walkInPhone, email: result.walkInEmail),
+        tr('Customer added'));
+  }
+
   Future<void> _run(Future<bool> Function() action, String okText) async {
     setState(() {
       _working = true;
@@ -224,6 +240,8 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 key: const Key('amount-due'),
                 style: theme.textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
           ]),
+          const SizedBox(height: 12),
+          _PaymentCustomer(enabled: live && !_working, onPick: () => _pickCustomer(session)),
           if (session.roundOffMax > 0 && _total(session) > 0) ...[
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -512,6 +530,56 @@ class _Banner extends StatelessWidget {
         Icon(icon, size: 18, color: color),
         const SizedBox(width: 8),
         Expanded(child: Text(text, style: TextStyle(color: color))),
+      ]),
+    );
+  }
+}
+
+/// The payment step's customer: who the sale is for, and a button to add
+/// one or change it. Live carts only, like the cart's customer button.
+class _PaymentCustomer extends StatelessWidget {
+  final bool enabled;
+  final VoidCallback onPick;
+
+  const _PaymentCustomer({required this.enabled, required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    final session = context.watch<AppSession>();
+    final theme = Theme.of(context);
+    final name = session.attachedCustomerName;
+    final offline = session.offlineMode || session.isCurrentOrderLocal;
+    return Container(
+      key: const Key('payment-customer'),
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      decoration: BoxDecoration(border: Border.all(color: theme.colorScheme.outline), borderRadius: BorderRadius.circular(12)),
+      child: Row(children: [
+        Icon(name == null ? Icons.person_outline : Icons.person, size: 20, color: name == null ? theme.colorScheme.onSurfaceVariant : theme.colorScheme.primary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(name ?? tr('No customer'), maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.titleSmall),
+            Text(
+              offline
+                  ? _offlineReason
+                  : name == null
+                      ? tr('Add one for credit, loyalty points, or their name on the receipt')
+                      : session.loyaltyAvailablePoints != null
+                          ? tr('{0} pts', [session.loyaltyAvailablePoints])
+                          : tr('Customer'),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ]),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton.icon(
+          key: const Key('payment-add-customer'),
+          onPressed: enabled ? onPick : null,
+          icon: Icon(name == null ? Icons.person_add_alt : Icons.swap_horiz, size: 18),
+          label: Text(name == null ? tr('Add customer') : tr('Change')),
+        ),
       ]),
     );
   }

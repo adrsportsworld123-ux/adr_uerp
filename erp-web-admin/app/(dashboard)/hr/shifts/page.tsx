@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StatusChip } from "@/components/data/status-chip";
 import { EditDialog, EditField } from "@/components/data/edit-dialog";
 import { MasterRowActions } from "@/components/data/master-actions";
+import { PageHeader } from "@/components/data/page-header";
 
 const EDIT_FIELDS: EditField[] = [
   { key: "name", label: "Name", required: true },
@@ -52,8 +53,8 @@ export default function ShiftsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
-      <h1 className="text-2xl font-semibold">Shifts</h1>
+    <div className="flex flex-col gap-6 max-w-4xl">
+      <PageHeader title="Shifts" description="Working hours that attendance and late marks are measured against." />
 
       <Card>
         <CardHeader>
@@ -88,7 +89,7 @@ export default function ShiftsPage() {
       </Card>
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>

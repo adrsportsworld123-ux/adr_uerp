@@ -36,6 +36,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect } from "@/components/data/search-select";
 import { BarcodePacks, UnitSelect, useUnits } from "@/components/catalog/units";
+import { PageHeader } from "@/components/data/page-header";
 
 const STATUS_BADGE: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   active: "default",
@@ -86,16 +87,20 @@ export default function ProductEditPage() {
   if (!product) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
+    <div className="flex flex-col gap-6 max-w-4xl">
       <div className="flex items-center justify-between">
         <div>
           <Link href="/products" className="text-sm text-muted-foreground hover:underline">
             ← Products
           </Link>
-          <h1 className="text-2xl font-semibold flex items-center gap-3">
-            {product.name}
-            <Badge variant={STATUS_BADGE[product.status] ?? "outline"}>{product.status}</Badge>
-          </h1>
+          <PageHeader
+            title={
+              <>
+                {product.name}
+                <Badge variant={STATUS_BADGE[product.status] ?? "outline"}>{product.status}</Badge>
+              </>
+            }
+          />
         </div>
       </div>
 

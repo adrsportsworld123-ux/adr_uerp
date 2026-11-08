@@ -185,6 +185,10 @@ device's cart view ever looks wrong.
 
 **Units (2026-10-29, erp-core-go §3.79).** A scan adds `ProductLookup.packQty` (a tray of 30; a scale barcode's weight), online or offline (local DB v8 keeps `pack_qty`, `unit_symbol`, `unit_decimals` per barcode). A cart line shows a non-piece unit (`unitSuffix`), and a quantity typed for a whole-number unit must be whole. Tests that touch the local database go in `offline_store_test.dart`: deleting the shared database file from another test file breaks tests running in parallel.
 
+**MRP and savings (2026-11-01, erp-core-go §3.84).** A cart line shows "₹899 each · MRP ₹999" (MRP struck through when below it). When the branch shows the discount on MRP (`OrderSummary.savings.show`), the line adds "Discount on MRP −₹100" and the totals add "Discount on MRP" and "You saved" (`MrpSavings.visible`); the receipt screen does the same and shows the customer's mobile. All from the server's additive fields; an offline cart has none. Tested in `test/mrp_savings_test.dart`.
+
+**MRP on tiles, search beside the cart, customer at payment (2026-11-01).** Grid tiles show "MRP ₹999" on a line under the price (tiles are 128 px tall). Full product search (menu, F3, or the search button in the scan field) is `ProductSearchView` shown in place of the grid, never over the cart; the grid stays built underneath (`Offstage`) so its query and category are kept; Esc / F2 / "Back to items" close it, and a barcode scanned into it adds the item. Each hit shows its MRP. `ProductSearchScreen` (lookup mode) is the same view as a page. The payment sheet's customer row (`_PaymentCustomer`) adds or changes the customer with the cart's picker. Tested in `test/pos_search_payment_test.dart`; the billing goldens were updated.
+
 **Not yet built:** on-device verification of offline sync, printing, and
 PIN-login against real Android/iOS hardware or a real network thermal
 printer — this environment has never had either. Everything above is

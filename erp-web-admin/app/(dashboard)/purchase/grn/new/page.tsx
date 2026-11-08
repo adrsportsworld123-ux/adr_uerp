@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { currencySymbol } from "@/lib/currency";
+import { PageHeader } from "@/components/data/page-header";
 export default function NewGRNPage() {
   const router = useRouter();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -43,10 +44,11 @@ export default function NewGRNPage() {
   }
 
   return (
-    <div className="max-w-lg">
+    <div className="flex max-w-2xl flex-col gap-6">
+      <PageHeader title="New Goods Receipt Note" description="Goods arriving from a supplier: start a draft, add the lines, then complete it." />
       <Card>
         <CardHeader>
-          <CardTitle>New Goods Receipt Note</CardTitle>
+          <CardTitle>Receipt</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -79,7 +81,7 @@ export default function NewGRNPage() {
                 </p>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="freight">Freight ({currencySymbol()})</Label>
                 <Input id="freight" type="number" min="0" step="0.01" value={freight} onChange={(e) => setFreight(e.target.value)} />

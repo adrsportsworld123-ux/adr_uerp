@@ -27,11 +27,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/data/page-header";
 
 export default function NotificationsPage() {
   return (
     <div className="flex flex-col gap-6 max-w-4xl">
-      <h1 className="text-2xl font-semibold">Notifications</h1>
+      <PageHeader title="Notifications" description="Messages sent to customers and staff, and when low stock warns you." />
       <NotificationLogSection />
       <ReorderPointSection />
     </div>
@@ -272,7 +273,7 @@ function ReorderPointSection() {
 
         {stock && (
           <div className="flex gap-4 items-end flex-wrap border-t pt-4">
-            <dl className="grid grid-cols-3 gap-x-6 text-sm">
+            <dl className="grid grid-cols-1 sm:grid-cols-3 gap-x-6 text-sm">
               <dt className="text-muted-foreground">On hand</dt>
               <dt className="text-muted-foreground">Reserved</dt>
               <dt className="text-muted-foreground">Available</dt>

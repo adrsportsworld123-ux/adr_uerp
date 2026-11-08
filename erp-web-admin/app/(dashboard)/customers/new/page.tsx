@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/data/page-header";
 
 export default function NewCustomerPage() {
   const router = useRouter();
@@ -47,8 +48,8 @@ export default function NewCustomerPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6 max-w-xl">
-      <h1 className="text-2xl font-semibold">New customer</h1>
+    <div className="flex flex-col gap-6 max-w-2xl">
+      <PageHeader title="New customer" description="A walk-in (B2C) or business (B2B) customer; a business needs its GSTIN." />
 
       <Card>
         <CardHeader>
@@ -73,7 +74,7 @@ export default function NewCustomerPage() {
               </Select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="name">Name *</Label>
                 <Input id="name" required value={name} onChange={(e) => setName(e.target.value)} />

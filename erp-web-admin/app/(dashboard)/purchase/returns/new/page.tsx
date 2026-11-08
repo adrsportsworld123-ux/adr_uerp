@@ -14,6 +14,7 @@ import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
+import { PageHeader } from "@/components/data/page-header";
 interface DraftLine {
   variant_id: string;
   product_name: string;
@@ -90,10 +91,11 @@ export default function NewPurchaseReturnPage() {
   }
 
   return (
-    <div className="max-w-lg flex flex-col gap-6">
+    <div className="flex max-w-2xl flex-col gap-6">
+      <PageHeader title="New purchase return" description="Goods going back to a supplier; they leave this branch's stock." />
       <Card>
         <CardHeader>
-          <CardTitle>New purchase return</CardTitle>
+          <CardTitle>Return</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
@@ -179,7 +181,7 @@ export default function NewPurchaseReturnPage() {
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="quantity">Quantity *</Label>
                 <Input id="quantity" type="number" min="0.001" step="0.001" required value={quantity} onChange={(e) => setQuantity(e.target.value)} />

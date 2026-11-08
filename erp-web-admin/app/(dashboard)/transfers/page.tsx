@@ -7,6 +7,8 @@ import { TransferSummary, Branch } from "@/lib/types";
 import { buttonVariants } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/data/page-header";
+import { Panel } from "@/components/data/panel";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   pending_approval: "outline",
@@ -34,45 +36,50 @@ export default function TransfersPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Branch Transfers</h1>
-        <Link href="/transfers/new" className={buttonVariants()}>
-          New transfer
-        </Link>
-      </div>
+      <PageHeader
+        title="Branch Transfers"
+        description="Stock moved between branches: requested, approved, dispatched and received."
+        actions={
+          <Link href="/transfers/new" className={buttonVariants()}>
+            New transfer
+          </Link>
+        }
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
       {transfers && transfers.length === 0 && <p className="text-sm text-muted-foreground">No transfers yet.</p>}
       {transfers && transfers.length > 0 && (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Transfer</TableHead>
-              <TableHead>From</TableHead>
-              <TableHead>To</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Created</TableHead>
-              <TableHead></TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {transfers.map((t) => (
-              <TableRow key={t.transfer_id}>
-                <TableCell className="font-medium">{t.transfer_number}</TableCell>
-                <TableCell>{branches[t.from_branch_id] ?? t.from_branch_id}</TableCell>
-                <TableCell>{branches[t.to_branch_id] ?? t.to_branch_id}</TableCell>
-                <TableCell>
-                  <Badge variant={STATUS_VARIANT[t.status] ?? "outline"}>{t.status}</Badge>
-                </TableCell>
-                <TableCell>{new Date(t.created_at).toLocaleString()}</TableCell>
-                <TableCell>
-                  <Link href={`/transfers/${t.transfer_id}`} className="text-sm underline">
-                    View
-                  </Link>
-                </TableCell>
+        <Panel>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Transfer</TableHead>
+                <TableHead>From</TableHead>
+                <TableHead>To</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead></TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {transfers.map((t) => (
+                <TableRow key={t.transfer_id}>
+                  <TableCell className="font-medium">{t.transfer_number}</TableCell>
+                  <TableCell>{branches[t.from_branch_id] ?? t.from_branch_id}</TableCell>
+                  <TableCell>{branches[t.to_branch_id] ?? t.to_branch_id}</TableCell>
+                  <TableCell>
+                    <Badge variant={STATUS_VARIANT[t.status] ?? "outline"}>{t.status}</Badge>
+                  </TableCell>
+                  <TableCell>{new Date(t.created_at).toLocaleString()}</TableCell>
+                  <TableCell>
+                    <Link href={`/transfers/${t.transfer_id}`} className="text-sm underline">
+                      View
+                    </Link>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Panel>
       )}
     </div>
   );

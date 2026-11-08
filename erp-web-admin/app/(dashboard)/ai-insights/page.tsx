@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { rupees } from "@/lib/format";
+import { PageHeader } from "@/components/data/page-header";
 export default function AIInsightsPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState("");
@@ -88,11 +89,15 @@ export default function AIInsightsPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
-      <h1 className="text-2xl font-semibold">AI Insights</h1>
-      <p className="text-sm text-muted-foreground">
+      <PageHeader
+        title="AI Insights"
+        description={
+          <>
         Both sections below compute real numbers from this merchant&apos;s own sales history — no trained model,
         just SQL over what&apos;s already been sold.
-      </p>
+          </>
+        }
+      />
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>

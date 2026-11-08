@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { currencySymbol } from "@/lib/currency";
+import { PageHeader } from "@/components/data/page-header";
 export default function NewSupplierPage() {
   const router = useRouter();
   const [form, setForm] = useState({
@@ -48,10 +49,11 @@ export default function NewSupplierPage() {
   }
 
   return (
-    <div className="max-w-lg">
+    <div className="flex max-w-2xl flex-col gap-6">
+      <PageHeader title="New supplier" description="A supplier you buy from, with its GSTIN and contact." />
       <Card>
         <CardHeader>
-          <CardTitle>New supplier</CardTitle>
+          <CardTitle>Supplier</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -67,7 +69,7 @@ export default function NewSupplierPage() {
               <Label htmlFor="gstin">GSTIN</Label>
               <Input id="gstin" value={form.gstin} onChange={(e) => set("gstin", e.target.value)} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="contact_name">Contact name</Label>
                 <Input id="contact_name" value={form.contact_name} onChange={(e) => set("contact_name", e.target.value)} />
@@ -81,7 +83,7 @@ export default function NewSupplierPage() {
               <Label htmlFor="email">Email</Label>
               <Input id="email" type="email" value={form.email} onChange={(e) => set("email", e.target.value)} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="payment_terms">Payment terms</Label>
                 <Input id="payment_terms" placeholder="Net 30" value={form.payment_terms} onChange={(e) => set("payment_terms", e.target.value)} />

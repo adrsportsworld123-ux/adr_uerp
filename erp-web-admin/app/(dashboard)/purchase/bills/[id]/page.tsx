@@ -18,6 +18,7 @@ import Link from "next/link";
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
 import { PartnerSelect, usePartners } from "@/components/partners/use-partners";
+import { PageHeader } from "@/components/data/page-header";
 
 const METHOD_LABELS: Record<string, string> = {
   cash: "Cash",
@@ -105,20 +106,24 @@ export default function BillDetailPage() {
   const balance = Number(bill.grand_total) - Number(bill.amount_paid);
 
   return (
-    <div className="flex flex-col gap-6 max-w-lg">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">{bill.bill_number}</h1>
-          <Badge variant={bill.status === "paid" ? "default" : "outline"}>{bill.status}</Badge>
-        </div>
-        <div className="flex items-center gap-2">
-          <DownloadPdfButton path={`/api/v1/purchase/bills/${bill.bill_id}/pdf`} size="default" />
-          <PrintPdfButton path={`/api/v1/purchase/bills/${bill.bill_id}/pdf`} />
-        </div>
-      </div>
+    <div className="flex flex-col gap-6 max-w-4xl">
+      <PageHeader
+        title={
+          <>
+            {bill.bill_number}
+            <Badge variant={bill.status === "paid" ? "default" : "outline"}>{bill.status}</Badge>
+          </>
+        }
+        actions={
+          <>
+            <DownloadPdfButton path={`/api/v1/purchase/bills/${bill.bill_id}/pdf`} size="default" />
+            <PrintPdfButton path={`/api/v1/purchase/bills/${bill.bill_id}/pdf`} />
+          </>
+        }
+      />
 
       <Card>
-        <CardContent className="flex flex-col gap-2 text-sm pt-6">
+        <CardContent className="flex flex-col gap-2 text-sm">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Subtotal (landed cost)</span>
             <span>
@@ -153,7 +158,7 @@ export default function BillDetailPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handlePayment} className="flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="amount">Amount ({currencySymbol()}) *</Label>
                   <Input id="amount" type="number" min="0.01" step="0.01" required value={amount} onChange={(e) => setAmount(e.target.value)} />
@@ -195,7 +200,7 @@ export default function BillDetailPage() {
                 </div>
               )}
               {throughBank && method === "cheque" && bankAccount && (
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="pay-cheque-no">Cheque number</Label>
                     <Input
@@ -210,7 +215,7 @@ export default function BillDetailPage() {
                     <Label htmlFor="pay-cheque-date">Cheque date</Label>
                     <Input id="pay-cheque-date" type="date" value={chequeDate} onChange={(e) => setChequeDate(e.target.value)} />
                   </div>
-                  <label className="col-span-2 flex items-center gap-2 text-sm">
+                  <label className="col-span-full sm:col-span-2 flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={accountPayee} onChange={(e) => setAccountPayee(e.target.checked)} /> Cross &quot;A/c Payee&quot;
                     <Link href="/cheques" className="ms-auto text-xs text-muted-foreground hover:underline">
                       Cheque register

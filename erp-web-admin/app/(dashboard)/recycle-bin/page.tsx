@@ -75,7 +75,7 @@ export default function RecycleBinPage() {
         description="Deleted records are kept, hidden from every screen. Restore one to bring it back exactly as it was. Lines removed from carts and quotations are kept for the record but restore only with their document."
       />
       <Card>
-        <CardContent className="flex items-end gap-4 pt-6">
+        <CardContent className="flex items-end gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="bin-entity">Show</Label>
             <select id="bin-entity" className="h-9 rounded-md border bg-background px-2 text-sm" value={entity} onChange={(e) => setEntity(e.target.value)}>
@@ -91,7 +91,7 @@ export default function RecycleBinPage() {
       </Card>
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
           {items == null && !error ? (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…

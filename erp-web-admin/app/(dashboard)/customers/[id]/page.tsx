@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
 import { BankAccountSelect, defaultAccount, useBankAccounts } from "@/components/banking/bank-account-select";
+import { PageHeader } from "@/components/data/page-header";
 const SEGMENT_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   vip: "default",
   regular: "secondary",
@@ -83,10 +84,14 @@ export default function CustomerDetailPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">{customer.name}</h1>
-        <Badge variant={SEGMENT_VARIANT[customer.segment] ?? "outline"}>{customer.segment}</Badge>
-      </div>
+      <PageHeader
+        title={
+          <>
+            {customer.name}
+            <Badge variant={SEGMENT_VARIANT[customer.segment] ?? "outline"}>{customer.segment}</Badge>
+          </>
+        }
+      />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
@@ -100,7 +105,7 @@ export default function CustomerDetailPage() {
         <CardContent className="flex flex-col gap-4">
           {editing ? (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-2">
                   <Label>Name</Label>
                   <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -140,7 +145,7 @@ export default function CustomerDetailPage() {
               </div>
             </>
           ) : (
-            <dl className="grid grid-cols-2 gap-3 text-sm">
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <dt className="text-muted-foreground">Type</dt>
               <dd className="uppercase">{customer.customer_type}</dd>
               <dt className="text-muted-foreground">Phone</dt>
@@ -349,7 +354,7 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
       <CardContent className="flex flex-col gap-4">
         {editing ? (
           <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="creditLimit">Credit limit ({currencySymbol()})</Label>
                 <Input id="creditLimit" type="number" min="0" step="0.01" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} />
@@ -388,7 +393,7 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
             </div>
           </div>
         ) : (
-          <dl className="grid grid-cols-2 gap-3 text-sm">
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
             <dt className="text-muted-foreground">Credit limit</dt>
             <dd>{rupees(credit.credit_limit)}</dd>
             <dt className="text-muted-foreground">Payment terms</dt>
@@ -398,7 +403,7 @@ function CreditSection({ customerId, credit, onChanged }: { customerId: string; 
           </dl>
         )}
 
-        <div className="grid grid-cols-5 gap-2 text-xs border-t pt-3">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs border-t pt-3">
           <div className="flex flex-col gap-1">
             <span className="text-muted-foreground">Current</span>
             <span>{rupees(credit.aging.current)}</span>

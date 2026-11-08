@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -83,6 +85,51 @@ type orderResponse struct {
 	// cart's discounts (clearDiscountLayers); the till asks the cashier
 	// to apply them again.
 	DiscountsCleared bool `json:"discounts_cleared,omitempty"`
+	mrpSavings
+}
+
+// mrpSavings (migrations/081): what the customer saved against MRP —
+// MRPDiscountTotal, the lines' MRP less their price, and TotalSavings,
+// that plus discount_total. ShowMRPDiscount: the branch shows the two on
+// its sales screen and receipts (branch_print_settings.show_mrp_discount).
+// Information only: no total includes them. Additive.
+type mrpSavings struct {
+	MRPDiscountTotal string `json:"mrp_discount_total"`
+	TotalSavings     string `json:"total_savings"`
+	ShowMRPDiscount  bool   `json:"show_mrp_discount"`
+}
+
+// savingsFor sums the lines' MRP discounts and adds discountTotal. The
+// branch's setting is read by the caller.
+func savingsFor(mrpDiscounts []string, discountTotal string) mrpSavings {
+	var mrp float64
+	for _, v := range mrpDiscounts {
+		f, _ := strconv.ParseFloat(v, 64)
+		mrp += f
+	}
+	d, _ := strconv.ParseFloat(discountTotal, 64)
+	return mrpSavings{
+		MRPDiscountTotal: strconv.FormatFloat(math.Round(mrp*100)/100, 'f', 2, 64),
+		TotalSavings:     strconv.FormatFloat(math.Round((mrp+d)*100)/100, 'f', 2, 64),
+	}
+}
+
+func lineMRPDiscounts(lines []orderLine) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l.MRPDiscount
+	}
+	return out
+}
+
+// showMRPDiscount: branch_print_settings.show_mrp_discount of the order's
+// branch; false when the branch has no print settings.
+func showMRPDiscount(ctx context.Context, tx pgx.Tx, orderID string) (bool, error) {
+	var show bool
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE((SELECT ps.show_mrp_discount FROM branch_print_settings ps WHERE ps.branch_id = so.branch_id), false)
+		FROM sales_orders so WHERE so.id::text = $1`, orderID).Scan(&show)
+	return show, err
 }
 
 type orderLine struct {
@@ -122,6 +169,12 @@ type orderLine struct {
 	SGSTAmount   string `json:"sgst_amount"`
 	IGSTAmount   string `json:"igst_amount"`
 	CessAmount   string `json:"cess_amount"`
+	// migrations/081: the item's MRP (with GST, per unit) when it went in
+	// the cart; null without one. MRPDiscount is MRP × quantity less the
+	// price × quantity with GST, before any discount ("0.00" when the
+	// price is the MRP or there is none). Information only. Additive.
+	MRP         *string `json:"mrp"`
+	MRPDiscount string  `json:"mrp_discount"`
 }
 
 // ---------------------------------------------------------------------
@@ -1019,6 +1072,17 @@ func recalcOrderTotals(ctx context.Context, tx pgx.Tx, orderID string, resp *ord
 	return loadLinesAndTax(ctx, tx, resp)
 }
 
+// mrpDiscountSQL: a line's MRP × quantity less its price × quantity with
+// GST (a GST-exclusive price takes the line's own tax rate, cess
+// included), never below zero; 0 without an MRP. sol is the line.
+const mrpDiscountSQL = `COALESCE(GREATEST(round((sol.mrp - CASE WHEN sol.price_includes_tax THEN sol.unit_price
+		         ELSE round(sol.unit_price * (1 + COALESCE(sol.tax_amount / NULLIF(sol.taxable_value, 0), 0)), 2) END) * sol.quantity, 2), 0), 0)::numeric(14,2)::text`
+
+// mrpDiscountOf: mrpDiscountSQL for a query that names the line alias.
+func mrpDiscountOf(alias string) string {
+	return strings.ReplaceAll(mrpDiscountSQL, "sol.", alias+".")
+}
+
 // loadOrderLines joins sales_order_lines with product_variants for
 // name/sku — closes the gap flagged in phase0_1_design.md §3.4: GET
 // /sales/orders/{id} previously returned order-level aggregates only.
@@ -1031,7 +1095,8 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 		       gst_cgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
 		       gst_sgst(sol.tax_amount, sol.cess_amount, so.inter_state)::text,
 		       gst_igst(sol.tax_amount, sol.cess_amount, so.inter_state)::text, sol.cess_amount::text,
-		       sol.description, p.name, COALESCE(un.symbol, ''), COALESCE(un.decimals, 3)
+		       sol.description, p.name, COALESCE(un.symbol, ''), COALESCE(un.decimals, 3),
+		       sol.mrp::text, `+mrpDiscountSQL+`
 		FROM sales_order_lines sol
 		JOIN sales_orders so ON so.id = sol.sales_order_id
 		JOIN product_variants pv ON pv.id = sol.variant_id
@@ -1052,7 +1117,7 @@ func loadOrderLines(ctx context.Context, tx pgx.Tx, orderID string) ([]orderLine
 			&l.UnitPrice, &l.DiscountAmount, &l.TaxAmount, &l.LineTotal,
 			&l.TaxableValue, &l.PriceIncludesTax, &l.OpenPrice, &l.PriceApprovedBy,
 			&l.HSNCode, &l.TaxRate, &l.CGSTAmount, &l.SGSTAmount, &l.IGSTAmount, &l.CessAmount, &l.Description, &l.CatalogName,
-			&l.UnitSymbol, &l.UnitDecimals); err != nil {
+			&l.UnitSymbol, &l.UnitDecimals, &l.MRP, &l.MRPDiscount); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

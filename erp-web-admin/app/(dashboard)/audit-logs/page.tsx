@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { ActivityLog, AuditSettingsPanel } from "./activity";
+import { PageHeader } from "@/components/data/page-header";
 
 function RecordChanges() {
   const [entityType, setEntityType] = useState("");
@@ -67,7 +68,7 @@ function RecordChanges() {
 
       {verifyResult && (
         <Card>
-          <CardContent className="pt-6 flex items-center gap-4">
+          <CardContent className="flex items-center gap-4">
             <Badge variant={verifyResult.valid ? "default" : "destructive"}>{verifyResult.valid ? "Valid" : "Broken"}</Badge>
             <span className="text-sm text-muted-foreground">
               {verifyResult.rows_checked} row(s) checked, {verifyResult.legacy_rows_skipped} pre-hardening row(s) skipped
@@ -101,7 +102,7 @@ function RecordChanges() {
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
@@ -160,7 +161,7 @@ export default function AuditLogsPage() {
   ];
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold">Audit Log</h1>
+      <PageHeader title="Audit Log" description="Who changed what and when, every sign-in, and the record of each master's changes." />
       <div role="tablist" aria-label="Audit log views" className="flex gap-1 border-b">
         {tabs.map(([id, label]) => (
           <button

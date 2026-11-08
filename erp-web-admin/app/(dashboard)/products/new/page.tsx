@@ -25,6 +25,7 @@ import { SearchSelect, categoryOption } from "@/components/data/search-select";
 
 import { currencySymbol } from "@/lib/currency";
 import { SuggestionHint, useLiveSuggestion, useSuggestionSettings } from "@/components/pricing/suggestions";
+import { PageHeader } from "@/components/data/page-header";
 
 export default function NewProductPage() {
   const router = useRouter();
@@ -214,7 +215,7 @@ export default function NewProductPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl">
-      <h1 className="text-2xl font-semibold">New Product</h1>
+      <PageHeader title="New Product" description="A product with its first variant, prices, tax and barcode." />
       <form onSubmit={submit}>
         <Card>
           <CardHeader>
@@ -398,7 +399,7 @@ export default function NewProductPage() {
               <Label htmlFor="sku">SKU</Label>
               <Input id="sku" required value={sku} onChange={(e) => setSku(e.target.value)} />
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="flex flex-col gap-2">
                 <Label htmlFor="costPrice">Cost price ({currencySymbol()})</Label>
                 <Input id="costPrice" type="number" min="0" step="0.01" value={costPrice} onChange={(e) => setCostPrice(e.target.value)} />

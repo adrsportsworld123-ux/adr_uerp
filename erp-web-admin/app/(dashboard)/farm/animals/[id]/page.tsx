@@ -262,7 +262,7 @@ function EditDialog({ animal, onClose, onSaved }: { animal: FarmAnimal; onClose:
         </>
       }
     >
-      <form id="farm-animal-edit" onSubmit={save} className="grid grid-cols-2 gap-3">
+      <form id="farm-animal-edit" onSubmit={save} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Tag *" htmlFor="fae-tag">
           <Input id="fae-tag" value={tag} onChange={(e) => setTag(e.target.value)} />
         </Field>
@@ -275,7 +275,7 @@ function EditDialog({ animal, onClose, onSaved }: { animal: FarmAnimal; onClose:
         <Field label="Born on" htmlFor="fae-born">
           <Input id="fae-born" type="date" value={bornOn} max={localDate()} onChange={(e) => setBornOn(e.target.value)} />
         </Field>
-        <Field label="Notes" htmlFor="fae-notes" className="col-span-2">
+        <Field label="Notes" htmlFor="fae-notes" className="col-span-full sm:col-span-2">
           <Input id="fae-notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
       </form>

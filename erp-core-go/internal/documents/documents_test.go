@@ -333,3 +333,44 @@ func TestCreditNoteLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The MRP note on each item and the savings under the total appear only
+// when the branch shows them; the customer's mobile always does.
+func TestSaleReceiptMRPDiscount(t *testing.T) {
+	in := SaleInput{
+		OrderNumber: "SO-1", Status: "finalized", Date: "1 Nov 2026", Cashier: "Ravi",
+		CustomerName: "Kumar", CustomerPhone: "9876543210",
+		Lines:    []SaleLine{{Name: "Bat", Quantity: "1", UnitPrice: "899.00", Discount: "0.00", Tax: "0.00", Total: "899.00", MRP: "999.00", MRPDiscount: "100.00"}},
+		Subtotal: "899.00", Discount: "0.00", Tax: "0.00", Grand: "899.00",
+		MRPDiscountTotal: "100.00", TotalSavings: "100.00",
+	}
+	labels := func(d Document) string {
+		var s []string
+		for _, t := range d.Totals {
+			s = append(s, t.Label)
+		}
+		return strings.Join(s, "|")
+	}
+
+	off := SaleReceipt(Letterhead{}, in)
+	if strings.Contains(labels(off), "You saved") || strings.Contains(off.Rows[0].Title, "MRP") {
+		t.Errorf("setting off: totals %q, title %q", labels(off), off.Rows[0].Title)
+	}
+	if off.Party == nil || !strings.Contains(strings.Join(off.Party.Lines, " "), "Mobile: 9876543210") {
+		t.Errorf("customer mobile missing: %+v", off.Party)
+	}
+
+	in.ShowMRPDiscount = true
+	on := SaleReceipt(Letterhead{}, in)
+	if got := labels(on); !strings.HasSuffix(got, "Total|Discount on MRP|You saved") {
+		t.Errorf("totals = %q", got)
+	}
+	if !strings.Contains(on.Rows[0].Title, "MRP 999.00 · save 100.00") || !strings.Contains(on.Rows[0].Cells[1], "MRP 999.00") {
+		t.Errorf("row = %+v", on.Rows[0])
+	}
+	for _, f := range []Format{FormatA4, FormatThermal} {
+		if _, err := Render(Letterhead{Name: "Acme"}, on, f); err != nil {
+			t.Errorf("render %s: %v", f, err)
+		}
+	}
+}

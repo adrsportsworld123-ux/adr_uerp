@@ -604,4 +604,15 @@ const Map<String, String> stringsAr = {
   'Dec': 'ديسمبر',
   // Units (erp-core-go §3.79).
   '{0} is counted in whole {1}': 'يُحسب {0} بأعداد صحيحة ({1})',
+  'MRP {0}': 'السعر الأقصى {0}',
+  'Discount on MRP': 'خصم على السعر الأقصى',
+  'You saved': 'وفّرت',
+  'Mobile: {0}': 'الجوال: {0}',
+  'Back to items (Esc)': 'العودة إلى الأصناف (Esc)',
+  'Find a product (F3)': 'البحث عن منتج (F3)',
+  'Customer added': 'تمت إضافة العميل',
+  'No customer': 'لا يوجد عميل',
+  'Add one for credit, loyalty points, or their name on the receipt': 'أضفه للبيع الآجل أو نقاط الولاء أو اسمه على الإيصال',
+  'Add customer': 'إضافة عميل',
+  'Change': 'تغيير',
 };

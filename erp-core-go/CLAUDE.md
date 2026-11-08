@@ -160,6 +160,10 @@ A product's stock, cost and price are in its unit (`products.unit_id`, §3.79); 
 - **Farm (§3.82):** every farm event goes through `recordEvent` (heads, the register, withdrawal); an animal on the register is one of its batch's heads, so anything that adds or removes heads is a `farm_events` row (`birth`, `addition`, `transfer_in/out`) and `aliveSQL` counts them. Produce is checked against open withdrawals by `withdrawalBlock`; only farm.manage overrides, with a reason. `moveStock` takes a reference type (`farm_event`, `farm_feed_mix`).
 - **Price suggestions (§3.83):** `pricing.suggest` is pure (cost, MRP, GST basis, rule → price and status) and covered by the playbook test; a suggestion never writes a price on its own. Routes under `/pricing/suggest…` and `/pricing/suggestion-…` are the plan feature `price_suggestion`; settings and rules need `pricing.suggestion.manage` (Merchant Admin only).
 
+## MRP on sales (2026-11-01)
+
+`sales_order_lines.mrp` is filled by a trigger (migrations/081), so new line writers need nothing. A line's `mrp_discount` comes from `mrpDiscountSQL` / `mrpDiscountOf(alias)`; the order's savings from `savingsFor`. They are information only: never add them to a total. Whether screens and receipts show them is `branch_print_settings.show_mrp_discount` (§3.84).
+
 ## Repo layout
 
 ```
