@@ -34,11 +34,15 @@ type CashFlow struct {
 	Drops       float64
 	PaidIn      float64
 	PaidOut     float64
+	// CreditCollected: cash a till took against earlier credit sales
+	// (migrations/082). A payment recorded in the back office names no
+	// till and is not drawer cash.
+	CreditCollected float64
 }
 
 // Net is the change in drawer cash over the scope, before the opening float.
 func (c CashFlow) Net() float64 {
-	return round2(c.CashSales - c.CashRefunds + c.FloatIn - c.Drops + c.PaidIn - c.PaidOut)
+	return round2(c.CashSales - c.CashRefunds + c.FloatIn - c.Drops + c.PaidIn - c.PaidOut + c.CreditCollected)
 }
 
 const saleMoment = `COALESCE(so.device_created_at, so.finalized_at)`
@@ -73,6 +77,17 @@ func ComputeCashFlow(ctx context.Context, tx pgx.Tx, s CashScope) (CashFlow, err
 		  AND ($4::timestamptz IS NULL OR r.created_at >= $4)
 		  AND ($5::timestamptz IS NULL OR r.created_at < $5)`,
 		s.BranchID, s.TerminalID, date, s.From, s.To).Scan(&f.CashRefunds); err != nil {
+		return f, err
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(p.amount), 0)
+		FROM customer_receivable_payments p
+		JOIN pos_terminals t ON t.id = p.pos_terminal_id
+		WHERE t.branch_id = $1 AND ($2 = '' OR p.pos_terminal_id::text = $2) AND p.method = 'cash' AND p.reversed_at IS NULL
+		  AND ($3::date IS NULL OR p.received_at::date = $3::date)
+		  AND ($4::timestamptz IS NULL OR p.received_at >= $4)
+		  AND ($5::timestamptz IS NULL OR p.received_at < $5)`,
+		s.BranchID, s.TerminalID, date, s.From, s.To).Scan(&f.CreditCollected); err != nil {
 		return f, err
 	}
 	rows, err := tx.Query(ctx, `

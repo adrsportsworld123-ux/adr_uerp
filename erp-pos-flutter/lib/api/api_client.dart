@@ -195,6 +195,12 @@ class ProductSearchResult {
   final bool openPrice;
   final String? posColor;
 
+  /// What the asked branch can sell now (on hand less reserved), from
+  /// Postgres beside the hit (internal/search db.StockByVariant), never the
+  /// index. null when the server sent none (an older server, or no stock
+  /// row for the variant).
+  final double? available;
+
   ProductSearchResult({
     required this.variantId,
     required this.productId,
@@ -206,6 +212,7 @@ class ProductSearchResult {
     required this.mrp,
     this.openPrice = false,
     this.posColor,
+    this.available,
   });
 
   factory ProductSearchResult.fromJson(Map<String, dynamic> json) => ProductSearchResult(
@@ -219,6 +226,7 @@ class ProductSearchResult {
         mrp: (json['mrp'] as num).toDouble(),
         openPrice: json['open_price'] as bool? ?? false,
         posColor: _color(json['pos_color']),
+        available: double.tryParse(json['available']?.toString() ?? ''),
       );
 
   ProductLookup toProductLookup() => ProductLookup(
@@ -828,6 +836,13 @@ class SalesHistoryOrder {
   final String grandTotal;
   final List<String> paymentMethods;
 
+  /// erp-core-go migrations/082: paid | partially_paid | unpaid for a
+  /// completed sale, '' otherwise (or from an older server), and what is
+  /// still owed on its credit.
+  final String paymentStatus;
+  final String pendingAmount;
+  final String creditAmount;
+
   SalesHistoryOrder({
     required this.orderId,
     required this.orderNumber,
@@ -839,7 +854,12 @@ class SalesHistoryOrder {
     required this.itemCount,
     required this.grandTotal,
     required this.paymentMethods,
+    this.paymentStatus = '',
+    this.pendingAmount = '0.00',
+    this.creditAmount = '0.00',
   });
+
+  bool get hasPending => (double.tryParse(pendingAmount) ?? 0) > 0;
 
   factory SalesHistoryOrder.fromJson(Map<String, dynamic> json) => SalesHistoryOrder(
         orderId: json['order_id'] as String,
@@ -852,6 +872,27 @@ class SalesHistoryOrder {
         itemCount: json['item_count'] as String? ?? '0',
         grandTotal: json['grand_total'] as String,
         paymentMethods: (json['payment_methods'] as List<dynamic>? ?? const []).cast<String>(),
+        paymentStatus: json['payment_status'] as String? ?? '',
+        pendingAmount: json['pending_amount'] as String? ?? '0.00',
+        creditAmount: json['credit_amount'] as String? ?? '0.00',
+      );
+}
+
+/// A credit sale after POST /sales/orders/{id}/credit-payments
+/// (erp-core-go migrations/082).
+class CreditPaymentResult {
+  final String orderNumber;
+  final String creditPaid;
+  final String pendingAmount;
+  final String paymentStatus;
+
+  CreditPaymentResult({required this.orderNumber, required this.creditPaid, required this.pendingAmount, required this.paymentStatus});
+
+  factory CreditPaymentResult.fromJson(Map<String, dynamic> j) => CreditPaymentResult(
+        orderNumber: j['order_number'] as String? ?? '',
+        creditPaid: j['credit_paid'] as String? ?? '0.00',
+        pendingAmount: j['pending_amount'] as String? ?? '0.00',
+        paymentStatus: j['payment_status'] as String? ?? '',
       );
 }
 
@@ -871,6 +912,10 @@ class SalesSummaryData {
   final String taxTotal;
   final Map<String, String> byMethod;
 
+  /// migrations/082: still owed on the credit sales in the filter.
+  final String pendingTotal;
+  final int pendingCount;
+
   SalesSummaryData({
     required this.orderCount,
     required this.voidedCount,
@@ -879,6 +924,8 @@ class SalesSummaryData {
     required this.discountTotal,
     required this.taxTotal,
     required this.byMethod,
+    this.pendingTotal = '0.00',
+    this.pendingCount = 0,
   });
 
   factory SalesSummaryData.fromJson(Map<String, dynamic> json) => SalesSummaryData(
@@ -892,6 +939,8 @@ class SalesSummaryData {
           for (final m in (json['by_payment_method'] as List<dynamic>? ?? const []))
             (m as Map<String, dynamic>)['method'] as String: m['amount'] as String,
         },
+        pendingTotal: json['pending_total'] as String? ?? '0.00',
+        pendingCount: json['pending_count'] as int? ?? 0,
       );
 }
 
@@ -1222,7 +1271,7 @@ class ShiftReport {
   final Map<String, String> byMethod;
   final int returnCount;
   final String refundTotal;
-  final Map<String, String> cash; // opening_float, cash_sales, cash_refunds, float_in, drops, paid_in, paid_out, expected
+  final Map<String, String> cash; // opening_float, cash_sales, cash_refunds, float_in, drops, paid_in, paid_out, credit_collected, expected
   final List<CashMovement> movements;
   final Map<String, dynamic>? close; // counted_total, variance, reason, approved_by
 
@@ -2438,6 +2487,7 @@ class ApiClient {
     String? query,
     String? from,
     String? to,
+    String? paymentStatus,
     int page = 1,
     int limit = 25,
   }) async {
@@ -2445,6 +2495,7 @@ class ApiClient {
       if (terminalId != null) 'terminal_id': terminalId,
       if (branchId != null) 'branch_id': branchId,
       if (status != null && status.isNotEmpty) 'status': status,
+      if (paymentStatus != null && paymentStatus.isNotEmpty) 'payment_status': paymentStatus,
       if (query != null && query.isNotEmpty) 'q': query,
       if (from != null) 'from': from,
       if (to != null) 'to': to,
@@ -2456,6 +2507,32 @@ class ApiClient {
       (body['orders'] as List<dynamic>).map((e) => SalesHistoryOrder.fromJson(e as Map<String, dynamic>)).toList(),
       body['total'] as int? ?? 0,
     );
+  }
+
+  /// POST /sales/orders/{id}/credit-payments — what the customer pays now
+  /// against a credit sale (cash / card / upi), counted in this till's
+  /// drawer when it is cash. A retry with the same [idempotencyKey] records
+  /// it once.
+  Future<CreditPaymentResult> recordCreditPayment({
+    required String orderId,
+    required double amount,
+    required String method,
+    String reference = '',
+    required String posTerminalId,
+    required String idempotencyKey,
+  }) async {
+    final resp = await _http.post(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/credit-payments'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'amount': amount,
+        'method': method,
+        if (reference.isNotEmpty) 'reference_no': reference,
+        'pos_terminal_id': posTerminalId,
+        'idempotency_key': idempotencyKey,
+      }),
+    );
+    return CreditPaymentResult.fromJson(_decode(resp));
   }
 
   Future<SalesSummaryData> salesSummary({String? terminalId, String? branchId, String? from, String? to}) async {

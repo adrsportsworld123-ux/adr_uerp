@@ -8,6 +8,7 @@ import '../l10n/l10n.dart';
 import '../local/offline_store.dart';
 import '../state/session.dart';
 import '../ui/format.dart';
+import '../ui/theme.dart';
 import 'receipt_screen.dart';
 import 'return_screen.dart';
 
@@ -15,6 +16,11 @@ import 'return_screen.dart';
 /// a day summary, filters, the server's sales, and above them the sales
 /// this device made offline that haven't synced yet ("queued"). Opening a
 /// sale shows its receipt, where it can be reprinted or returned.
+///
+/// A credit sale shows its payment status and what is still due, and
+/// "Collect payment" records what the customer pays now (erp-core-go
+/// migrations/082); "Payment pending" over "All dates" lists every sale
+/// still owed.
 ///
 /// While open it refreshes itself every 30 seconds (quietly, keeping the
 /// list on screen), so a manager can leave it up to watch the day's sales
@@ -26,12 +32,13 @@ class OrdersScreen extends StatefulWidget {
   State<OrdersScreen> createState() => _OrdersScreenState();
 }
 
-enum _Period { today, yesterday, week }
+enum _Period { today, yesterday, week, all }
 
 class _OrdersScreenState extends State<OrdersScreen> {
   bool _thisTill = true;
   _Period _period = _Period.today;
   String _status = '';
+  String _payment = '';
   final _search = TextEditingController();
 
   List<QueuedSale> _queued = [];
@@ -72,13 +79,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
   static String _ymd(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  (String, String) get _range {
+  /// null, null = all dates (credit owed from any day).
+  (String?, String?) get _range {
     final now = PosClock.now();
     final today = DateTime(now.year, now.month, now.day);
     return switch (_period) {
       _Period.today => (_ymd(today), _ymd(today)),
       _Period.yesterday => (_ymd(today.subtract(const Duration(days: 1))), _ymd(today.subtract(const Duration(days: 1)))),
       _Period.week => (_ymd(today.subtract(const Duration(days: 6))), _ymd(today)),
+      _Period.all => (null, null),
     };
   }
 
@@ -115,7 +124,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final (from, to) = _range;
     try {
       final results = await Future.wait([
-        session.salesHistory(thisTerminalOnly: _thisTill, status: _status, query: _search.text.trim(), from: from, to: to),
+        session.salesHistory(thisTerminalOnly: _thisTill, status: _status, query: _search.text.trim(), from: from, to: to, paymentStatus: _payment),
         session.salesSummary(thisTerminalOnly: _thisTill, from: from, to: to),
       ]);
       if (!mounted || seq != _loadSeq) return;
@@ -150,7 +159,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     setState(() => _loadingMore = true);
     try {
       final page = await session.salesHistory(
-          thisTerminalOnly: _thisTill, status: _status, query: _search.text.trim(), from: from, to: to, page: _page + 1);
+          thisTerminalOnly: _thisTill, status: _status, query: _search.text.trim(), from: from, to: to, paymentStatus: _payment, page: _page + 1);
       if (!mounted) return;
       setState(() {
         _orders = [..._orders, ...page.orders];
@@ -201,6 +210,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
       )),
     ));
     if (changed) _load();
+  }
+
+  Future<void> _collect(SalesHistoryOrder o) async {
+    final session = context.read<AppSession>();
+    final paid = await showDialog<bool>(context: context, builder: (_) => _CollectPaymentDialog(session: session, order: o));
+    if (paid == true) _load();
   }
 
   @override
@@ -280,7 +295,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
             _load();
           },
         ),
-        for (final (p, label) in [(_Period.today, tr('Today')), (_Period.yesterday, tr('Yesterday')), (_Period.week, tr('Last 7 days'))])
+        for (final (p, label) in [
+          (_Period.today, tr('Today')),
+          (_Period.yesterday, tr('Yesterday')),
+          (_Period.week, tr('Last 7 days')),
+          (_Period.all, tr('All dates')),
+        ])
           ChoiceChip(
             label: Text(label),
             selected: _period == p,
@@ -301,6 +321,20 @@ class _OrdersScreenState extends State<OrdersScreen> {
           ],
           onChanged: (v) {
             setState(() => _status = v ?? '');
+            _load();
+          },
+        ),
+        DropdownButton<String>(
+          key: const Key('history-payment-filter'),
+          value: _payment,
+          underline: const SizedBox.shrink(),
+          items: [
+            DropdownMenuItem(value: '', child: Text(tr('All payments'))),
+            DropdownMenuItem(value: 'pending', child: Text(tr('Payment pending'))),
+            DropdownMenuItem(value: 'paid', child: Text(tr('Fully paid'))),
+          ],
+          onChanged: (v) {
+            setState(() => _payment = v ?? '');
             _load();
           },
         ),
@@ -372,6 +406,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       for (final m in const ['cash', 'card', 'upi', 'credit'])
         if (s.byMethod.containsKey(m)) tile(m == 'upi' ? 'UPI' : '${m[0].toUpperCase()}${m.substring(1)}', formatRupees(s.byMethod[m]!)),
       if (s.refundedCount > 0 || s.voidedCount > 0) tile(tr('Refunded · voided'), '${s.refundedCount} · ${s.voidedCount}'),
+      if (s.pendingCount > 0) tile(tr('Pending ({0})', [s.pendingCount]), formatRupees(s.pendingTotal), key: const Key('summary-pending')),
     ]);
   }
 
@@ -391,7 +426,24 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
+  /// Paid (green), Partly paid / Unpaid (amber): the word, never colour alone.
+  Widget _paymentChip(ThemeData theme, SalesHistoryOrder o) {
+    final pos = theme.pos;
+    final (label, bg, fg) = switch (o.paymentStatus) {
+      'paid' => (tr('Paid'), pos.paySoft, pos.pay),
+      'partially_paid' => (tr('Partly paid'), pos.warnSoft, pos.warn),
+      _ => (tr('Unpaid'), pos.warnSoft, pos.warn),
+    };
+    return Container(
+      key: Key('payment-status-${o.orderNumber}'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+      child: Text(label, style: theme.textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w600)),
+    );
+  }
+
   Widget _orderTile(ThemeData theme, SalesHistoryOrder o) {
+    final session = context.read<AppSession>();
     final scheme = theme.colorScheme;
     final (bg, fg) = switch (o.status) {
       'voided' => (scheme.errorContainer, scheme.onErrorContainer),
@@ -410,20 +462,47 @@ class _OrdersScreenState extends State<OrdersScreen> {
             decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
             child: Text(statusLabel(o.status), style: theme.textTheme.labelSmall?.copyWith(color: fg)),
           ),
+          if (o.paymentStatus.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            _paymentChip(theme, o),
+          ],
         ]),
-        subtitle: Text([
-          _time(o.finalizedAt),
-          '${formatQty(o.itemCount)} item(s)',
-          if (o.paymentMethods.isNotEmpty) o.paymentMethods.map((m) => m.toUpperCase()).join(' + '),
-          if (o.customerName != null) o.customerName!,
-          if (!_thisTill) o.terminalName,
-          o.cashierName,
-        ].join(' · ')),
-        trailing: Text(
-          formatRupees(o.grandTotal),
-          style: theme.textTheme.titleSmall?.copyWith(
-            decoration: o.status == 'voided' ? TextDecoration.lineThrough : null,
-          ),
+        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text([
+            _time(o.finalizedAt),
+            '${formatQty(o.itemCount)} item(s)',
+            if (o.paymentMethods.isNotEmpty) o.paymentMethods.map((m) => m.toUpperCase()).join(' + '),
+            if (o.customerName != null) o.customerName!,
+            if (!_thisTill) o.terminalName,
+            o.cashierName,
+          ].join(' · ')),
+          if (o.hasPending && !session.offlineMode)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                key: Key('collect-${o.orderNumber}'),
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact, padding: const EdgeInsets.symmetric(horizontal: 8)),
+                onPressed: () => _collect(o),
+                icon: const Icon(Icons.payments_outlined, size: 18),
+                label: Text(tr('Collect payment')),
+              ),
+            ),
+        ]),
+        trailing: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              formatRupees(o.grandTotal),
+              style: theme.textTheme.titleSmall?.copyWith(
+                decoration: o.status == 'voided' ? TextDecoration.lineThrough : null,
+              ),
+            ),
+            if (o.hasPending)
+              Text(tr('Due {0}', [formatRupees(o.pendingAmount)]),
+                  key: Key('due-${o.orderNumber}'),
+                  style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.error, fontWeight: FontWeight.w600)),
+          ],
         ),
         onTap: () => _open(o),
       ),
@@ -441,5 +520,132 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final hm = '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
     if (t.year == now.year && t.month == now.month && t.day == now.day) return hm;
     return '${t.day}/${t.month} $hm';
+  }
+}
+
+/// What a customer pays now against a credit sale: up to what is due, by
+/// cash, card or UPI. One idempotency key per opening, so a retry after a
+/// timeout records the payment once.
+class _CollectPaymentDialog extends StatefulWidget {
+  final AppSession session;
+  final SalesHistoryOrder order;
+
+  const _CollectPaymentDialog({required this.session, required this.order});
+
+  @override
+  State<_CollectPaymentDialog> createState() => _CollectPaymentDialogState();
+}
+
+class _CollectPaymentDialogState extends State<_CollectPaymentDialog> {
+  late final _amount = TextEditingController(text: widget.order.pendingAmount);
+  final _reference = TextEditingController();
+  late final String _key = widget.session.newIdempotencyKey();
+  String _method = 'cash';
+  bool _busy = false;
+  String? _error;
+
+  double get _due => double.tryParse(widget.order.pendingAmount) ?? 0;
+  double? get _value => double.tryParse(_amount.text.trim());
+  bool get _valid => _value != null && _value! > 0 && _value! <= _due + 0.001;
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    _reference.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_valid || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final r = await widget.session.recordCreditPayment(widget.order.orderId,
+          amount: _value!, method: _method, reference: _reference.text.trim(), idempotencyKey: _key);
+      if (!mounted) return;
+      final still = double.tryParse(r.pendingAmount) ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(still > 0 ? tr('Payment recorded · {0} still due', [formatRupees(r.pendingAmount)]) : tr('Payment recorded · fully paid'))));
+      Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      setState(() => _error = switch (e.code) {
+            'PAYMENT_EXCEEDS_BALANCE' => tr('More than is due on this sale'),
+            'NOTHING_DUE' => tr('Nothing is due on this sale any more'),
+            _ => e.message,
+          });
+    } catch (_) {
+      setState(() => _error = tr('Can\'t reach the server. Nothing was recorded.'));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final o = widget.order;
+    final invalid = _amount.text.trim().isNotEmpty && !_valid;
+    return AlertDialog(
+      key: const Key('collect-payment-dialog'),
+      title: Text(tr('Collect payment')),
+      content: SizedBox(
+        width: 380,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text([o.orderNumber, if (o.customerName != null) o.customerName!].join(' · '), style: theme.textTheme.bodyMedium),
+            const SizedBox(height: 4),
+            Text(tr('Due {0}', [formatRupees(o.pendingAmount)]),
+                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700, color: theme.colorScheme.error)),
+            const SizedBox(height: 16),
+            TextField(
+              key: const Key('collect-amount'),
+              controller: _amount,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: tr('Amount'),
+                border: const OutlineInputBorder(),
+                errorText: invalid ? tr('Enter an amount up to {0}', [formatRupees(o.pendingAmount)]) : null,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SegmentedButton<String>(
+              key: const Key('collect-method'),
+              segments: [
+                ButtonSegment(value: 'cash', label: Text(tr('Cash')), icon: const Icon(Icons.payments_outlined)),
+                ButtonSegment(value: 'card', label: Text(tr('Card')), icon: const Icon(Icons.credit_card)),
+                ButtonSegment(value: 'upi', label: Text(tr('UPI')), icon: const Icon(Icons.qr_code_2)),
+              ],
+              selected: {_method},
+              onSelectionChanged: _busy ? null : (v) => setState(() => _method = v.first),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('collect-reference'),
+              controller: _reference,
+              decoration: InputDecoration(labelText: tr('Reference (optional)'), border: const OutlineInputBorder()),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, key: const Key('collect-error'), style: TextStyle(color: theme.colorScheme.error)),
+            ],
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: _busy ? null : () => Navigator.of(context).pop(false), child: Text(tr('Cancel'))),
+        FilledButton(
+          key: const Key('collect-submit'),
+          onPressed: _busy || !_valid ? null : _submit,
+          child: _busy
+              ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : Text(tr('Record payment')),
+        ),
+      ],
+    );
   }
 }

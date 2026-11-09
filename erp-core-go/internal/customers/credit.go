@@ -253,6 +253,11 @@ type ReceivablePayment struct {
 	// (a cheque deposit names the cheque).
 	Description string
 	UserID      string
+	// POSTerminalID: the till that took the money (migrations/082), so
+	// its cash counts in that drawer; "" = the back office.
+	POSTerminalID string
+	// IdempotencyKey: "" = none (the back office's own form).
+	IdempotencyKey string
 }
 
 // ApplyReceivablePayment records the payment, posts Dr Cash/Bank/clearing
@@ -279,10 +284,11 @@ func ApplyReceivablePayment(ctx context.Context, tx pgx.Tx, p ReceivablePayment)
 	}
 	var paymentID string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO customer_receivable_payments (id, merchant_id, customer_id, sales_order_id, amount, method, reference_no, recorded_by, bank_account_id)
-		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid)
+		INSERT INTO customer_receivable_payments (id, merchant_id, customer_id, sales_order_id, amount, method, reference_no, recorded_by, bank_account_id,
+		                                          pos_terminal_id, idempotency_key)
+		VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid, NULLIF($8, '')::uuid, NULLIF($9, ''))
 		RETURNING id`,
-		p.CustomerID, p.SalesOrderID, p.Amount, p.Method, p.ReferenceNo, p.UserID, p.BankAccountID).Scan(&paymentID); err != nil {
+		p.CustomerID, p.SalesOrderID, p.Amount, p.Method, p.ReferenceNo, p.UserID, p.BankAccountID, p.POSTerminalID, p.IdempotencyKey).Scan(&paymentID); err != nil {
 		return "", openInvoice{}, err
 	}
 	desc := p.Description

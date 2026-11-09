@@ -67,7 +67,7 @@ func (h *Handler) CreateReservation(w http.ResponseWriter, r *http.Request) {
 
 	var resp reservationResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		if err := reserveStock(ctx, tx, req.BranchID, req.VariantID, req.Quantity); err != nil {
+		if err := reserveStockAt(ctx, tx, req.BranchID, req.VariantID, req.Quantity, false); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, `

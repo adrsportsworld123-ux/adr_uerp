@@ -77,6 +77,18 @@ export const CHANNEL_LABEL: Record<string, string> = translated({ pos: "Till", o
 
 export const METHOD_LABEL: Record<string, string> = translated({ cash: "Cash", card: "Card", upi: "UPI", credit: "Credit" });
 
+// A credit sale's payment status (erp-core-go migrations/082).
+export const PAYMENT_STATUS_LABEL: Record<string, string> = translated({ paid: "Paid", partially_paid: "Partly paid", unpaid: "Unpaid" });
+
+// How a customer can pay a credit sale (customer_receivable_payments.method).
+export const RECEIVABLE_METHOD_LABEL: Record<string, string> = translated({
+  cash: "Cash",
+  card: "Card",
+  upi: "UPI",
+  bank_transfer: "Bank transfer",
+  cheque: "Cheque",
+});
+
 // What made a journal entry (journal_entries.source_type).
 export const SOURCE_LABEL: Record<string, string> = translated({
   sale: "Sale",

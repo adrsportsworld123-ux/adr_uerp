@@ -44,7 +44,27 @@ type historyOrder struct {
 	PayableTotal   string   `json:"payable_total"` // grand_total + round_off
 	PaymentMethods []string `json:"payment_methods"`
 	Channel        string   `json:"channel"`
+	// migrations/082: what is still owed on a credit sale. PaymentStatus
+	// is paid | partially_paid | unpaid for a completed sale, "" for any
+	// other (a cart, a void); PendingAmount is credit_amount - credit_paid
+	// on a completed sale, else 0.
+	CreditAmount  string `json:"credit_amount"`
+	CreditPaid    string `json:"credit_paid"`
+	PendingAmount string `json:"pending_amount"`
+	PaymentStatus string `json:"payment_status"`
 }
+
+// pendingSQL / paymentStatusSQL: what is still owed on so, and its
+// payment status (historyOrder.PaymentStatus).
+const pendingSQL = `(CASE WHEN so.status IN ('finalized','partially_refunded') THEN GREATEST(so.credit_amount - so.credit_paid, 0) ELSE 0 END)`
+
+const paymentStatusSQL = `(CASE WHEN so.status NOT IN ('finalized','partially_refunded') THEN ''
+	WHEN so.credit_amount - so.credit_paid <= 0 THEN 'paid'
+	WHEN so.credit_paid > 0 THEN 'partially_paid'
+	ELSE 'unpaid' END)`
+
+// paymentStatuses: the payment_status filter; pending = partially_paid or unpaid.
+var paymentStatuses = map[string]bool{"paid": true, "partially_paid": true, "unpaid": true, "pending": true}
 
 // historyStatuses are the states a history list can show; cart and held
 // orders are work in progress, not history — listed only when asked for
@@ -57,6 +77,7 @@ var historyStatuses = map[string]bool{"finalized": true, "voided": true, "refund
 // describe the same set of orders.
 type historyFilter struct {
 	terminalID, branchID, cashierID, status, method, q, from, to, channel string
+	paymentStatus                                                         string
 }
 
 func readHistoryFilter(r *http.Request) historyFilter {
@@ -71,6 +92,8 @@ func readHistoryFilter(r *http.Request) historyFilter {
 		from:       q.Get("from"),
 		to:         q.Get("to"),
 		channel:    q.Get("channel"),
+
+		paymentStatus: q.Get("payment_status"),
 	}
 }
 
@@ -98,15 +121,20 @@ const historyWhere = `
 	  AND ($6 = '' OR so.order_number ILIKE '%' || $6 || '%' OR c.name ILIKE '%' || $6 || '%' OR c.phone ILIKE '%' || $6 || '%')
 	  AND ($7 = '' OR (COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone)::date >= $7::date)
 	  AND ($8 = '' OR (COALESCE(so.finalized_at, so.created_at) AT TIME ZONE b.timezone)::date <= $8::date)
-	  AND ($9 = '' OR so.channel = $9)`
+	  AND ($9 = '' OR so.channel = $9)
+	  AND ($10 = '' OR ($10 = 'pending' AND ` + paymentStatusSQL + ` IN ('partially_paid', 'unpaid')) OR ` + paymentStatusSQL + ` = $10)`
 
 func (f historyFilter) args() []any {
-	return []any{f.terminalID, f.branchID, f.cashierID, f.status, f.method, f.q, f.from, f.to, f.channel}
+	return []any{f.terminalID, f.branchID, f.cashierID, f.status, f.method, f.q, f.from, f.to, f.channel, f.paymentStatus}
 }
 
 func (f historyFilter) validate(w http.ResponseWriter) bool {
 	if f.channel != "" && f.channel != "pos" && f.channel != "online" && f.channel != "backoffice" {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "channel must be pos, online or backoffice")
+		return false
+	}
+	if f.paymentStatus != "" && !paymentStatuses[f.paymentStatus] {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "payment_status must be paid, partially_paid, unpaid or pending")
 		return false
 	}
 	if f.status != "" && !historyStatuses[f.status] {
@@ -158,9 +186,9 @@ func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 			       so.subtotal::text, so.discount_total::text, so.tax_total::text, so.grand_total::text,
 			       so.round_off::text, (so.grand_total + so.round_off)::text,
 			       COALESCE((SELECT array_agg(DISTINCT p.method) FROM payments p WHERE p.sales_order_id = so.id), '{}'),
-			       so.channel`+historyWhere+`
+			       so.channel, so.credit_amount::text, so.credit_paid::text, `+pendingSQL+`::text, `+paymentStatusSQL+historyWhere+`
 			ORDER BY `+p.OrderBy+`, so.id
-			LIMIT $10 OFFSET $11`, append(args, limit, offset)...)
+			LIMIT $11 OFFSET $12`, append(args, limit, offset)...)
 		if err != nil {
 			return err
 		}
@@ -170,7 +198,8 @@ func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&o.OrderID, &o.OrderNumber, &o.Status, &o.FinalizedAt,
 				&o.BranchID, &o.BranchName, &o.TerminalID, &o.TerminalName, &o.CashierID, &o.CashierName,
 				&o.CustomerID, &o.CustomerName, &o.ItemCount,
-				&o.Subtotal, &o.DiscountTotal, &o.TaxTotal, &o.GrandTotal, &o.RoundOff, &o.PayableTotal, &o.PaymentMethods, &o.Channel); err != nil {
+				&o.Subtotal, &o.DiscountTotal, &o.TaxTotal, &o.GrandTotal, &o.RoundOff, &o.PayableTotal, &o.PaymentMethods, &o.Channel,
+				&o.CreditAmount, &o.CreditPaid, &o.PendingAmount, &o.PaymentStatus); err != nil {
 				return err
 			}
 			orders = append(orders, o)
@@ -215,7 +244,8 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		args := f.args()
 		var orders, voided, refunded int
-		var gross, disc, tax, net, roundOff string
+		var gross, disc, tax, net, roundOff, pending string
+		var pendingCount int
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FILTER (WHERE so.status IN ('finalized','partially_refunded')),
 			       count(*) FILTER (WHERE so.status = 'voided'),
@@ -224,14 +254,17 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(sum(so.discount_total) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
 			       COALESCE(sum(so.tax_total) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
 			       COALESCE(sum(so.grand_total + so.round_off) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
-			       COALESCE(sum(so.round_off) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text`+historyWhere,
-			args...).Scan(&orders, &voided, &refunded, &gross, &disc, &tax, &net, &roundOff); err != nil {
+			       COALESCE(sum(so.round_off) FILTER (WHERE so.status IN ('finalized','partially_refunded')), 0)::text,
+			       COALESCE(sum(`+pendingSQL+`), 0)::text, count(*) FILTER (WHERE `+pendingSQL+` > 0)`+historyWhere,
+			args...).Scan(&orders, &voided, &refunded, &gross, &disc, &tax, &net, &roundOff, &pending, &pendingCount); err != nil {
 			return err
 		}
 		resp["order_count"], resp["voided_count"], resp["refunded_count"] = orders, voided, refunded
 		resp["gross_sales"], resp["discount_total"], resp["tax_total"], resp["net_sales"] = gross, disc, tax, net
 		// Checkout waivers (signed); net sales are after them, = the tenders.
 		resp["round_off_total"] = roundOff
+		// migrations/082: still owed on the credit sales in the filter.
+		resp["pending_total"], resp["pending_count"] = pending, pendingCount
 
 		// The tax by head, as the invoices printed it (migrations/060).
 		var cgst, sgst, igst string

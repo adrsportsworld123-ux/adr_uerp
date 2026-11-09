@@ -115,6 +115,8 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 
 **MRP on sales (2026-11-01, erp-core-go §3.84).** New sale and the sale page show each line's MRP under its price (`MrpNote`) and, when the branch's print settings turn on "Show the discount on MRP", "Discount on MRP" under the item (`MrpDiscountNote`) and "Discount on MRP" / "You saved" under the total (`SavingsRowsDl`), all in `components/sales/mrp.tsx`. They are information: no total includes them.
 
+**Credit collection and negative sales (2026-11-08, erp-core-go §3.85).** The Sales list has a Payment column (`PaymentStatusCell`: Paid / Partly paid / Unpaid and "Due ₹x"), a Payment status filter (pending = unpaid or partly paid), a "Pending (n)" summary tile, and a row action that records a payment (`CreditPaymentDialog`). The sale page's Credit section (`CreditCollection`) shows what is owed, each payment, and records one. All in `components/sales/credit-payment.tsx`, posting to `POST /sales/orders/{id}/credit-payments` with an idempotency key per dialog opening. Sales Policy › Negative sales is per branch (saved at once, default off); Stock Review lists those sales too. X/Z shows "Credit collected" when a till took any.
+
 **Reporting round (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60–§3.63):** the sales dashboard (`/dashboard`, recharts; widgets per role under `/dashboard/settings`), X & Z reports (`/reports/x-z`), the Report Library (`/reports/library`) and Saved Reports (`/reports/saved`). `e2e/reports-round10.spec.ts` covers them. The app shell puts focus back at the top after a navigation that left nothing focused (recharts' focusable charts otherwise sent the next Tab past the end of the new page).
 
 ## Working conventions to keep

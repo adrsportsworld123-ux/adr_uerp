@@ -164,6 +164,10 @@ A product's stock, cost and price are in its unit (`products.unit_id`, §3.79); 
 
 `sales_order_lines.mrp` is filled by a trigger (migrations/081), so new line writers need nothing. A line's `mrp_discount` comes from `mrpDiscountSQL` / `mrpDiscountOf(alias)`; the order's savings from `savingsFor`. They are information only: never add them to a total. Whether screens and receipts show them is `branch_print_settings.show_mrp_discount` (§3.84).
 
+## Credit collection and negative sales (2026-11-08)
+
+A credit sale's payment, from anywhere, goes through `customers.ApplyReceivablePayment`; a till passes `POSTerminalID` so its cash counts in `accounting.ComputeCashFlow` (`CreditCollected`). A sale's payment status / pending amount is `paymentStatusSQL` / `pendingSQL` (`internal/sales/history.go`). Stock for a sale is reserved with `reserveStock`, which follows `app_allow_negative_stock(branch)`; anything that is not a sale uses `reserveStockAt(..., false)`. A checkout that leaves stock below zero opens a stock review item (§3.85).
+
 ## Repo layout
 
 ```

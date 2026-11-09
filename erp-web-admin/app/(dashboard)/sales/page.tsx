@@ -6,11 +6,13 @@
 // opens the full sale (items, tax, payments, returns, ledger and audit).
 // The list and summary refresh themselves every 15 seconds while the tab is
 // visible (and on returning to it), so the screen can be left open to
-// monitor the tills; "Pause" stops that.
+// monitor the tills; "Pause" stops that. A credit sale shows its payment
+// status and what is still owed, and takes a payment from its row
+// (erp-core-go migrations/082).
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Pause, Play, Plus } from "lucide-react";
+import { HandCoins, Pause, Play, Plus } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { Branch, SaleSummaryRow, SalesSummary } from "@/lib/types";
 import { CHANNEL_LABEL, METHOD_LABEL, STATUS_LABEL, dateTime, qty, rupees } from "@/lib/format";
@@ -24,6 +26,7 @@ import { useListState } from "@/components/data/use-list-state";
 import { useServerList } from "@/components/data/use-server-list";
 import { useLiveRefresh } from "@/components/data/use-live-refresh";
 import { Button } from "@/components/ui/button";
+import { CreditPaymentDialog, PaymentStatusCell } from "@/components/sales/credit-payment";
 
 const columns: Column<SaleSummaryRow>[] = [
   {
@@ -55,6 +58,7 @@ const columns: Column<SaleSummaryRow>[] = [
   { key: "customer", header: "Customer", cell: (o) => o.customer_name ?? <span className="text-muted-foreground">Walk-in</span> },
   { key: "items", header: "Items", align: "right", cell: (o) => <span className="tabular">{qty(o.item_count)}</span> },
   { key: "paid", header: "Paid by", cell: (o) => o.payment_methods.map((m) => METHOD_LABEL[m] ?? m).join(" + ") || "—" },
+  { key: "payment", header: "Payment", cell: (o) => <PaymentStatusCell status={o.payment_status} pending={o.pending_amount} /> },
   {
     key: "total",
     header: "Total",
@@ -74,7 +78,7 @@ const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
 
 // Module-level: useListState memoises on this array, so a fresh literal on
 // every render would re-run every effect that depends on the filters.
-const FILTER_KEYS = ["channel", "branch_id", "payment_method", "from", "to"];
+const FILTER_KEYS = ["channel", "branch_id", "payment_method", "payment_status", "from", "to"];
 
 function SalesView() {
   const router = useRouter();
@@ -90,6 +94,7 @@ function SalesView() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [live, setLive] = useState(true);
   const [tick, setTick] = useState(0);
+  const [collecting, setCollecting] = useState<SaleSummaryRow | null>(null);
   const { refresh } = list;
   useLiveRefresh(
     useCallback(() => {
@@ -154,6 +159,7 @@ function SalesView() {
                 ? [["CGST · SGST · IGST", `${rupees(summary.cgst_total)} · ${rupees(summary.sgst_total ?? "0")} · ${rupees(summary.igst_total ?? "0")}`]]
                 : []),
             ["Refunded · voided", `${summary.refunded_count} · ${summary.voided_count}`],
+            ...(Number(summary.pending_total ?? 0) > 0 ? [[`Pending (${summary.pending_count ?? 0})`, rupees(summary.pending_total!)]] : []),
           ].map(([label, value]) => (
             <div key={label} className="rounded-xl border bg-card p-3">
               <div className="text-xs text-muted-foreground">{label}</div>
@@ -211,6 +217,13 @@ function SalesView() {
                 </option>
               ))}
             </select>
+            <select aria-label="Payment status" value={f.payment_status} onChange={(e) => setFilter("payment_status", e.target.value)} className={selectClass}>
+              <option value="">Any payment status</option>
+              <option value="pending">Pending (unpaid or partly paid)</option>
+              <option value="unpaid">Unpaid</option>
+              <option value="partially_paid">Partly paid</option>
+              <option value="paid">Paid</option>
+            </select>
             <label className="flex items-center gap-1 text-sm">
               From
               <input type="date" aria-label="From date" value={f.from} onChange={(e) => setFilter("from", e.target.value)} className={selectClass} />
@@ -222,15 +235,44 @@ function SalesView() {
           </>
         }
         activeFilterCount={activeFilterCount}
-        onClearFilters={() => update({ q: "", status: "", filters: { channel: "", branch_id: "", payment_method: "", from: "", to: "" } })}
+        onClearFilters={() => update({ q: "", status: "", filters: { channel: "", branch_id: "", payment_method: "", payment_status: "", from: "", to: "" } })}
         empty={{ title: "No sales yet", body: "Sales appear here as soon as a till, the online store or the back office completes one." }}
         onRowClick={(o) => router.push(`/sales/${o.order_id}`)}
         rowActions={(o) =>
           o.status !== "cart" && o.status !== "held" ? (
-            <DownloadPdfButton path={`/api/v1/sales/orders/${o.order_id}/receipt/pdf`} label={`Download receipt ${o.order_number}`} size="icon-sm" />
+            <div className="flex items-center gap-1">
+              {Number(o.pending_amount ?? 0) > 0 && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Record payment for ${o.order_number}`}
+                  title="Record payment"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCollecting(o);
+                  }}
+                >
+                  <HandCoins />
+                </Button>
+              )}
+              <DownloadPdfButton path={`/api/v1/sales/orders/${o.order_id}/receipt/pdf`} label={`Download receipt ${o.order_number}`} size="icon-sm" />
+            </div>
           ) : null
         }
       />
+      {collecting && (
+        <CreditPaymentDialog
+          orderId={collecting.order_id}
+          orderNumber={collecting.order_number}
+          pending={collecting.pending_amount ?? "0"}
+          open
+          onOpenChange={(o) => !o && setCollecting(null)}
+          onRecorded={() => {
+            refresh();
+            setTick((t) => t + 1);
+          }}
+        />
+      )}
     </div>
   );
 }

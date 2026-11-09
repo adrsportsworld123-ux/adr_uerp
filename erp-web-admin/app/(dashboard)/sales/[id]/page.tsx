@@ -38,6 +38,7 @@ import { DownloadPdfButton, PrintPdfButton } from "@/components/data/document-ac
 import { StatusChip } from "@/components/data/status-chip";
 import { EInvoiceDocuments } from "@/components/sales/einvoice-documents";
 import { MrpDiscountNote, MrpNote, SavingsRowsDl } from "@/components/sales/mrp";
+import { CreditCollection } from "@/components/sales/credit-payment";
 import { PlaceOfSupply, TaxRowsDl, TaxSummaryTable, splitColumns } from "@/components/tax/tax-breakup";
 
 const DISCOUNT_LABEL: Record<string, string> = { manual: "Manual", coupon: "Coupon", promotion: "Promotion", loyalty: "Loyalty points" };
@@ -359,6 +360,12 @@ export default function SaleDetailPage() {
               ))}
             </ul>
           </Section>
+
+          {Number(sale.credit_amount) > 0 && (sale.status === "finalized" || sale.status === "partially_refunded") && (
+            <Section title="Credit">
+              <CreditCollection orderId={sale.order_id} onChanged={load} />
+            </Section>
+          )}
 
           {sale.discounts.length > 0 && (
             <Section title="Discounts">

@@ -1,7 +1,8 @@
 "use client";
 
 // Stock Review (Phase 13, erp-core-go internal/inventory/stock_review.go):
-// sales a till made offline that sold more than the branch had in stock.
+// sales a till made offline that sold more than the branch had in stock, and
+// (erp-core-go migrations/082) sales at a branch that allows negative sales.
 // A sale that already happened is never rejected at sync, so stock went
 // negative; each such line waits here until someone checks the shelf, fixes
 // the stock with a normal adjustment or count if needed, and resolves it
@@ -124,7 +125,7 @@ function StockReviewView() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Stock Review"
-        description="Offline sales that sold more than the branch had in stock. The sale stands; check the shelf, fix the stock if needed, then resolve with what you found."
+        description="Sales that sold more than the branch had in stock: offline sales, and sales at a branch that allows negative sales. The sale stands; check the shelf, fix the stock if needed, then resolve with what you found."
       />
       <DataTable<ReviewItem>
         columns={columns}
@@ -155,7 +156,7 @@ function StockReviewView() {
         }
         activeFilterCount={activeFilterCount}
         onClearFilters={() => update({ q: "", status: "open" })}
-        empty={{ title: "Nothing to review", body: "Every offline sale so far had the stock it needed." }}
+        empty={{ title: "Nothing to review", body: "Every sale so far had the stock it needed." }}
         rowActions={(r) =>
           r.status === "open" ? (
             <Button

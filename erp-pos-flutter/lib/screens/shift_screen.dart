@@ -267,6 +267,8 @@ class ShiftReportView extends StatelessWidget {
         if (c['drops'] != '0.00') row(tr('Drops to safe'), c['drops'], sign: '−'),
         if (c['paid_in'] != '0.00') row(tr('Paid in'), c['paid_in'], sign: '+'),
         if (c['paid_out'] != '0.00') row(tr('Paid out'), c['paid_out'], sign: '−'),
+        // Cash taken here against earlier credit sales (erp-core-go migrations/082).
+        if (c['credit_collected'] != null && c['credit_collected'] != '0.00') row(tr('Credit collected'), c['credit_collected'], sign: '+'),
         const Divider(),
         row(tr('Expected in drawer'), c['expected'], strong: true, key: const Key('expected-cash')),
         if (close != null) ...[

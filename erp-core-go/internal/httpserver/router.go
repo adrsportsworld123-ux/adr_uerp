@@ -389,6 +389,10 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/sales/orders/{id}/receipt/print", orders.PrintReceipt)
 			protected.Get("/sales/orders/{id}/receipt/pdf", orders.DownloadReceipt)
 			protected.Post("/sales/orders/{id}/receipt/notify", orders.NotifyReceipt)
+			// migrations/082: collect a credit sale from the sale itself.
+			// Not gated, as POST /customers/{id}/payments isn't.
+			protected.Get("/sales/orders/{id}/credit-payments", orders.GetCreditPayments)
+			protected.Post("/sales/orders/{id}/credit-payments", orders.RecordCreditPayment)
 			protected.Post("/sales/orders/{id}/lines", orders.AddLine)
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)

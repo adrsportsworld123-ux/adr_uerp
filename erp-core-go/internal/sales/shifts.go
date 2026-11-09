@@ -46,7 +46,9 @@ type shiftCash struct {
 	Drops        string `json:"drops"`
 	PaidIn       string `json:"paid_in"`
 	PaidOut      string `json:"paid_out"`
-	Expected     string `json:"expected"`
+	// Cash taken at this till against earlier credit sales (migrations/082).
+	CreditCollected string `json:"credit_collected"`
+	Expected        string `json:"expected"`
 }
 
 type shiftMovement struct {
@@ -153,7 +155,7 @@ func buildReport(ctx context.Context, tx pgx.Tx, s shiftResponse, to *time.Time)
 	rep.Cash = shiftCash{
 		OpeningFloat: money(s.openingFloatV), CashSales: money(flow.CashSales), CashRefunds: money(flow.CashRefunds),
 		FloatIn: money(flow.FloatIn), Drops: money(flow.Drops), PaidIn: money(flow.PaidIn), PaidOut: money(flow.PaidOut),
-		Expected: money(expected),
+		CreditCollected: money(flow.CreditCollected), Expected: money(expected),
 	}
 
 	const moment = `COALESCE(so.device_created_at, so.finalized_at)`

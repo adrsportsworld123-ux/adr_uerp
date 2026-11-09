@@ -41,6 +41,9 @@ type SalesSettings = {
     effective_open_price_first?: boolean;
     price_benefit?: PriceBenefit | null;
     effective_price_benefit?: PriceBenefit;
+    /** migrations/082: the branch may sell below zero stock (branch only; null = no). */
+    allow_negative_stock?: boolean | null;
+    effective_allow_negative_stock?: boolean;
   }[];
 };
 type PriceBenefit = "standard" | "customer" | "shop";
@@ -117,7 +120,7 @@ export default function SalesSettingsPage() {
   async function setBranchRule(
     branchId: string,
     value: boolean | string | null,
-    field: "open_price_discounts" | "open_price_first" | "price_benefit" = "open_price_discounts",
+    field: "open_price_discounts" | "open_price_first" | "price_benefit" | "allow_negative_stock" = "open_price_discounts",
   ) {
     try {
       const s = await api.put<SalesSettings>(`/api/v1/sales/settings/branches/${branchId}`, { [field]: value });
@@ -389,6 +392,36 @@ export default function SalesSettingsPage() {
                 </ul>
               )}
             </fieldset>
+
+            {(saved.branches ?? []).length > 0 && (
+              <fieldset className="space-y-3" data-testid="negative-sales" disabled={!allowed}>
+                <legend className="mb-1 text-sm font-semibold">Negative sales</legend>
+                <p className="text-sm text-muted-foreground">
+                  Whether a branch may sell more than the system shows in stock, for goods that are on the shelf but not yet received in the system.
+                  The stock goes below zero and the sale opens an item in Stock Review, so someone receives or counts the goods. Off (the default):
+                  the till refuses, as it always has. Batch-tracked items always need real, unexpired batch stock. Saved at once.
+                </p>
+                <ul className="space-y-2" aria-label="Negative sales by branch">
+                  {(saved.branches ?? []).map((b) => (
+                    <li key={b.branch_id} className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="min-w-40 font-medium">{b.branch_name}</span>
+                      <select
+                        aria-label={`Negative sales at ${b.branch_name}`}
+                        value={b.allow_negative_stock ? "allow" : ""}
+                        onChange={(e) => setBranchRule(b.branch_id, e.target.value === "allow" ? true : null, "allow_negative_stock")}
+                        className="h-9 rounded-lg border bg-card px-2 text-sm"
+                      >
+                        <option value="">Don&apos;t allow (default)</option>
+                        <option value="allow">Allow selling below zero stock</option>
+                      </select>
+                      <span className="text-xs text-muted-foreground" data-testid="branch-negative-sales">
+                        {b.effective_allow_negative_stock ? "allowed" : "not allowed"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </fieldset>
+            )}
 
             <div className="flex items-center gap-3">
               <Button onClick={save} disabled={!allowed || !dirty || daysInvalid || maxInvalid || saving} title={allowed ? undefined : missingPermissionHint("sales.settings")}>

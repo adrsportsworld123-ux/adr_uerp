@@ -84,9 +84,11 @@ type dayCash struct {
 	Drops       string `json:"drops"`
 	PaidIn      string `json:"paid_in"`
 	PaidOut     string `json:"paid_out"`
-	NetCash     string `json:"net_cash"`
-	Counted     string `json:"counted"`  // sum of the closed shifts' counts
-	Variance    string `json:"variance"` // sum of the closed shifts' variances
+	// Cash the tills took against earlier credit sales (migrations/082).
+	CreditCollected string `json:"credit_collected"`
+	NetCash         string `json:"net_cash"`
+	Counted         string `json:"counted"`  // sum of the closed shifts' counts
+	Variance        string `json:"variance"` // sum of the closed shifts' variances
 }
 
 type dayReport struct {
@@ -311,7 +313,8 @@ func buildDayReport(ctx context.Context, tx pgx.Tx, merchantID, branchID, date s
 		return rep, err
 	}
 	rep.Cash = dayCash{CashSales: money(flow.CashSales), CashRefunds: money(flow.CashRefunds), FloatIn: money(flow.FloatIn),
-		Drops: money(flow.Drops), PaidIn: money(flow.PaidIn), PaidOut: money(flow.PaidOut), NetCash: money(flow.Net())}
+		Drops: money(flow.Drops), PaidIn: money(flow.PaidIn), PaidOut: money(flow.PaidOut), CreditCollected: money(flow.CreditCollected),
+		NetCash: money(flow.Net())}
 
 	// Every shift that was open at some point of the day, with its own X.
 	var ids []string
@@ -658,9 +661,12 @@ func dayReportPrint(lh documents.Letterhead, d dayReport, loc *time.Location) pr
 		{Label: "Cash sales", Value: d.Cash.CashSales}, {Label: "Cash refunds", Value: "-" + d.Cash.CashRefunds},
 		{Label: "Float in", Value: d.Cash.FloatIn}, {Label: "Drops", Value: "-" + d.Cash.Drops},
 		{Label: "Paid in", Value: d.Cash.PaidIn}, {Label: "Paid out", Value: "-" + d.Cash.PaidOut},
-		{Label: "Net cash", Value: d.Cash.NetCash, Strong: true},
-		{Label: "Counted (closed shifts)", Value: d.Cash.Counted}, {Label: "Variance", Value: d.Cash.Variance},
 	}
+	if nonZeroMoney(d.Cash.CreditCollected) {
+		cash = append(cash, printing.ReportRow{Label: "Credit collected", Value: d.Cash.CreditCollected})
+	}
+	cash = append(cash, printing.ReportRow{Label: "Net cash", Value: d.Cash.NetCash, Strong: true},
+		printing.ReportRow{Label: "Counted (closed shifts)", Value: d.Cash.Counted}, printing.ReportRow{Label: "Variance", Value: d.Cash.Variance})
 	shifts := []printing.ReportRow{}
 	for _, s := range d.Shifts {
 		v := s.NetSales
@@ -716,8 +722,12 @@ func shiftReportPrint(lh documents.Letterhead, branchName string, s shiftRespons
 	cash := []printing.ReportRow{
 		{Label: "Opening float", Value: c.OpeningFloat}, {Label: "Cash sales", Value: c.CashSales}, {Label: "Cash refunds", Value: "-" + c.CashRefunds},
 		{Label: "Float in", Value: c.FloatIn}, {Label: "Drops", Value: "-" + c.Drops}, {Label: "Paid in", Value: c.PaidIn},
-		{Label: "Paid out", Value: "-" + c.PaidOut}, {Label: "Expected in drawer", Value: c.Expected, Strong: true},
+		{Label: "Paid out", Value: "-" + c.PaidOut},
 	}
+	if nonZeroMoney(c.CreditCollected) {
+		cash = append(cash, printing.ReportRow{Label: "Credit collected", Value: c.CreditCollected})
+	}
+	cash = append(cash, printing.ReportRow{Label: "Expected in drawer", Value: c.Expected, Strong: true})
 	if cl := rep.Close; cl != nil {
 		cash = append(cash, printing.ReportRow{Label: "Counted", Value: cl.CountedTotal}, printing.ReportRow{Label: "Variance", Value: cl.Variance, Strong: true})
 		if cl.Reason != "" {

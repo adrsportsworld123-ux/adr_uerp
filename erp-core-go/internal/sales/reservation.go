@@ -25,16 +25,41 @@ const maxOptimisticRetries = 5
 // the race to a concurrent reservation) and genuinely insufficient stock are
 // two different failure modes, and this function tells them apart by
 // re-reading the row after a failed UPDATE rather than guessing.
+//
+// A sale reserves under the branch's policy (migrations/082): a branch
+// that allows negative sales reserves whatever is asked, so on_hand goes
+// below zero at checkout. Everything else is refused as before.
 func reserveStock(ctx context.Context, tx pgx.Tx, branchID, variantID string, quantity float64) error {
+	var allowNegative bool
+	if err := tx.QueryRow(ctx, `SELECT app_allow_negative_stock($1::uuid)`, branchID).Scan(&allowNegative); err != nil {
+		return err
+	}
+	return reserveStockAt(ctx, tx, branchID, variantID, quantity, allowNegative)
+}
+
+// reserveStockAt is reserveStock with the policy given: a manual
+// reservation (holding stock for a customer) passes false, since there is
+// nothing to hold below zero.
+func reserveStockAt(ctx context.Context, tx pgx.Tx, branchID, variantID string, quantity float64, allowNegative bool) error {
+	if allowNegative {
+		// An item never stocked at this branch has no row yet; a negative
+		// sale starts it at zero, as an offline oversell does.
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO stock_levels (merchant_id, branch_id, variant_id, on_hand, reserved, version)
+			VALUES (current_setting('app.tenant_id')::uuid, $1, $2, 0, 0, 0)
+			ON CONFLICT (branch_id, variant_id) DO NOTHING`, branchID, variantID); err != nil {
+			return err
+		}
+	}
 	return retryStockUpdate(ctx, tx, branchID, variantID,
-		func(onHand, reserved float64) bool { return (onHand - reserved) >= quantity },
+		func(onHand, reserved float64) bool { return allowNegative || (onHand-reserved) >= quantity },
 		func(version int) (pgx.Rows, error) {
 			return tx.Query(ctx, `
 				UPDATE stock_levels
 				SET reserved = reserved + $1, version = version + 1, updated_at = now()
 				WHERE branch_id = $2 AND variant_id = $3 AND version = $4
-				  AND (on_hand - reserved) >= $1
-				RETURNING version`, quantity, branchID, variantID, version)
+				  AND ($5 OR (on_hand - reserved) >= $1)
+				RETURNING version`, quantity, branchID, variantID, version, allowNegative)
 		})
 }
 

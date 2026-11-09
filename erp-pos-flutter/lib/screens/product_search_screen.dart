@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../api/api_client.dart';
 import '../state/session.dart';
 import '../ui/open_price_dialog.dart';
+import '../ui/theme.dart';
 import 'product_lookup_screen.dart';
 
 /// Name/category/subcategory product lookup — the barcode field stays the
@@ -146,6 +147,24 @@ class _ProductSearchViewState extends State<ProductSearchView> {
     }
   }
 
+  /// The tile's wording (product_grid.dart): out, a few left, in stock.
+  /// Out of stock is red, a few left amber; never colour alone.
+  TextSpan _stockSpan(ThemeData theme, double available) {
+    final out = available <= 0;
+    final low = !out && available <= 5;
+    return TextSpan(
+      text: out
+          ? tr('Out of stock')
+          : low
+              ? tr('{0} left', [formatQty(available.toString())])
+              : tr('{0} in stock', [formatQty(available.toString())]),
+      style: TextStyle(
+        fontWeight: FontWeight.w600,
+        color: out ? theme.colorScheme.error : (low ? theme.pos.warn : null),
+      ),
+    );
+  }
+
   Future<void> _addToCart(ProductSearchResult r) async {
     setState(() => _addingVariantId = r.variantId);
     final session = context.read<AppSession>();
@@ -256,7 +275,15 @@ class _ProductSearchViewState extends State<ProductSearchView> {
                     return ListTile(
                       key: Key('search-result-${r.variantId}'),
                       title: Text(r.name),
-                      subtitle: Text('${r.sku}${r.categoryName != null ? ' · ${r.categoryName}' : ''}'),
+                      // The SKU and category, then this branch's stock, so a
+                      // cashier sees at once what can be sold.
+                      subtitle: Text.rich(TextSpan(children: [
+                        TextSpan(text: '${r.sku}${r.categoryName != null ? ' · ${r.categoryName}' : ''}'),
+                        if (r.available != null) ...[
+                          const TextSpan(text: ' · '),
+                          _stockSpan(theme, r.available!),
+                        ],
+                      ])),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [

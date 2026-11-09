@@ -28,6 +28,10 @@ type branchSalesSetting struct {
 	// migrations/071: standard | customer | shop; null = the merchant's.
 	PriceBenefit     *string `json:"price_benefit"`
 	EffectiveBenefit string  `json:"effective_price_benefit"`
+	// migrations/082: the branch may sell below zero stock. Branch only
+	// (no merchant default): null = no, as before.
+	AllowNegativeStock *bool `json:"allow_negative_stock"`
+	EffectiveNegative  bool  `json:"effective_allow_negative_stock"`
 }
 
 func validBenefit(s string) bool { return s == "standard" || s == "customer" || s == "shop" }
@@ -47,7 +51,8 @@ func loadSalesSettingsResponse(ctx context.Context, tx pgx.Tx) (salesSettingsRes
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT b.id::text, b.name, bs.open_price_discounts, app_open_price_discountable(b.id),
-		       bs.open_price_first, app_open_price_first(b.id), bs.price_benefit, app_price_benefit(b.id)
+		       bs.open_price_first, app_open_price_first(b.id), bs.price_benefit, app_price_benefit(b.id),
+		       bs.allow_negative_stock, app_allow_negative_stock(b.id)
 		FROM branches b LEFT JOIN branch_sales_settings bs ON bs.branch_id = b.id
 		ORDER BY b.name`)
 	if err != nil {
@@ -58,7 +63,7 @@ func loadSalesSettingsResponse(ctx context.Context, tx pgx.Tx) (salesSettingsRes
 	for rows.Next() {
 		var b branchSalesSetting
 		if err := rows.Scan(&b.BranchID, &b.BranchName, &b.OpenPriceDiscounts, &b.Effective, &b.OpenPriceFirst, &b.EffectiveFirst,
-			&b.PriceBenefit, &b.EffectiveBenefit); err != nil {
+			&b.PriceBenefit, &b.EffectiveBenefit, &b.AllowNegativeStock, &b.EffectiveNegative); err != nil {
 			return resp, err
 		}
 		resp.Branches = append(resp.Branches, b)
@@ -68,8 +73,10 @@ func loadSalesSettingsResponse(ctx context.Context, tx pgx.Tx) (salesSettingsRes
 
 // UpdateBranchSettings: PUT /sales/settings/branches/{id} — sales.settings.
 // {"open_price_discounts": true | false | null, "open_price_first": ...,
-// "price_benefit": "standard" | "customer" | "shop" | null};
-// null = follow the merchant; a field left out keeps what is saved.
+// "price_benefit": "standard" | "customer" | "shop" | null,
+// "allow_negative_stock": true | false | null};
+// null = follow the merchant (allow_negative_stock: no); a field left out
+// keeps what is saved.
 func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -92,8 +99,9 @@ func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	discSet, disc, ok1 := field("open_price_discounts")
 	firstSet, first, ok2 := field("open_price_first")
-	if !ok1 || !ok2 {
-		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "open_price_discounts and open_price_first are true, false or null")
+	negSet, neg, ok3 := field("allow_negative_stock")
+	if !ok1 || !ok2 || !ok3 {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "open_price_discounts, open_price_first and allow_negative_stock are true, false or null")
 		return
 	}
 	var benefit *string
@@ -106,15 +114,16 @@ func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	var resp salesSettingsResponse
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var beforeDisc, beforeFirst *bool
+		var beforeDisc, beforeFirst, beforeNeg *bool
 		var beforeBenefit *string
 		var exists bool
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS (SELECT 1 FROM branches WHERE id::text = $1),
 			       (SELECT open_price_discounts FROM branch_sales_settings WHERE branch_id::text = $1),
 			       (SELECT open_price_first FROM branch_sales_settings WHERE branch_id::text = $1),
-			       (SELECT price_benefit FROM branch_sales_settings WHERE branch_id::text = $1)`, branchID).
-			Scan(&exists, &beforeDisc, &beforeFirst, &beforeBenefit); err != nil {
+			       (SELECT price_benefit FROM branch_sales_settings WHERE branch_id::text = $1),
+			       (SELECT allow_negative_stock FROM branch_sales_settings WHERE branch_id::text = $1)`, branchID).
+			Scan(&exists, &beforeDisc, &beforeFirst, &beforeBenefit, &beforeNeg); err != nil {
 			return err
 		}
 		if !exists {
@@ -129,15 +138,19 @@ func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 		if !benefitSet {
 			benefit = beforeBenefit
 		}
+		if !negSet {
+			neg = beforeNeg
+		}
 		var err error
-		if disc == nil && first == nil && benefit == nil {
+		if disc == nil && first == nil && benefit == nil && neg == nil {
 			_, err = tx.Exec(ctx, `DELETE FROM branch_sales_settings WHERE branch_id::text = $1`, branchID)
 		} else {
 			_, err = tx.Exec(ctx, `
-				INSERT INTO branch_sales_settings (branch_id, merchant_id, open_price_discounts, open_price_first, price_benefit, updated_by)
-				VALUES ($1::uuid, current_setting('app.tenant_id')::uuid, $2, $3, $5, $4)
-				ON CONFLICT (branch_id) DO UPDATE SET open_price_discounts = $2, open_price_first = $3, price_benefit = $5, updated_by = $4, updated_at = now()`,
-				branchID, disc, first, claims.UserID, benefit)
+				INSERT INTO branch_sales_settings (branch_id, merchant_id, open_price_discounts, open_price_first, price_benefit, allow_negative_stock, updated_by)
+				VALUES ($1::uuid, current_setting('app.tenant_id')::uuid, $2, $3, $5, $6, $4)
+				ON CONFLICT (branch_id) DO UPDATE SET open_price_discounts = $2, open_price_first = $3, price_benefit = $5, allow_negative_stock = $6,
+				  updated_by = $4, updated_at = now()`,
+				branchID, disc, first, claims.UserID, benefit, neg)
 		}
 		if err != nil {
 			return err
@@ -146,8 +159,8 @@ func (h *Handler) UpdateBranchSettings(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		return audit.Log(ctx, tx, audit.Entry{EntityType: "branch_sales_settings", EntityID: branchID, Action: "update", PerformedBy: claims.UserID,
-			Before: map[string]any{"open_price_discounts": beforeDisc, "open_price_first": beforeFirst, "price_benefit": beforeBenefit},
-			After:  map[string]any{"open_price_discounts": disc, "open_price_first": first, "price_benefit": benefit}})
+			Before: map[string]any{"open_price_discounts": beforeDisc, "open_price_first": beforeFirst, "price_benefit": beforeBenefit, "allow_negative_stock": beforeNeg},
+			After:  map[string]any{"open_price_discounts": disc, "open_price_first": first, "price_benefit": benefit, "allow_negative_stock": neg}})
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "branch not found")

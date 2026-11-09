@@ -1867,6 +1867,41 @@ export interface SaleSummaryRow {
   payable_total: string;
   payment_methods: string[];
   channel: SaleChannel;
+  /** erp-core-go migrations/082: what is still owed on a credit sale.
+   * payment_status is "" for a cart, a void or a held order. Older
+   * servers leave these out. */
+  credit_amount?: string;
+  credit_paid?: string;
+  pending_amount?: string;
+  payment_status?: PaymentStatus;
+}
+
+export type PaymentStatus = "paid" | "partially_paid" | "unpaid" | "";
+
+/** GET/POST /sales/orders/{id}/credit-payments (migrations/082). */
+export interface CreditPaymentRow {
+  payment_id: string;
+  amount: string;
+  method: string;
+  reference_no: string | null;
+  received_at: string;
+  recorded_by: string;
+  terminal_name: string | null;
+  reversed: boolean;
+}
+
+export interface SaleCreditState {
+  order_id: string;
+  order_number: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  due_date: string | null;
+  credit_amount: string;
+  credit_paid: string;
+  pending_amount: string;
+  payment_status: PaymentStatus;
+  payments: CreditPaymentRow[];
+  payment_id?: string;
 }
 
 export interface SalesSummary {
@@ -1882,6 +1917,9 @@ export interface SalesSummary {
   sgst_total?: string;
   igst_total?: string;
   by_payment_method: { method: string; amount: string; count: number }[];
+  /** migrations/082: still owed on the credit sales in the filter. */
+  pending_total?: string;
+  pending_count?: number;
 }
 
 export interface SaleDetailLine {

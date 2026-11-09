@@ -887,6 +887,18 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 				branchID, res.variantID, -res.quantity, orderID, claims.UserID); err != nil {
 				return err
 			}
+			// A branch that allows negative sales (migrations/082) can take
+			// stock below zero here; that is reviewed like an offline
+			// oversell (migrations/041). Elsewhere the reservation already
+			// guaranteed the stock, so this never fires.
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO stock_review_items (merchant_id, branch_id, variant_id, sales_order_id, pos_terminal_id, quantity, on_hand_after)
+				SELECT current_setting('app.tenant_id')::uuid, sl.branch_id, sl.variant_id, so.id, so.pos_terminal_id, $3, sl.on_hand
+				FROM stock_levels sl, sales_orders so
+				WHERE sl.branch_id = $1 AND sl.variant_id = $2 AND so.id = $4 AND sl.on_hand < 0`,
+				branchID, res.variantID, res.quantity, orderID); err != nil {
+				return err
+			}
 		}
 
 		if _, err := tx.Exec(ctx, `UPDATE stock_reservations SET status = 'consumed' WHERE sales_order_id = $1 AND status = 'active'`, orderID); err != nil {

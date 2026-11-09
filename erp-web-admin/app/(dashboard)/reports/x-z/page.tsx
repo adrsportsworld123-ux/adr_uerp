@@ -52,7 +52,7 @@ type ShiftReport = {
   return_count: number;
   refund_total: string;
   refunds_by_method: Record<string, string>;
-  cash: { opening_float: string; cash_sales: string; cash_refunds: string; float_in: string; drops: string; paid_in: string; paid_out: string; expected: string };
+  cash: { opening_float: string; cash_sales: string; cash_refunds: string; float_in: string; drops: string; paid_in: string; paid_out: string; credit_collected?: string; expected: string };
   movements: Movement[];
   close?: { counted_total: string; variance: string; reason: string; approved_by: string | null };
 };
@@ -108,7 +108,7 @@ type DayReport = {
   refunds_by_method: Record<string, string>;
   tax_rates: { rate: string; taxable_value: string; tax: string }[];
   cashiers: { cashier: string; orders: number; net_sales: string }[];
-  cash: { cash_sales: string; cash_refunds: string; float_in: string; drops: string; paid_in: string; paid_out: string; net_cash: string; counted: string; variance: string };
+  cash: { cash_sales: string; cash_refunds: string; float_in: string; drops: string; paid_in: string; paid_out: string; credit_collected?: string; net_cash: string; counted: string; variance: string };
   shifts: DayShift[];
   open_shifts: number;
   changed_since_close?: { order_count: number; net_sales: string; refund_total: string };
@@ -377,6 +377,7 @@ function ShiftView({ shift, onBack, onRefresh }: { shift: Shift; onBack: () => v
               <Row label="Drops" value={`−${rupees(r.cash.drops)}`} />
               <Row label="Paid in" value={rupees(r.cash.paid_in)} />
               <Row label="Paid out" value={`−${rupees(r.cash.paid_out)}`} />
+              {Number(r.cash.credit_collected ?? 0) !== 0 && <Row label="Credit collected" value={rupees(r.cash.credit_collected!)} />}
               <Row label="Expected in drawer" value={rupees(r.cash.expected)} strong />
               {r.close && (
                 <>
@@ -669,6 +670,7 @@ function DayView({ r }: { r: DayReport }) {
           <Row label="Drops" value={`−${rupees(r.cash.drops)}`} />
           <Row label="Paid in" value={rupees(r.cash.paid_in)} />
           <Row label="Paid out" value={`−${rupees(r.cash.paid_out)}`} />
+          {Number(r.cash.credit_collected ?? 0) !== 0 && <Row label="Credit collected" value={rupees(r.cash.credit_collected!)} />}
           <Row label="Net cash" value={rupees(r.cash.net_cash)} strong />
           <Row label="Counted (closed shifts)" value={rupees(r.cash.counted)} />
           <Row label="Variance" value={rupees(r.cash.variance)} strong />

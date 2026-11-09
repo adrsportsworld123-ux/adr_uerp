@@ -97,7 +97,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `PRODUCT_NOT_FOUND` | 404 | `GET /products/barcode/{code}` | No barcode row matches |
 | `NOT_FOUND` | 404 | sales endpoints, `/dev/set-password` | Order, line, or (merchant_code, email) pair doesn't resolve |
 | `ORDER_NOT_EDITABLE` | 409 | add-line, delete-line, discounts, checkout | Order isn't in `cart` status anymore (already finalized/voided) |
-| `STOCK_UNAVAILABLE` | 409 | add-line, checkout, `POST /quotations/{id}/convert` | Requested quantity exceeds what's available, or stock changed since the item was added (surfaced, never silently oversold) |
+| `STOCK_UNAVAILABLE` | 409 | add-line, checkout, `POST /quotations/{id}/convert` | Requested quantity exceeds what's available, or stock changed since the item was added (surfaced, never silently oversold). A branch that allows negative sales (§3.85) doesn't refuse |
 | `PAYMENT_MISMATCH` | 400 | checkout | Sum of `payments[].amount` doesn't cover `grand_total` |
 | `DISCOUNT_NOT_AUTHORIZED` | 403 | `POST /sales/orders/{id}/discounts` | Requested discount % exceeds what the presented `authorized_by`/`authorized_pin` permits for their role tier |
 | `DEVICE_MISMATCH` | 403 | `POST /auth/pin-login` | Terminal is already device-bound and the presented `device_fingerprint` doesn't match |
@@ -253,7 +253,8 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `BANK_ACCOUNT_INACTIVE` | 409 | bill / receivable payments, cheques, loans, statement import (§3.73) | The named bank account is switched off |
 | `INVALID_STATE` | 409 | `/cheques/*`, `/employee-loans/*` (§3.73) | The cheque or loan is not in a state the action can happen from (a cleared cheque bounced, a used leaf, a post-dated cheque deposited early, more than a loan's balance) |
 | `PAYROLL_RECOMPUTE_NEEDED` | 409 | `POST /payroll/runs/{id}/finalize` (§3.73) | A loan instalment a payslip deducts was repaid by hand since the run was computed: run the period again, then finalize |
-| `PAYMENT_EXCEEDS_BALANCE` | 409 | `POST /customers/{id}/payments`, `POST /cheques/received/{id}/deposit` | More than the credit invoice still owes |
+| `PAYMENT_EXCEEDS_BALANCE` | 409 | `POST /customers/{id}/payments`, `POST /cheques/received/{id}/deposit`, `POST /sales/orders/{id}/credit-payments` (§3.85) | More than the credit invoice still owes |
+| `NOTHING_DUE` | 409 | `POST /sales/orders/{id}/credit-payments` (§3.85) | The sale has no credit left to pay (a cash sale, or already paid) |
 | `MARKUP_RULE_IN_USE` | 409 | `PUT/DELETE /pricing/markup-rules/{id}` (§3.77) | The rule has priced sale lines: switch it off and make a new one |
 | `PARTNER_EXISTS` | 409 | `POST/PATCH /partners` (§3.77) | Another partner has that name |
 | `PARTNER_RETIRED` | 409 | partner pay-in/out, expenses and bill payments paid by a partner (§3.77) | The partner has retired; their history stays, no new entries |
@@ -2901,6 +2902,17 @@ Migration 081. `internal/sales` (`mrpDiscountSQL`, `savingsFor`, `showMRPDiscoun
 - **Offline carts** have no MRP until synced (the local line has none); a synced line gets it from the trigger.
 
 Verified: `mrp_flow.py` 29 (inclusive, at MRP, GST-exclusive and no-MRP lines; the snapshot; the switch, kept by an older save; a manual discount in the savings; receipt JSON, sale detail, both PDFs, the ESC/POS text with the switch on and off; a synced line); Go `TestReceiptMRPDiscountAndMobile`, `TestSaleReceiptMRPDiscount`; Flutter `test/mrp_savings_test.dart`.
+
+### 3.85 Credit sale collection, payment status on the sales list, negative sales (2026-11-08)
+
+Migration 082. `internal/sales/credit_collection.go`, `history.go` (`pendingSQL`, `paymentStatusSQL`), `reservation.go` (`reserveStockAt`), `branch_sales.go`; `internal/accounting/cash_flow.go` (`CreditCollected`); `internal/customers/credit.go` (`ReceivablePayment.POSTerminalID` / `IdempotencyKey`).
+
+- **Collect from the sale:** `GET /sales/orders/{id}/credit-payments` → `{order_id, order_number, customer_id, customer_name, due_date, credit_amount, credit_paid, pending_amount, payment_status, payments: [{payment_id, amount, method, reference_no, received_at, recorded_by, terminal_name, reversed}]}`. `POST` the same path `{amount, method: cash|card|upi|bank_transfer|cheque, reference_no?, bank_account_id?, pos_terminal_id?, idempotency_key?}` → the same shape plus `payment_id`. It goes through `customers.ApplyReceivablePayment`, so the ledger posting is the customer page's (Dr cash/bank/clearing, Cr 1100 the customer; `receivable_payment`). Only a finalized or partly refunded sale with a customer and something owed: else `409 ORDER_NOT_FINALIZED` / `NOTHING_DUE`; more than owed `409 PAYMENT_EXCEEDS_BALANCE`. A repeated `idempotency_key` answers with the sale as it stands (unique per merchant). Not permission-gated, as `POST /customers/{id}/payments` isn't.
+- **The drawer:** a payment naming `pos_terminal_id` is that till's. Its cash counts in `ComputeCashFlow` (`CreditCollected`, in `Net()`), so the shift's expected cash, the daily count and the day report include it, shown as "Credit collected" (the printed X/Z prints the line only when it is not zero). Back-office payments name no till and stay out of the drawer, as before; every existing payment has no till, so no past figure changes.
+- **Sales list** (`GET /sales/orders`, additive): `credit_amount`, `credit_paid`, `pending_amount` (owed on a completed sale, else 0) and `payment_status` (`paid` | `partially_paid` | `unpaid`; `""` for a cart, a void, a held order). Filter `payment_status=paid|partially_paid|unpaid|pending` (pending = the two owing ones). `GET /sales/summary` adds `pending_total` and `pending_count` for the same filter.
+- **Negative sales:** `branch_sales_settings.allow_negative_stock` (`PUT /sales/settings/branches/{id}` `{"allow_negative_stock": true | false | null}`; a field left out keeps what is saved; `GET /sales/settings` lists it and `effective_allow_negative_stock` per branch). Branch only, default no: the till refuses as before. Allowed: `reserveStock` reserves whatever is asked (adding a zero stock row for an item never stocked there), checkout takes `on_hand` below zero, and each line left below zero opens a `stock_review_items` row, the queue an offline oversell uses (§3.5). Applies to add-line, quantity changes, a recalled held order and quotation conversion. A manual reservation (`reserveStockAt(..., false)`) and a batch-tracked item (FIFO allocation needs real unexpired batches) still need real stock.
+
+Verified: `credit_neg_flow.py` 34 (list status / pending / filters / summary; partial cash at the till with a replayed key; over-payment, credit-as-method, back-office UPI, nothing-due refusals; the journal; the customer's open invoices; the shift's drawer; the switch off / on / back; -2 and a never-stocked item; the review item; manual reservation still refused; the audit row); regressions `mrp_flow.py`, `outstanding_flow.py`, `round9_flow.py`, `approvals_flow.py`. Flutter `test/credit_collection_test.dart`.
 
 ## 4. What Phase 0 concretely delivers against this design
 

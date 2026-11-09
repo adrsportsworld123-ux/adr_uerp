@@ -350,7 +350,8 @@ class AppSession extends ChangeNotifier {
       return [];
     }
     try {
-      return await api.searchProducts(query: query, categoryId: categoryId);
+      // The branch, so each hit carries this branch's stock.
+      return await api.searchProducts(query: query, categoryId: categoryId, branchId: branchId);
     } on ApiException catch (e) {
       _lastError = e.code == 'SEARCH_UNAVAILABLE' ? tr('Product search is temporarily unavailable') : e.message;
       notifyListeners();
@@ -376,7 +377,7 @@ class AppSession extends ChangeNotifier {
       try {
         final results = await api.searchProducts(query: query, categoryId: categoryId, branchId: branchId);
         return results
-            .map((r) => GridProduct(lookup: r.toProductLookup(), categoryName: r.categoryName, available: null, openPrice: r.openPrice))
+            .map((r) => GridProduct(lookup: r.toProductLookup(), categoryName: r.categoryName, available: r.available, openPrice: r.openPrice))
             .toList();
       } on ApiException catch (e) {
         if (e.code != 'SEARCH_UNAVAILABLE') {
@@ -995,6 +996,7 @@ class AppSession extends ChangeNotifier {
     String? query,
     String? from,
     String? to,
+    String? paymentStatus,
     int page = 1,
   }) =>
       _live(() => api.listSalesOrders(
@@ -1004,8 +1006,17 @@ class AppSession extends ChangeNotifier {
             query: query,
             from: from,
             to: to,
+            paymentStatus: paymentStatus,
             page: page,
           ));
+
+  /// A payment against an earlier credit sale, taken at this till
+  /// (erp-core-go migrations/082). Online only. The caller keeps
+  /// [idempotencyKey] for its dialog, so a retry after a timeout pays once.
+  Future<CreditPaymentResult> recordCreditPayment(String orderId,
+          {required double amount, required String method, String reference = '', required String idempotencyKey}) =>
+      _live(() => api.recordCreditPayment(
+          orderId: orderId, amount: amount, method: method, reference: reference, posTerminalId: posTerminalId, idempotencyKey: idempotencyKey));
 
   Future<SalesSummaryData> salesSummary({bool thisTerminalOnly = true, String? from, String? to}) =>
       _live(() => api.salesSummary(terminalId: thisTerminalOnly ? posTerminalId : null, branchId: branchId, from: from, to: to));
