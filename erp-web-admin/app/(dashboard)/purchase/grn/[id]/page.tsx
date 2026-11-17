@@ -20,11 +20,13 @@ import { DeleteDocumentButton } from "@/components/purchase/delete-document-dial
 import { rupees } from "@/lib/format";
 import { currencySymbol } from "@/lib/currency";
 import { PageHeader } from "@/components/data/page-header";
-interface BarcodeLookup {
+import { ScanChoice, ScanResult, optionText } from "@/components/catalog/mrp-lots";
+interface BarcodeLookup extends ScanResult {
   product_id: string;
   product_name: string;
   variant_id: string;
   sku: string;
+  mrp?: string;
   // A pack barcode (erp-core-go migrations/076): what one scan holds, in the product's unit.
   unit?: { symbol: string } | null;
   pack_qty?: string;
@@ -46,6 +48,11 @@ export default function GRNDetailPage() {
   // is left blank, so the form doesn't need to know that flag up front.
   const [batchNo, setBatchNo] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
+  // erp-core-go migrations/083: the MRP printed on what arrived. A different
+  // one is received into that MRP's lot when the GRN is completed.
+  const [mrp, setMrp] = useState("");
+  const [lotPrice, setLotPrice] = useState("");
+  const [choosing, setChoosing] = useState<BarcodeLookup | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -64,15 +71,30 @@ export default function GRNDetailPage() {
     e.preventDefault();
     setLookupError(null);
     setResolved(null);
+    setChoosing(null);
     try {
-      const product = await api.get<BarcodeLookup>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}`);
-      setResolved(product);
+      // purpose=receive: a shared printed code offers its colours/sizes, never MRP lots.
+      const product = await api.get<BarcodeLookup>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}?purpose=receive`);
+      if (product.choice_required && product.options?.length) {
+        setChoosing(product);
+        return;
+      }
+      pick(product);
       // A pack (a bag of 25 kg, a box of 12) starts the quantity at its contents.
       if (product.pack_qty && Number(product.pack_qty) !== 1 && !quantity) setQuantity(String(Number(product.pack_qty)));
     } catch (e) {
       setLookupError(e instanceof ApiError ? e.message : "Could not reach the server");
     }
   }
+
+  function pick(product: BarcodeLookup) {
+    setResolved(product);
+    setMrp(product.mrp ? String(Number(product.mrp)) : "");
+    setLotPrice("");
+  }
+
+  const newMrp = resolved?.mrp != null && mrp !== "" && Math.abs(Number(mrp) - Number(resolved.mrp)) >= 0.005;
+  const lotPriceProblem = newMrp && lotPrice !== "" && (!(Number(lotPrice) > 0) || Number(lotPrice) > Number(mrp));
 
   async function handleAddLine(e: React.FormEvent) {
     e.preventDefault();
@@ -85,9 +107,12 @@ export default function GRNDetailPage() {
         unit_cost: Number(unitCost),
         batch_no: batchNo || undefined,
         expiry_date: expiryDate || undefined,
+        ...(newMrp ? { mrp: Number(mrp), ...(lotPrice ? { selling_price: Number(lotPrice) } : {}) } : {}),
       });
       setBarcode("");
       setResolved(null);
+      setMrp("");
+      setLotPrice("");
       setQuantity("");
       setUnitCost("");
       setBatchNo("");
@@ -192,6 +217,7 @@ export default function GRNDetailPage() {
                   <TableHead>Landed Unit Cost</TableHead>
                   <TableHead>Line Total</TableHead>
                   <TableHead>Batch / Expiry</TableHead>
+                  <TableHead>MRP</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -205,6 +231,12 @@ export default function GRNDetailPage() {
                     <TableCell>{l.landed_unit_cost ? `${rupees(l.landed_unit_cost)}` : "—"}</TableCell>
                     <TableCell>{rupees(l.line_total)}</TableCell>
                     <TableCell>{l.batch_no ? `${l.batch_no}${l.expiry_date ? ` (exp. ${l.expiry_date})` : ""}` : "—"}</TableCell>
+                    <TableCell data-testid={`grn-line-mrp-${l.sku}`}>
+                      {rupees(l.mrp ?? l.variant_mrp ?? "0")}
+                      {isDraft && l.mrp && l.variant_mrp && Math.abs(Number(l.mrp) - Number(l.variant_mrp)) >= 0.005 && (
+                        <span className="block text-xs text-muted-foreground">new MRP · own lot on completion</span>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -265,11 +297,22 @@ export default function GRNDetailPage() {
                 onChange={(o) => {
                   setLookupError(null);
                   setBarcode("");
-                  setResolved({ product_id: o.productId, product_name: o.productName, variant_id: o.variantId, sku: o.sku });
+                  setChoosing(null);
+                  pick({ product_id: o.productId, product_name: o.productName, variant_id: o.variantId, sku: o.sku, mrp: o.mrp });
                 }}
               />
             </div>
             {lookupError && <p className="text-sm text-destructive">{lookupError}</p>}
+            {choosing && (
+              <ScanChoice
+                result={choosing}
+                onCancel={() => setChoosing(null)}
+                onPick={(o) => {
+                  setChoosing(null);
+                  pick({ ...choosing, variant_id: o.variant_id, sku: o.sku, mrp: o.mrp, product_name: `${choosing.product_name} · ${optionText(o)}` });
+                }}
+              />
+            )}
             {resolved && (
               <form onSubmit={handleAddLine} className="flex flex-col gap-3 border rounded-md p-3 bg-muted/50">
                 <p className="text-sm font-medium">
@@ -298,7 +341,34 @@ export default function GRNDetailPage() {
                     <Input id="expiryDate" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
                   </div>
                 </div>
-                <Button type="submit" disabled={busy}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="grnMrp">MRP printed on the pack ({currencySymbol()})</Label>
+                    <Input id="grnMrp" type="number" min="0.01" step="0.01" value={mrp} onChange={(e) => setMrp(e.target.value)} />
+                  </div>
+                  {newMrp && (
+                    <div className="flex flex-col gap-2">
+                      <Label htmlFor="grnLotPrice">Sell the new MRP at ({currencySymbol()})</Label>
+                      <Input
+                        id="grnLotPrice"
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={lotPrice}
+                        placeholder="the item's price"
+                        onChange={(e) => setLotPrice(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+                {newMrp && (
+                  <p className="text-xs text-muted-foreground" data-testid="grn-new-mrp-note">
+                    Not the item&apos;s MRP ({rupees(resolved.mrp ?? "0")}). On completion this stock goes into its own MRP lot at {rupees(mrp)}, so the old and new
+                    stock sell side by side under the same barcode. A lot that already exists keeps its price.
+                  </p>
+                )}
+                {lotPriceProblem && <p className="text-sm text-destructive">The selling price must be above 0 and not above the MRP</p>}
+                <Button type="submit" disabled={busy || lotPriceProblem}>
                   Add line
                 </Button>
               </form>

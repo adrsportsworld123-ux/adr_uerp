@@ -55,17 +55,21 @@ type priceRule struct {
 	ProductName  *string `json:"product_name"`
 	CategoryID   *string `json:"category_id"`
 	CategoryName *string `json:"category_name"`
-	BranchID     *string `json:"branch_id"`
-	RuleType     string  `json:"rule_type"`
-	Value        string  `json:"value"`
-	Priority     int     `json:"priority"`
-	StartsAt     *string `json:"starts_at"`
-	EndsAt       *string `json:"ends_at"`
-	DaysOfWeek   []int16 `json:"days_of_week"`
-	TimeStart    *string `json:"time_start"`
-	TimeEnd      *string `json:"time_end"`
-	Active       bool    `json:"active"`
-	CreatedAt    string  `json:"created_at"`
+	// migrations/084: a markdown plan's step is scoped to a collection.
+	CollectionID   *string `json:"collection_id"`
+	CollectionName *string `json:"collection_name"`
+	MarkdownPlanID *string `json:"markdown_plan_id"`
+	BranchID       *string `json:"branch_id"`
+	RuleType       string  `json:"rule_type"`
+	Value          string  `json:"value"`
+	Priority       int     `json:"priority"`
+	StartsAt       *string `json:"starts_at"`
+	EndsAt         *string `json:"ends_at"`
+	DaysOfWeek     []int16 `json:"days_of_week"`
+	TimeStart      *string `json:"time_start"`
+	TimeEnd        *string `json:"time_end"`
+	Active         bool    `json:"active"`
+	CreatedAt      string  `json:"created_at"`
 	// TimesUsed counts the sale lines this rule priced. A used rule can be
 	// deactivated but not edited or deleted: its terms explain those sales.
 	TimesUsed int `json:"times_used"`
@@ -75,16 +79,32 @@ const priceRuleSelect = `
 	SELECT r.id, r.name, r.variant_id::text, pv.sku, p.name, r.category_id::text, c.name, r.branch_id::text,
 	       r.rule_type, r.value::text, r.priority, r.starts_at::text, r.ends_at::text, r.days_of_week,
 	       to_char(r.time_start, 'HH24:MI'), to_char(r.time_end, 'HH24:MI'), r.active, r.created_at::text,
-	       (SELECT count(*) FROM sales_order_lines l WHERE l.price_rule_id = r.id)::int
+	       (SELECT count(*) FROM sales_order_lines l WHERE l.price_rule_id = r.id)::int,
+	       r.collection_id::text, col.name, r.markdown_plan_id::text
 	FROM price_rules r
 	LEFT JOIN product_variants pv ON pv.id = r.variant_id
 	LEFT JOIN products p ON p.id = pv.product_id
-	LEFT JOIN categories c ON c.id = r.category_id`
+	LEFT JOIN categories c ON c.id = r.category_id
+	LEFT JOIN collections col ON col.id = r.collection_id`
+
+// errMarkdownStep: a markdown plan's steps change with their plan.
+var errMarkdownStep = errors.New("this rule is a step of a markdown plan — change or cancel the plan on its collection instead")
+
+func refuseMarkdownStep(ctx context.Context, tx pgx.Tx, id string) error {
+	var step bool
+	if err := tx.QueryRow(ctx, `SELECT markdown_plan_id IS NOT NULL FROM price_rules WHERE id::text = $1`, id).Scan(&step); err != nil {
+		return err
+	}
+	if step {
+		return errMarkdownStep
+	}
+	return nil
+}
 
 func scanPriceRule(row pgx.Row, pr *priceRule) error {
 	return row.Scan(&pr.PriceRuleID, &pr.Name, &pr.VariantID, &pr.SKU, &pr.ProductName, &pr.CategoryID, &pr.CategoryName,
 		&pr.BranchID, &pr.RuleType, &pr.Value, &pr.Priority, &pr.StartsAt, &pr.EndsAt, &pr.DaysOfWeek,
-		&pr.TimeStart, &pr.TimeEnd, &pr.Active, &pr.CreatedAt, &pr.TimesUsed)
+		&pr.TimeStart, &pr.TimeEnd, &pr.Active, &pr.CreatedAt, &pr.TimesUsed, &pr.CollectionID, &pr.CollectionName, &pr.MarkdownPlanID)
 }
 
 // validatePriceRule returns a client-facing message, or "" when valid —
@@ -293,9 +313,14 @@ func (h *Handler) DeletePriceRule(w http.ResponseWriter, r *http.Request) {
 		if used {
 			return errPriceRuleInUse
 		}
+		if err := refuseMarkdownStep(ctx, tx, id); err != nil {
+			return err
+		}
 		return softdelete.Delete(ctx, tx, "price_rules", id, claims.UserID, "")
 	})
 	switch {
+	case errors.Is(err, errMarkdownStep):
+		httpx.Error(w, http.StatusConflict, "MARKDOWN_RULE", errMarkdownStep.Error())
 	case errors.Is(err, errPriceRuleInUse):
 		httpx.Error(w, http.StatusConflict, "PRICE_RULE_IN_USE", "this rule has priced real sales — deactivate it instead of deleting it")
 	case errors.Is(err, pgx.ErrNoRows):
@@ -437,6 +462,9 @@ func (h *Handler) UpdatePriceRule(w http.ResponseWriter, r *http.Request) {
 		if used {
 			return errPriceRuleInUse
 		}
+		if err := refuseMarkdownStep(ctx, tx, id); err != nil {
+			return err
+		}
 		var err error
 		if belowCost, err = ruleBelowCost(ctx, tx, req); err != nil {
 			return err
@@ -462,6 +490,8 @@ func (h *Handler) UpdatePriceRule(w http.ResponseWriter, r *http.Request) {
 	})
 
 	switch {
+	case errors.Is(err, errMarkdownStep):
+		httpx.Error(w, http.StatusConflict, "MARKDOWN_RULE", errMarkdownStep.Error())
 	case errors.Is(err, errPriceRuleInUse):
 		httpx.Error(w, http.StatusConflict, "PRICE_RULE_IN_USE", "this rule has priced real sales — deactivate it and create a new rule instead")
 	case errors.Is(err, errNegativeMargin):

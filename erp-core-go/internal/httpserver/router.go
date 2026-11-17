@@ -301,9 +301,16 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Post("/pos-terminals/{id}/reset-device", terms.ResetDevice)
 
 			protected.Get("/products/barcode/{code}", barcode.ServeHTTP)
+			// migrations/084: the weighing-scale label formats a scan reads.
+			protected.Get("/settings/scale-barcodes", barcode.GetScaleSettings)
+			protected.With(authn.RequirePermission(database, "catalog.manage")).
+				Put("/settings/scale-barcodes", barcode.PutScaleSettings)
 			protected.Post("/products/variants/{id}/barcodes", barcodeAssign.AssignBarcode)
 			protected.With(authn.RequirePermission(database, "pricing.manage")).
 				Put("/products/variants/{id}/original-barcode", barcodeAssign.SetOriginalBarcode)
+			// migrations/083: a lot for a new MRP of the same item (§3.86).
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/products/variants/{id}/mrp-lots", productList.CreateMRPLot)
 			// Units of measure and barcode packs (§3.79, migrations/076).
 			protected.Get("/units", unitH.ListUnits)
 			protected.With(authn.RequirePermission(database, "units.manage")).
@@ -314,6 +321,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 				Put("/products/variants/{id}/barcodes/{code}/pack", unitH.SetBarcodePack)
 			protected.Get("/products/variants/{id}/label", label.PrintLabel)
 			// Phase 14 label studio: any size and fields, ZPL / TSPL / ESC/POS.
+			// §3.88: the variants a bulk label job starts from, with stock.
+			protected.Get("/labels/candidates", label.LabelCandidates)
+			protected.Post("/labels/generate-barcodes", label.GenerateMissingBarcodes)
 			protected.Post("/labels/preview", label.PreviewLabels)
 			protected.Post("/labels/print", label.PrintLabels)
 			protected.Get("/products", productList.ListProducts)
@@ -354,6 +364,12 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Delete("/tax-slabs/{id}", taxonomy.DeleteTaxSlab)
 			protected.Get("/collections", taxonomy.ListCollections)
+			// migrations/084: a collection's dated markdown steps (§3.87).
+			protected.Get("/collections/{id}/markdown-plans", prc.ListMarkdownPlans)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/collections/{id}/markdown-plans", prc.CreateMarkdownPlan)
+			protected.With(authn.RequirePermission(database, "pricing.manage")).
+				Post("/markdown-plans/{id}/cancel", prc.CancelMarkdownPlan)
 			protected.With(authn.RequirePermission(database, "catalog.manage")).
 				Post("/collections", taxonomy.CreateCollection)
 
@@ -493,6 +509,9 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/reports/consolidated-stock", rpt.ConsolidatedStock)
 			protected.With(authn.RequirePermission(database, "audit.view")).
 				Get("/reports/schedule-drug-sales", rpt.GetScheduleDrugSales)
+			// migrations/084: the Schedule H1 register (list, CSV, PDF).
+			protected.With(authn.RequirePermission(database, "audit.view")).
+				Get("/reports/schedule-register", rpt.GetScheduleRegister)
 
 			protected.Post("/sync/push", syncH.Push)
 			protected.Get("/sync/pull", syncH.Pull)

@@ -36,6 +36,9 @@ const maxLabelCopies = 100
 // that isn't batch-tracked simply prints none. An unknown template is now
 // a 400 instead of silently printing "standard"; an empty one still means
 // "standard".
+//
+// migrations/085: price=1|0 prints the selling price or not; omitted =
+// the branch's print setting (label_show_price), true without a branch.
 func (h *LabelHandler) PrintLabel(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
 	if !ok {
@@ -62,6 +65,11 @@ func (h *LabelHandler) PrintLabel(w http.ResponseWriter, r *http.Request) {
 		copies = n
 	}
 	branchID, batchID := q.Get("branch_id"), q.Get("batch_id")
+	priceParam := q.Get("price")
+	if priceParam != "" && priceParam != "1" && priceParam != "0" {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "price must be 1 or 0")
+		return
+	}
 
 	var data printing.LabelData
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -69,16 +77,21 @@ func (h *LabelHandler) PrintLabel(w http.ResponseWriter, r *http.Request) {
 			SELECT p.name, pv.sku, pv.mrp::text, pv.selling_price::text, COALESCE(b.code, ''), COALESCE(b.symbology, '')
 			FROM product_variants pv
 			JOIN products p ON p.id = pv.product_id
-			LEFT JOIN barcodes b ON b.variant_id = pv.id AND b.is_primary = true
+			LEFT JOIN barcodes b ON b.variant_id = COALESCE(pv.mrp_parent_id, pv.id) AND b.is_primary = true -- an MRP lot prints its parent's code (migrations/083)
 			WHERE pv.id = $1`, variantID).
 			Scan(&data.ProductName, &data.SKU, &data.MRP, &data.SellingPrice, &data.BarcodeCode, &data.Symbology); err != nil {
 			return err
 		}
+		show, err := labelShowsPrice(ctx, tx, priceParam, branchID)
+		if err != nil {
+			return err
+		}
+		data.HidePrice = !show
 		if template != "detailed" || (batchID == "" && branchID == "") {
 			return nil
 		}
 		var expiry *string
-		err := tx.QueryRow(ctx, `
+		err = tx.QueryRow(ctx, `
 			SELECT batch_no, expiry_date::text FROM stock_batches
 			WHERE variant_id = $1
 			  AND (($2 <> '' AND id::text = $2) OR ($2 = '' AND branch_id::text = $3 AND quantity_remaining > 0
@@ -117,3 +130,20 @@ func (h *LabelHandler) PrintLabel(w http.ResponseWriter, r *http.Request) {
 }
 
 var errBatchNotFound = errors.New("batch not found")
+
+// labelShowsPrice: whether a label prints the selling price — "1"/"0"
+// when the caller says, else the branch's print setting (migrations/085),
+// else yes.
+func labelShowsPrice(ctx context.Context, tx pgx.Tx, param, branchID string) (bool, error) {
+	switch {
+	case param == "1":
+		return true, nil
+	case param == "0":
+		return false, nil
+	case branchID == "":
+		return true, nil
+	}
+	var show bool
+	err := tx.QueryRow(ctx, `SELECT app_label_show_price($1::uuid)`, branchID).Scan(&show)
+	return show, err
+}

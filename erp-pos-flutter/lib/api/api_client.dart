@@ -111,6 +111,14 @@ class ProductLookup {
   final String? unitSymbol;
   final int unitDecimals;
 
+  /// erp-core-go migrations/083: one printed code on several colours of a
+  /// product, or one item in several MRP lots. The fields above are the
+  /// option to use unless [choiceRequired]: then the cashier picks from
+  /// [options] (every colour; or the MRP lots in stock when two or more
+  /// are). Empty for an ordinary code.
+  final List<ScanOption> options;
+  final bool choiceRequired;
+
   ProductLookup({
     required this.productId,
     required this.productName,
@@ -123,7 +131,25 @@ class ProductLookup {
     this.packQty = 1,
     this.unitSymbol,
     this.unitDecimals = 3,
+    this.options = const [],
+    this.choiceRequired = false,
   });
+
+  /// This lookup as the option the cashier picked: same product, tax, unit
+  /// and pack; the option's variant, SKU and prices.
+  ProductLookup withOption(ScanOption o) => ProductLookup(
+        productId: productId,
+        productName: o.label.isEmpty ? productName : '$productName (${o.label})',
+        variantId: o.variantId,
+        sku: o.sku,
+        sellingPrice: o.sellingPrice,
+        mrp: o.mrp,
+        openPrice: openPrice,
+        posColor: posColor,
+        packQty: packQty,
+        unitSymbol: unitSymbol,
+        unitDecimals: unitDecimals,
+      );
 
   factory ProductLookup.fromJson(Map<String, dynamic> json) {
     final unit = json['unit'] as Map<String, dynamic>?;
@@ -139,8 +165,66 @@ class ProductLookup {
       packQty: double.tryParse(json['pack_qty'] as String? ?? '') ?? 1,
       unitSymbol: unit?['symbol'] as String?,
       unitDecimals: unit?['decimals'] as int? ?? 3,
+      options: [for (final o in (json['options'] as List<dynamic>? ?? const [])) ScanOption.fromJson(o as Map<String, dynamic>)],
+      choiceRequired: json['choice_required'] as bool? ?? false,
     );
   }
+}
+
+/// One variant a scanned code may mean (erp-core-go migrations/083).
+class ScanOption {
+  final String variantId;
+  final String sku;
+
+  /// The variant's attribute values ("Red · L"); '' for a product with one variant.
+  final String label;
+  final String mrp;
+  final String sellingPrice;
+
+  /// The variant this is an MRP lot of; null for the variant itself.
+  final String? mrpLotOf;
+
+  /// What this branch can sell now; null when unknown.
+  final double? available;
+
+  const ScanOption({
+    required this.variantId,
+    required this.sku,
+    this.label = '',
+    required this.mrp,
+    required this.sellingPrice,
+    this.mrpLotOf,
+    this.available,
+  });
+
+  /// The variant this option is (or is a lot of): options with different
+  /// bases are different items (colours), not MRP lots of one.
+  String get base => mrpLotOf ?? variantId;
+
+  factory ScanOption.fromJson(Map<String, dynamic> j) => ScanOption(
+        variantId: j['variant_id'] as String,
+        sku: j['sku'] as String? ?? '',
+        label: j['label'] as String? ?? '',
+        mrp: j['mrp'] as String? ?? '0.00',
+        sellingPrice: j['selling_price'] as String? ?? '0.00',
+        mrpLotOf: j['mrp_lot_of'] as String?,
+        available: double.tryParse(j['available']?.toString() ?? ''),
+      );
+}
+
+/// The server's choice rule (internal/catalog/scan_options.go), for a scan
+/// resolved from the offline cache: different items on one code always
+/// ask; MRP lots of one item take the one in stock, ask when two or more
+/// are, and take the oldest when none is. [options] are in shelf order.
+({ScanOption chosen, List<ScanOption> options, bool choiceRequired}) resolveScanOptions(List<ScanOption> options) {
+  if (options.length <= 1) return (chosen: options.first, options: options, choiceRequired: false);
+  if (options.map((o) => o.base).toSet().length > 1) return (chosen: options.first, options: options, choiceRequired: true);
+  final inStock = [for (final o in options) if ((o.available ?? 0) > 0) o];
+  return switch (inStock.length) {
+    0 => (chosen: options.first, options: options, choiceRequired: false),
+    1 => (chosen: inStock.first, options: options, choiceRequired: false),
+    _ => (chosen: inStock.first, options: inStock, choiceRequired: true),
+  };
 }
 
 /// " kg" after a quantity; none for pieces (or an unknown unit).
@@ -1925,9 +2009,12 @@ class ApiClient {
     return PairingResult.fromJson(_decode(resp));
   }
 
-  Future<ProductLookup> lookupBarcode(String code) async {
+  /// [branchId]: the till's branch, so an MRP lot in stock there can be
+  /// picked for it (erp-core-go migrations/083).
+  Future<ProductLookup> lookupBarcode(String code, {String? branchId}) async {
     final resp = await _http.get(
-      Uri.parse('$baseUrl/api/v1/products/barcode/$code'),
+      Uri.parse('$baseUrl/api/v1/products/barcode/$code').replace(
+          queryParameters: branchId == null || branchId.isEmpty ? null : {'branch_id': branchId}),
       headers: _authHeaders,
     );
     return ProductLookup.fromJson(_decode(resp));

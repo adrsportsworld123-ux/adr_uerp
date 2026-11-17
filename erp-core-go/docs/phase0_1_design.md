@@ -105,7 +105,7 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `FORBIDDEN` | 403 | `POST /inventory/adjustments` | Caller's role isn't Branch Manager or Merchant Admin |
 | `NEGATIVE_MARGIN` | 409 | `PATCH /pricing/variants/{id}`, `POST /pricing/scheduled-changes`, `PUT /pricing/scheduled-changes/{id}`, `POST /pricing/rules`, `PUT /pricing/rules/{id}` | New price sells below cost and `override` wasn't set — compared on the **net (pre-tax)** price for a GST-inclusive product (§3.29). For a rule, `details.below_cost_skus` lists every covered variant it would put below cost (§3.30) |
 | `SEARCH_UNAVAILABLE` | 503 | `GET /products/search`, `POST /search/reindex` | OpenSearch isn't configured (`OPENSEARCH_URL` unset) or is unreachable — every other endpoint keeps working regardless (see §3.7) |
-| `BARCODE_EXISTS` | 409 | `POST /products/variants/{id}/barcodes`, `POST /products`, `PUT /products/variants/{id}/original-barcode` (§3.83) | The supplied `code` (or `variants[].original_barcode`) is already assigned to a different variant (`barcodes` table's `UNIQUE (merchant_id, code)`) |
+| `BARCODE_EXISTS` | 409 | `POST /products/variants/{id}/barcodes`, `POST /products`, `PUT /products/variants/{id}/original-barcode` (§3.83) | The supplied `code` (or `variants[].original_barcode`) is already assigned to another product, or it is a generated code (since §3.86 an original code may be shared by variants of one product; the trigger raises it under the old constraint name) |
 | `NO_BARCODE` | 409 | `GET /products/variants/{id}/label` | The variant has no barcode assigned yet — assign one first |
 | `COUPON_CODE_EXISTS` | 409 | `POST /coupons`, `PATCH /coupons/{id}` | The supplied `code` is already in use (`coupons` table's `UNIQUE (merchant_id, code)`) |
 | `COUPON_NOT_FOUND` | 404 | `POST /sales/orders/{id}/coupons` | No active coupon with this code |
@@ -254,6 +254,9 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `INVALID_STATE` | 409 | `/cheques/*`, `/employee-loans/*` (§3.73) | The cheque or loan is not in a state the action can happen from (a cleared cheque bounced, a used leaf, a post-dated cheque deposited early, more than a loan's balance) |
 | `PAYROLL_RECOMPUTE_NEEDED` | 409 | `POST /payroll/runs/{id}/finalize` (§3.73) | A loan instalment a payslip deducts was repaid by hand since the run was computed: run the period again, then finalize |
 | `PAYMENT_EXCEEDS_BALANCE` | 409 | `POST /customers/{id}/payments`, `POST /cheques/received/{id}/deposit`, `POST /sales/orders/{id}/credit-payments` (§3.85) | More than the credit invoice still owes |
+| `MARKDOWN_RULE` | 409 | `PUT/DELETE /pricing/rules/{id}` (§3.87) | The rule is a step of a markdown plan: change or cancel the plan on its collection |
+| `MARKDOWN_EXISTS` | 409 | `POST /collections/{id}/markdown-plans` (§3.87) | The collection already has a live plan for that branch scope |
+| `PRICE_REQUIRED` | 409 | `GET /products/barcode/{code}` (§3.87) | A price-embedded scale label for an item with no selling price to turn the price into a quantity |
 | `NOTHING_DUE` | 409 | `POST /sales/orders/{id}/credit-payments` (§3.85) | The sale has no credit left to pay (a cash sale, or already paid) |
 | `MARKUP_RULE_IN_USE` | 409 | `PUT/DELETE /pricing/markup-rules/{id}` (§3.77) | The rule has priced sale lines: switch it off and make a new one |
 | `PARTNER_EXISTS` | 409 | `POST/PATCH /partners` (§3.77) | Another partner has that name |
@@ -1374,7 +1377,7 @@ Choosing intra- vs inter-state components by place of supply is a broader GST ch
 - Presets are §12's four sizes: standard 50×30, compact 40×20, detailed 100×50, and QR 50×50.
 - `custom` is 20–120 mm wide by 15–150 mm tall, at 203 or 300 dpi.
 - Fields can be toggled: name, SKU, price, MRP, batch and expiry, and the code (barcode, QR or none).
-- A job is at most 200 items, 500 copies each and 2,000 labels.
+- A job is at most 200 items, 500 copies each and 2,000 labels. (Raised in §3.88 to 1,000 items, 5,000 copies each and 20,000 labels.)
 
 **One layout, three languages.** `printing.Layout` places the fields in printer dots inside a 2 mm margin: name on top, the code taking the room the text leaves, then price, SKU and batch. ZPL (`^PW/^LL`, `^FB` text, `^BE`/`^BC` linear, `^BQ` QR, `^PQ` copies) and TSPL (`SIZE`, `TEXT`, `BARCODE`, `QRCODE`, `PRINT`) draw from that layout. ESC/POS is line-based and honours the field choices. Field text is sanitised, so a product name can't inject ZPL (`^`, `~`) or end a TSPL string (`"`).
 
@@ -2913,6 +2916,51 @@ Migration 082. `internal/sales/credit_collection.go`, `history.go` (`pendingSQL`
 - **Negative sales:** `branch_sales_settings.allow_negative_stock` (`PUT /sales/settings/branches/{id}` `{"allow_negative_stock": true | false | null}`; a field left out keeps what is saved; `GET /sales/settings` lists it and `effective_allow_negative_stock` per branch). Branch only, default no: the till refuses as before. Allowed: `reserveStock` reserves whatever is asked (adding a zero stock row for an item never stocked there), checkout takes `on_hand` below zero, and each line left below zero opens a `stock_review_items` row, the queue an offline oversell uses (§3.5). Applies to add-line, quantity changes, a recalled held order and quotation conversion. A manual reservation (`reserveStockAt(..., false)`) and a batch-tracked item (FIFO allocation needs real unexpired batches) still need real stock.
 
 Verified: `credit_neg_flow.py` 34 (list status / pending / filters / summary; partial cash at the till with a replayed key; over-payment, credit-as-method, back-office UPI, nothing-due refusals; the journal; the customer's open invoices; the shift's drawer; the switch off / on / back; -2 and a never-stocked item; the review item; manual reservation still refused; the audit row); regressions `mrp_flow.py`, `outstanding_flow.py`, `round9_flow.py`, `approvals_flow.py`. Flutter `test/credit_collection_test.dart`.
+
+### 3.86 One original barcode, several things on the shelf: shared codes and MRP lots (2026-11-09)
+
+Migration 083. `internal/catalog/scan_options.go` (`scanOptions`, `ComboLabel`), `mrp_lots.go` (`EnsureMRPLot`, `CreateMRPLot`), `handlers.go`; `internal/purchase/grn.go` (`setGRNLineMRP`, completion, `indexGRNLots`), `import.go`; `internal/sync/pull.go`.
+
+- **Shared printed codes:** an `original` barcode may be on several variants of the **same product** (every colour of a shirt). `UNIQUE (merchant_id, code)` became `UNIQUE (merchant_id, code, variant_id)` plus the trigger `app_barcode_one_product`, which refuses a code on another product, and any sharing of a `generated` code, raising `unique_violation` under the old constraint name (so `BARCODE_EXISTS` mapping is unchanged). Two writers queue on an advisory lock per code.
+- **MRP lots:** `product_variants.mrp_parent_id`. A lot is an ordinary variant (own stock, MRP, selling price, cost; copies the parent's attributes, batch/serial flags and open-price range; SKU `PARENT-M1099`) that has no barcode rows: it answers to its parent's codes. `EnsureMRPLot(variant, mrp, price, cost)` returns the parent when the MRP is the parent's, an existing lot with that MRP, or a new one (zero stock at every branch, audited "MRP lot"). `POST /products/variants/{id}/mrp-lots {mrp, selling_price, cost_price?}` (pricing.manage; 201 new, 200 existing).
+- **GRN:** `goods_receipt_lines.mrp` / `selling_price` (`POST .../lines` takes `mrp`, `selling_price`; the line JSON returns them and `variant_mrp`). Completing the GRN, after the PO check, moves a line whose MRP differs into that MRP's lot (made then, costed at the line's cost, priced `selling_price` or the parent's price capped at the MRP). An existing lot keeps its price. The invoice importer records the invoice's MRP the same way (it used to warn), and a shared barcode matches by the line's name or SKU, else asks for a choice.
+- **Scan** (`GET /products/barcode/{code}`, additive): `options` (each `variant_id, sku, label, mrp, selling_price, mrp_lot_of, available`) and `choice_required`. Several variants on the code → always asks. One variant with lots → with `?branch_id=`, the only lot in stock is chosen (the top-level fields become it), two or more in stock ask (options = those), none takes the oldest; without a branch, asks. `?purpose=receive` offers variants, never lots. An ordinary code answers as before (no `options`).
+- **Offline:** `/sync/pull` sends one entry per code and variant (lots under their parent's codes) with `label`, `mrp_lot_of`, `sellable`; the code's own variant comes last, so an older till keyed by barcode keeps it. The till (local DB v9, keyed by barcode and variant) applies the same rule (`resolveScanOptions`).
+- Labels print a lot with its parent's code; product list/detail show `mrp_lot_of`; lots made by a GRN are indexed for search.
+
+Verified: `mrp_lots_flow.py` 27; Flutter `test/scan_choice_test.dart` 8.
+
+### 3.87 Phase 8 completion: scale formats, markdown plans, the Schedule H1 register (2026-11-09)
+
+Migration 084. `internal/catalog/weighing_scale.go` (`ScaleFormat`, `decodeScale`), `scale_settings.go`; `internal/pricing/markdown.go`, `resolve.go`, `rules.go`; `internal/reports/schedule_register.go`; `internal/pharmacy/prescriptions.go`.
+
+- **Scale barcode formats:** `scale_barcode_formats` (prefix 02 or 21–29, PLU 4–6 digits, value weight|price 4–6 digits, PLU + value = 10, decimals, active). `GET /settings/scale-barcodes` → `{formats, configured}`; `PUT` (catalog.manage) replaces the list, `[]` = the old default (21 + 5-digit PLU + grams), which is what is read while nothing is saved. A price label sets `embedded_price` and `computed_weight_kg` = price / unit price to 3 decimals (`409 PRICE_REQUIRED` with no unit price).
+- **Markdown plans:** `markdown_plans`; `price_rules.collection_id` (one scope of variant / category / collection, `price_rules_one_scope`) and `markdown_plan_id`. `POST /collections/{id}/markdown-plans {name, branch_id?, steps: [{starts_on, percent_off ≤ 90}], ends_on?, override?}` (pricing.manage) makes one percent rule per step, from its date (branch or merchant zone) to the next step / `ends_on`. Below cost → `409 NEGATIVE_MARGIN` with SKUs unless override; a second live plan for the same collection and branch scope → `409 MARKDOWN_EXISTS`. `GET` lists plans with step states (upcoming/live/ended) and lines sold; `POST /markdown-plans/{id}/cancel` stops every step. `ResolveLinePriceAt` matches collection rules: variant rule, then collection, then category. Steps can be switched off from Price Rules but not edited or deleted there (`409 MARKDOWN_RULE`).
+- **Schedule H1 register:** `GET /reports/schedule-register?branch_id=&from=&to=&schedule=&format=json|csv|pdf` (audit.view): each scheduled-drug line of finalized / refunded sales by the merchant's day — date, bill, drug, schedule, quantity, batches, patient (name, phone, address) and prescriber (name, registration, address) — with `missing` naming what the register lacks. The PDF needs a branch. `prescriptions.doctor_address` (POST/GET `/prescriptions`). A government e-filing link stays out: no authority publishes an API for it.
+
+Verified: `phase8_flow.py` 39 (formats: default, validation, price label, switched off, back to default; markdowns: below cost, order, permissions, prices on three dates, duplicate, steps guarded, the till's price, a variant rule winning, cancel; register: permission, patient and prescriber, schedule filter, gaps, CSV, PDF); Go `TestDecodeScaleFormats`, `TestComboLabel`.
+
+### 3.88 Bulk label jobs at the available quantity (2026-11-09)
+
+`internal/catalog/label_candidates.go`. No migration.
+
+- `GET /labels/candidates?branch_id=&scope=all|no_original&variant_ids=&in_stock=&category_id=&q=` → `{variants: [{variant_id, product_name, sku, label, mrp, available, default_copies, barcode, has_original, mrp_lot_of}], total, no_barcode, limit}`. `all` = every sellable variant; `no_original` = those whose label carries no printed (original) code (an MRP lot judged by its parent's codes); `variant_ids` = the picked ones (scope ignored). `in_stock` defaults to true for a scope, false for picked ones. `default_copies` = the branch's available stock (on hand less reserved), whole, 1 to 5,000. At most 1,000 rows, by product name.
+- `POST /labels/generate-barcodes {variant_ids}` → `{generated, codes}`: a system barcode for each listed variant with none (a lot's goes on its parent), touching the variants so tills pull it. Not gated, as the single-variant endpoint isn't.
+- Label Studio jobs: up to 1,000 items, 5,000 copies each, 20,000 labels.
+- Label Studio: "Or in bulk" (all variants / without an original barcode, in stock only, a name or SKU filter) loads the list at each item's stock; a picked product starts at its stock too; "Copies = stock", "1 each", "Clear"; "Make system barcodes" for those with none; the preview draws the first 60 items, every one prints.
+
+Verified: `labels_bulk_flow.py` 13.
+
+### 3.89 Selling price on barcode labels, per branch (2026-11-09)
+
+Migration 085: `branch_print_settings.label_show_price` (default true, every existing branch) and `app_label_show_price(branch)`. `GET/PUT /branches/{id}/print-settings` carry it (omitted in a PUT keeps it). Off: labels print the MRP but no selling price.
+- `GET /products/variants/{id}/label` (the till's label): `price=1|0`, else the branch's setting when `branch_id` is given, else on. `printing.LabelData.HidePrice` drops it from every ESC/POS template (the QR template prints the MRP instead).
+- `POST /labels/preview` / `print`: `show_price` (true/false) decides for the job; omitted = the preset's or custom fields, turned off when the branch's setting is off.
+- Web: Print settings › "Print the selling price on barcode labels"; Label Studio's "Print the selling price" tick starts at the branch's setting (the custom size no longer has its own Price box).
+
+Verified: `inv11_label_flow.py` (label part, 9 checks); Go `TestLabelHidePrice`.
+
+Also: SPORTS COM invoice SC/SL/26-27/5391 (`PurchaseInvoices/11.pdf`) as the import template, `PurchaseInvoices/11.csv`: 25 lines, 49 pieces, each size its own item ("FORVO HALF TIGHTS BLACK WT - XSMALL"; the PDF's "BATCH NO." column is the size), taxable ₹8,721.43, total ₹8,875. Imported on a test database: 25 products, bill ₹8,875; GST is booked as the sum of the printed line taxes, ₹153.59, while the PDF's footer rounds it to ₹153.57 (the 2 paise go to round-off).
 
 ## 4. What Phase 0 concretely delivers against this design
 

@@ -11,6 +11,17 @@ type LabelData struct {
 	// came from. Empty for a variant that isn't batch-tracked.
 	BatchNo    string
 	ExpiryDate string // YYYY-MM-DD
+	// HidePrice leaves the selling price off (the branch's "selling price on
+	// labels" switch, migrations/085); the MRP still prints.
+	HidePrice bool
+}
+
+// priceLine: "MRP: 999.00   Price: 899.00", or the MRP alone.
+func priceLine(d LabelData) string {
+	if d.HidePrice {
+		return "MRP: " + d.MRP
+	}
+	return "MRP: " + d.MRP + "   Price: " + d.SellingPrice
 }
 
 // LabelTemplates are the predefined templates of pos_frd_complete.md §12.
@@ -61,7 +72,7 @@ func writeLabel(b *Builder, template string, d LabelData) {
 	case "detailed":
 		b.Bold(true).Line(truncate(d.ProductName, 48)).Bold(false)
 		printBarcode(b, d, 80, 3)
-		b.Line("MRP: " + d.MRP + "   Price: " + d.SellingPrice)
+		b.Line(priceLine(d))
 		b.Line("SKU: " + d.SKU)
 		if d.BatchNo != "" {
 			batch := "Batch: " + d.BatchNo
@@ -73,11 +84,15 @@ func writeLabel(b *Builder, template string, d LabelData) {
 	case "qr":
 		b.QRCode(d.BarcodeCode, 6)
 		b.Bold(true).Line(truncate(d.ProductName, 24)).Bold(false)
-		b.Line("Price: " + d.SellingPrice)
+		if d.HidePrice {
+			b.Line("MRP: " + d.MRP)
+		} else {
+			b.Line("Price: " + d.SellingPrice)
+		}
 	default: // "standard"
 		b.Bold(true).Line(truncate(d.ProductName, 32)).Bold(false)
 		printBarcode(b, d, 60, 2)
-		b.Line("MRP: " + d.MRP + "   Price: " + d.SellingPrice)
+		b.Line(priceLine(d))
 		b.Line("SKU: " + d.SKU)
 	}
 }

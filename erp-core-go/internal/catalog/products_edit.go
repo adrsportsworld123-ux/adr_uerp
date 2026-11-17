@@ -65,6 +65,10 @@ type productDetailVariant struct {
 	OpenPrice        *OpenPrice     `json:"open_price"`    // Phase 13; nil = fixed price
 	// Barcodes: every code of the variant with its pack (migrations/076).
 	Barcodes []BarcodeInfo `json:"barcodes"`
+	// MRPLotOf: the variant this is an MRP lot of (migrations/083); nil
+	// for an ordinary variant. A lot answers to its parent's barcodes, so
+	// OriginalBarcode is the parent's.
+	MRPLotOf *string `json:"mrp_lot_of"`
 }
 
 type productDetail struct {
@@ -120,10 +124,10 @@ func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (produc
 	rows, err := tx.Query(ctx, `
 		SELECT pv.id, pv.sku, pv.attribute_combo, pv.cost_price::text, pv.mrp::text, pv.selling_price::text,
 		       pv.track_serial, pv.track_batch, pv.plu_code, pv.status,
-		       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'original' ORDER BY created_at LIMIT 1),
+		       (SELECT code FROM barcodes WHERE variant_id = COALESCE(pv.mrp_parent_id, pv.id) AND source = 'original' ORDER BY created_at LIMIT 1),
 		       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'generated' ORDER BY created_at LIMIT 1),
 		       COALESCE((SELECT SUM(on_hand) FROM stock_levels WHERE variant_id = pv.id), 0)::text,
-		       `+OpenPriceColumns+`
+		       `+OpenPriceColumns+`, pv.mrp_parent_id::text
 		FROM product_variants pv
 		WHERE pv.product_id = $1
 		ORDER BY pv.sku`, productID)
@@ -139,7 +143,7 @@ func loadProductDetail(ctx context.Context, tx pgx.Tx, productID string) (produc
 		var opMin, opMax, opAbove *string
 		if err := rows.Scan(&v.VariantID, &v.SKU, &combo, &v.CostPrice, &v.MRP, &v.SellingPrice, &v.TrackSerial, &v.TrackBatch,
 			&v.PLUCode, &v.Status, &v.OriginalBarcode, &v.GeneratedBarcode, &v.OnHandTotal,
-			&opEnabled, &opMin, &opMax, &opAbove); err != nil {
+			&opEnabled, &opMin, &opMax, &opAbove, &v.MRPLotOf); err != nil {
 			return d, err
 		}
 		v.OpenPrice = NewOpenPrice(opEnabled, opMin, opMax, opAbove)

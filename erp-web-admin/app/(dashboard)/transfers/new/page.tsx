@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api-client";
+import { ScanChoice, ScanResult, optionText } from "@/components/catalog/mrp-lots";
 import { Branch, Transfer } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,12 +34,19 @@ export default function NewTransferPage() {
   const [picked, setPicked] = useState<VariantOption | null>(null);
   const [quantity, setQuantity] = useState("");
   const [lineError, setLineError] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     api.get<{ branches: Branch[] }>("/api/v1/branches").then((d) => setBranches(d.branches));
   }, []);
+
+  function commit(product: { variant_id: string; product_name: string; sku: string }) {
+    setLines((prev) => [...prev, { variant_id: product.variant_id, product_name: product.product_name, sku: product.sku, quantity: Number(quantity) }]);
+    setBarcode("");
+    setQuantity("");
+  }
 
   async function handleAddLine(e: React.FormEvent) {
     e.preventDefault();
@@ -50,11 +58,15 @@ export default function NewTransferPage() {
     try {
       const product = picked
         ? { variant_id: picked.variantId, product_name: picked.productName, sku: picked.sku }
-        : await api.get<{ variant_id: string; product_name: string; sku: string }>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}`);
+        : await api.get<ScanResult>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}`);
       setPicked(null);
-      setLines((prev) => [...prev, { variant_id: product.variant_id, product_name: product.product_name, sku: product.sku, quantity: Number(quantity) }]);
-      setBarcode("");
-      setQuantity("");
+      // erp-core-go migrations/083: a code on several colours, or an item in
+      // several MRP lots — the person says which.
+      if ("choice_required" in product && product.choice_required && product.options?.length) {
+        setChoosing(product);
+        return;
+      }
+      commit(product);
     } catch (e) {
       setLineError(e instanceof ApiError ? e.message : "Could not reach the server");
     }
@@ -191,6 +203,16 @@ export default function NewTransferPage() {
               <Input id="quantity" type="number" min="0.001" step="0.001" required value={quantity} onChange={(e) => setQuantity(e.target.value)} />
             </div>
             {lineError && <p className="text-sm text-destructive">{lineError}</p>}
+            {choosing && (
+              <ScanChoice
+                result={choosing}
+                onCancel={() => setChoosing(null)}
+                onPick={(o) => {
+                  setChoosing(null);
+                  commit({ variant_id: o.variant_id, sku: o.sku, product_name: `${choosing.product_name} · ${optionText(o)}` });
+                }}
+              />
+            )}
             <Button type="submit" variant="outline">
               Add line
             </Button>

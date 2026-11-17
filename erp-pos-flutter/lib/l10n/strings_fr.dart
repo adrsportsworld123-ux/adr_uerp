@@ -632,4 +632,7 @@ const Map<String, String> stringsFr = {
   'More than is due on this sale': 'Plus que le montant dû sur cette vente',
   'Nothing is due on this sale any more': 'Plus rien n’est dû sur cette vente',
   'Credit collected': 'Crédit encaissé',
+  'Which one is it?': 'Lequel est-ce ?',
+  'Which MRP is on the pack?': 'Quel prix de vente est imprimé sur l’emballage ?',
+  'This code is on more than one item.': 'Ce code figure sur plusieurs articles.',
 };

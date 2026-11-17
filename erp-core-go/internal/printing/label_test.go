@@ -83,3 +83,20 @@ func TestTruncateIsRuneSafe(t *testing.T) {
 		t.Errorf("truncate = %q", got)
 	}
 }
+
+func TestLabelHidePrice(t *testing.T) {
+	d := LabelData{ProductName: "SG Bat", SKU: "SG-1", MRP: "999.00", SellingPrice: "899.00", BarcodeCode: "8901234567890", Symbology: "EAN13", HidePrice: true}
+	for _, tpl := range LabelTemplates {
+		text := labelText(Decode(BuildLabels(tpl, d, 1)))
+		if strings.Contains(text, "899.00") || strings.Contains(text, "Price") {
+			t.Errorf("%s: the selling price printed: %q", tpl, text)
+		}
+		if tpl != "compact" && !strings.Contains(text, "MRP: 999.00") {
+			t.Errorf("%s: the MRP is missing: %q", tpl, text)
+		}
+	}
+	d.HidePrice = false
+	if !strings.Contains(labelText(Decode(BuildLabels("standard", d, 1))), "Price: 899.00") {
+		t.Error("the price is printed by default")
+	}
+}

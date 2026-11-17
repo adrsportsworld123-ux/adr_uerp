@@ -191,6 +191,8 @@ device's cart view ever looks wrong.
 
 **Credit collection, payment status, stock in search (2026-11-08, erp-core-go §3.85).** Sales history shows each completed sale's payment status (Paid / Partly paid / Unpaid) and "Due ₹x", filters by payment ("Payment pending" with "All dates" lists every sale still owed), and its "Collect payment" (`_CollectPaymentDialog`) records cash / card / UPI against a credit sale through `AppSession.recordCreditPayment`, naming this till so cash counts in its drawer (the shift report shows "Credit collected"). One idempotency key per dialog. Full product search asks for this branch and shows each hit's stock ("25 in stock", "3 left", "Out of stock"); the online grid tiles get the same stock. Negative sales are the server's branch switch: the till just stops getting `STOCK_UNAVAILABLE`. Tested in `test/credit_collection_test.dart`.
 
+**Shared barcodes and MRP lots (2026-11-09, erp-core-go §3.86).** A scan may come back with `options` / `choiceRequired` (`ProductLookup`, `ScanOption`): the POS screen asks with `showScanChoice` ("Which one is it?" for colours, "Which MRP is on the pack?" for lots) and adds `withOption(picked)`. The scan sends the branch, so the one MRP lot in stock is taken without asking. Offline: local DB v9 keys the catalog by barcode and variant (`label`, `mrp_lot_of`, `sellable`), `OfflineStore.lookupBarcodeAll`, and `resolveScanOptions` applies the server's rule; the v9 upgrade rebuilds the table and forces a full pull. Tested in `test/scan_choice_test.dart`.
+
 **Not yet built:** on-device verification of offline sync, printing, and
 PIN-login against real Android/iOS hardware or a real network thermal
 printer — this environment has never had either. Everything above is

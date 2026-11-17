@@ -158,11 +158,13 @@ type settingsResponse struct {
 	ShowSKU        bool    `json:"show_sku"` // migrations/062: the SKU under each item on receipts and invoices
 	// migrations/081: MRP less the selling price ("Discount on MRP") and
 	// "You saved" on the sales screen and receipts. Default false.
-	ShowMRPDiscount bool    `json:"show_mrp_discount"`
-	ReceiptFormat   string  `json:"receipt_format"`
-	HasLogo         bool    `json:"has_logo"`
-	LogoUpdatedAt   *string `json:"logo_updated_at"`
-	UpdatedAt       *string `json:"updated_at"`
+	ShowMRPDiscount bool `json:"show_mrp_discount"`
+	// migrations/085: barcode labels print the selling price. Default true.
+	LabelShowPrice bool    `json:"label_show_price"`
+	ReceiptFormat  string  `json:"receipt_format"`
+	HasLogo        bool    `json:"has_logo"`
+	LogoUpdatedAt  *string `json:"logo_updated_at"`
+	UpdatedAt      *string `json:"updated_at"`
 }
 
 type settingsRequest struct {
@@ -178,6 +180,7 @@ type settingsRequest struct {
 	ShowSKU        *bool   `json:"show_sku"` // omitted = keep what is saved
 	// omitted = keep what is saved (older admin builds never send it)
 	ShowMRPDiscount *bool  `json:"show_mrp_discount"`
+	LabelShowPrice  *bool  `json:"label_show_price"` // omitted = keep what is saved
 	ReceiptFormat   string `json:"receipt_format"`
 }
 
@@ -197,16 +200,16 @@ func visibleBranch(ctx context.Context, tx pgx.Tx, branchID string) error {
 }
 
 func loadSettings(ctx context.Context, tx pgx.Tx, branchID string) (settingsResponse, error) {
-	s := settingsResponse{BranchID: branchID, ShowLogo: true, ShowGSTIN: true, ShowSKU: true, ReceiptFormat: string(FormatA4)}
+	s := settingsResponse{BranchID: branchID, ShowLogo: true, ShowGSTIN: true, ShowSKU: true, LabelShowPrice: true, ReceiptFormat: string(FormatA4)}
 	var display, address, phone, email, header, purchaseFooter *string
 	err := tx.QueryRow(ctx, `
 		SELECT display_name, address, phone, email, header_text, receipt_footer, purchase_footer,
 		       show_logo, show_gstin, show_sku, receipt_format, logo IS NOT NULL, logo_updated_at::text, updated_at::text,
-		       show_mrp_discount
+		       show_mrp_discount, label_show_price
 		FROM branch_print_settings WHERE branch_id = $1`, branchID,
 	).Scan(&display, &address, &phone, &email, &header, &s.ReceiptFooter, &purchaseFooter,
 		&s.ShowLogo, &s.ShowGSTIN, &s.ShowSKU, &s.ReceiptFormat, &s.HasLogo, &s.LogoUpdatedAt, &s.UpdatedAt,
-		&s.ShowMRPDiscount)
+		&s.ShowMRPDiscount, &s.LabelShowPrice)
 	if err == pgx.ErrNoRows {
 		return s, nil // never configured: the defaults
 	}
@@ -336,20 +339,25 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if req.ShowMRPDiscount != nil {
 			showMRPDiscount = *req.ShowMRPDiscount
 		}
+		labelShowPrice := before.LabelShowPrice
+		if req.LabelShowPrice != nil {
+			labelShowPrice = *req.LabelShowPrice
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO branch_print_settings (branch_id, merchant_id, display_name, address, phone, email, header_text,
-			    receipt_footer, purchase_footer, show_logo, show_gstin, receipt_format, updated_by, updated_at, show_sku, show_mrp_discount)
+			    receipt_footer, purchase_footer, show_logo, show_gstin, receipt_format, updated_by, updated_at, show_sku, show_mrp_discount,
+			    label_show_price)
 			VALUES ($1, current_setting('app.tenant_id')::uuid, NULLIF($2,''), NULLIF($3,''), NULLIF($4,''), NULLIF($5,''), NULLIF($6,''),
-			    $7, NULLIF($8,''), $9, $10, $11, $12, now(), $13, $14)
+			    $7, NULLIF($8,''), $9, $10, $11, $12, now(), $13, $14, $15)
 			ON CONFLICT (branch_id) DO UPDATE SET
 			    display_name = EXCLUDED.display_name, address = EXCLUDED.address, phone = EXCLUDED.phone,
 			    email = EXCLUDED.email, header_text = EXCLUDED.header_text, receipt_footer = EXCLUDED.receipt_footer,
 			    purchase_footer = EXCLUDED.purchase_footer, show_logo = EXCLUDED.show_logo, show_gstin = EXCLUDED.show_gstin,
 			    receipt_format = EXCLUDED.receipt_format, updated_by = EXCLUDED.updated_by, updated_at = now(),
-			    show_sku = EXCLUDED.show_sku, show_mrp_discount = EXCLUDED.show_mrp_discount`,
+			    show_sku = EXCLUDED.show_sku, show_mrp_discount = EXCLUDED.show_mrp_discount, label_show_price = EXCLUDED.label_show_price`,
 			branchID, strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Address), strings.TrimSpace(req.Phone),
 			strings.TrimSpace(req.Email), strings.TrimSpace(req.HeaderText), req.ReceiptFooter,
-			strings.TrimSpace(req.PurchaseFooter), showLogo, showGSTIN, req.ReceiptFormat, claims.UserID, showSKU, showMRPDiscount); err != nil {
+			strings.TrimSpace(req.PurchaseFooter), showLogo, showGSTIN, req.ReceiptFormat, claims.UserID, showSKU, showMRPDiscount, labelShowPrice); err != nil {
 			return err
 		}
 		if saved, err = loadSettings(ctx, tx, branchID); err != nil {

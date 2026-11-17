@@ -632,4 +632,7 @@ const Map<String, String> stringsTe = {
   'More than is due on this sale': 'ఈ అమ్మకంపై బాకీ కంటే ఎక్కువ',
   'Nothing is due on this sale any more': 'ఈ అమ్మకంపై ఇక బాకీ లేదు',
   'Credit collected': 'అప్పు వసూలు',
+  'Which one is it?': 'ఇది ఏది?',
+  'Which MRP is on the pack?': 'ప్యాక్‌పై ఉన్న MRP ఏది?',
+  'This code is on more than one item.': 'ఈ కోడ్ ఒకటి కంటే ఎక్కువ అంశాలపై ఉంది.',
 };

@@ -77,7 +77,7 @@ export default function PriceRulesPage() {
     return rules.filter(
       (r) =>
         (!status || (status === "active") === r.active) &&
-        (!q || `${r.name} ${r.product_name ?? ""} ${r.sku ?? ""} ${r.category_name ?? ""}`.toLowerCase().includes(q)),
+        (!q || `${r.name} ${r.product_name ?? ""} ${r.sku ?? ""} ${r.category_name ?? ""} ${r.collection_name ?? ""}`.toLowerCase().includes(q)),
     );
   }, [rules, status, query]);
 
@@ -165,6 +165,8 @@ export default function PriceRulesPage() {
             <TableBody>
               {shown.map((r) => {
                 const used = r.times_used > 0;
+                // A markdown plan's step changes with its plan (Catalog › Collections).
+                const step = !!r.markdown_plan_id;
                 return (
                   <TableRow key={r.price_rule_id}>
                     <TableCell>
@@ -172,7 +174,12 @@ export default function PriceRulesPage() {
                       {r.priority !== 0 && <span className="text-xs text-muted-foreground"> · priority {r.priority}</span>}
                     </TableCell>
                     <TableCell className="text-sm">
-                      {r.variant_id ? `${r.product_name} (${r.sku})` : `Category: ${r.category_name}`}
+                      {r.variant_id
+                        ? `${r.product_name} (${r.sku})`
+                        : r.collection_id
+                          ? `Collection: ${r.collection_name}`
+                          : `Category: ${r.category_name}`}
+                      {step && <div className="text-xs text-muted-foreground">Markdown plan step</div>}
                       <div className="text-xs text-muted-foreground">{branchName(r.branch_id)}</div>
                     </TableCell>
                     <TableCell>{priceText(r)}</TableCell>
@@ -186,8 +193,14 @@ export default function PriceRulesPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={used}
-                          title={used ? "This rule has priced sales, so its terms are kept. Deactivate it and create a new rule." : undefined}
+                          disabled={used || step}
+                          title={
+                            step
+                              ? "A markdown plan's step — change or cancel the plan under Catalog › Collections."
+                              : used
+                                ? "This rule has priced sales, so its terms are kept. Deactivate it and create a new rule."
+                                : undefined
+                          }
                           onClick={() => setEditing(r)}
                         >
                           <Pencil /> Edit
@@ -199,8 +212,8 @@ export default function PriceRulesPage() {
                           size="sm"
                           variant="ghost"
                           aria-label="Delete"
-                          disabled={used}
-                          title={used ? "This rule has priced sales — deactivate it instead." : undefined}
+                          disabled={used || step}
+                          title={step ? "A markdown plan's step — cancel the plan under Catalog › Collections." : used ? "This rule has priced sales — deactivate it instead." : undefined}
                           className="text-destructive hover:text-destructive"
                           onClick={() => setDeleting(r)}
                         >

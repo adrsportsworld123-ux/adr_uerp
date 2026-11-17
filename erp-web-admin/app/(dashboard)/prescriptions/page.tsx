@@ -28,6 +28,8 @@ export default function PrescriptionsPage() {
   const [customerId, setCustomerId] = useState("");
   const [doctorName, setDoctorName] = useState("");
   const [doctorRegNo, setDoctorRegNo] = useState("");
+  // The Schedule H1 register records the prescriber's address (erp-core-go migrations/084).
+  const [doctorAddress, setDoctorAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -45,10 +47,11 @@ export default function PrescriptionsPage() {
     }
     setCreating(true);
     try {
-      await api.post("/api/v1/prescriptions", { customer_id: customerId, doctor_name: doctorName.trim(), doctor_reg_no: doctorRegNo, notes });
+      await api.post("/api/v1/prescriptions", { customer_id: customerId, doctor_name: doctorName.trim(), doctor_reg_no: doctorRegNo, doctor_address: doctorAddress, notes });
       toast.success("Prescription recorded");
       setDoctorName("");
       setDoctorRegNo("");
+      setDoctorAddress("");
       setNotes("");
       if (lookupCustomerId === customerId) loadHistory(customerId);
     } catch (e) {
@@ -107,6 +110,10 @@ export default function PrescriptionsPage() {
             <div className="flex flex-col gap-2">
               <Label htmlFor="doctorRegNo">Doctor registration no. (optional)</Label>
               <Input id="doctorRegNo" value={doctorRegNo} onChange={(e) => setDoctorRegNo(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-2 col-span-full">
+              <Label htmlFor="doctorAddress">Doctor&apos;s address (for the Schedule H1 register)</Label>
+              <Input id="doctorAddress" value={doctorAddress} onChange={(e) => setDoctorAddress(e.target.value)} placeholder="Clinic, street, town" />
             </div>
           </div>
           <div className="flex flex-col gap-2">

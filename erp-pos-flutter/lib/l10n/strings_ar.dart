@@ -632,4 +632,7 @@ const Map<String, String> stringsAr = {
   'More than is due on this sale': 'أكثر من المستحق على هذا البيع',
   'Nothing is due on this sale any more': 'لم يعد هناك مستحق على هذا البيع',
   'Credit collected': 'تحصيل الآجل',
+  'Which one is it?': 'أيّها هو؟',
+  'Which MRP is on the pack?': 'ما سعر التجزئة المطبوع على العبوة؟',
+  'This code is on more than one item.': 'هذا الرمز موجود على أكثر من صنف.',
 };

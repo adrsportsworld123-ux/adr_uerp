@@ -54,6 +54,9 @@ type variantSummary struct {
 	// Status of the variant itself (a single size can be discontinued
 	// while the product stays on sale).
 	Status string `json:"status"`
+	// MRPLotOf: the variant this is an MRP lot of (migrations/083); its
+	// OriginalBarcode is the parent's, which it answers to.
+	MRPLotOf *string `json:"mrp_lot_of"`
 	// OnHand / Available: live stock over the branches the caller may see,
 	// or the one named by ?branch_id= (db.StockByVariant). Available is on
 	// hand less what open carts hold.
@@ -209,9 +212,9 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 		for _, pr := range productRows {
 			variantRows, err := tx.Query(ctx, `
 				SELECT pv.id, pv.sku, pv.cost_price::text, pv.mrp::text, pv.selling_price::text, pv.cost_price, pv.selling_price,
-				       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'original' ORDER BY created_at LIMIT 1),
+				       (SELECT code FROM barcodes WHERE variant_id = COALESCE(pv.mrp_parent_id, pv.id) AND source = 'original' ORDER BY created_at LIMIT 1),
 				       (SELECT code FROM barcodes WHERE variant_id = pv.id AND source = 'generated' ORDER BY created_at LIMIT 1),
-				       pv.track_batch, pv.status
+				       pv.track_batch, pv.status, pv.mrp_parent_id::text
 				FROM product_variants pv
 				WHERE pv.product_id = $1
 				  AND ($2 = '' OR pv.selling_price >= $2::numeric)
@@ -224,7 +227,7 @@ func (h *ListHandler) ListProducts(w http.ResponseWriter, r *http.Request) {
 			for variantRows.Next() {
 				var v variantSummary
 				var costPrice, sellingPrice float64
-				if err := variantRows.Scan(&v.VariantID, &v.SKU, &v.CostPrice, &v.MRP, &v.SellingPrice, &costPrice, &sellingPrice, &v.OriginalBarcode, &v.GeneratedBarcode, &v.TrackBatch, &v.Status); err != nil {
+				if err := variantRows.Scan(&v.VariantID, &v.SKU, &v.CostPrice, &v.MRP, &v.SellingPrice, &costPrice, &sellingPrice, &v.OriginalBarcode, &v.GeneratedBarcode, &v.TrackBatch, &v.Status, &v.MRPLotOf); err != nil {
 					variantRows.Close()
 					return err
 				}

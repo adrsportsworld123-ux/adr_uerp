@@ -7,7 +7,17 @@ import { api } from "@/lib/api-client";
 import { Product } from "@/lib/types";
 
 import { rupees } from "@/lib/format";
-export type VariantOption = { variantId: string; productId: string; productName: string; sku: string; sellingPrice: string; label: string; trackBatch: boolean };
+export type VariantOption = {
+  variantId: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  sellingPrice: string;
+  label: string;
+  trackBatch: boolean;
+  /** The variant's MRP (absent in product mode). */
+  mrp?: string;
+};
 
 function toOptions(products: Product[], mode: "variant" | "product"): VariantOption[] {
   if (mode === "product") {
@@ -30,6 +40,7 @@ function toOptions(products: Product[], mode: "variant" | "product"): VariantOpt
       sellingPrice: v.selling_price,
       label: `${p.name} (${v.sku})`,
       trackBatch: v.track_batch,
+      mrp: v.mrp,
     })),
   );
 }

@@ -36,6 +36,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect } from "@/components/data/search-select";
 import { BarcodePacks, UnitSelect, useUnits } from "@/components/catalog/units";
+import { AddMrpLot } from "@/components/catalog/mrp-lots";
 import { PageHeader } from "@/components/data/page-header";
 
 const STATUS_BADGE: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
@@ -111,7 +112,13 @@ export default function ProductEditPage() {
         <VariantSection key={JSON.stringify(v)} productId={product.product_id} variant={v} attrs={attrs} onSaved={onSaved} product={product} />
       ))}
 
-      <AddVariantSection key={`add-${product.variants.length}`} productId={product.product_id} attrs={attrs} onSaved={onSaved} />
+      <AddVariantSection
+        key={`add-${product.variants.length}`}
+        productId={product.product_id}
+        attrs={attrs}
+        onSaved={onSaved}
+        printedCodes={[...new Set(product.variants.filter((v) => !v.mrp_lot_of && v.original_barcode).map((v) => v.original_barcode!))]}
+      />
     </div>
   );
 }
@@ -405,6 +412,7 @@ function VariantSection({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const hasStock = Number(variant.on_hand_total) !== 0;
+  const lotOf = variant.mrp_lot_of ? product.variants.find((v) => v.variant_id === variant.mrp_lot_of) : undefined;
 
   const originalAttrs = comboToStrings(variant.attribute_combo);
   const cleanAttrs = Object.fromEntries(Object.entries(attrValues).filter(([, v]) => v !== ""));
@@ -463,6 +471,11 @@ function VariantSection({
         <CardTitle className="text-base flex items-center gap-3">
           {variant.sku}
           <Badge variant={STATUS_BADGE[variant.status] ?? "outline"}>{variant.status}</Badge>
+          {variant.mrp_lot_of && (
+            <Badge variant="secondary" data-testid={`mrp-lot-badge-${variant.sku}`}>
+              MRP lot{lotOf ? ` of ${lotOf.sku}` : ""}
+            </Badge>
+          )}
           <span className="text-xs font-normal text-muted-foreground">stock across branches: {variant.on_hand_total}</span>
         </CardTitle>
       </CardHeader>
@@ -501,7 +514,14 @@ function VariantSection({
           Batch / expiry tracking
           {hasStock && <span className="text-xs text-muted-foreground">— can only be switched while this variant holds no stock</span>}
         </label>
-        <BarcodePacks variantId={variant.variant_id} barcodes={variant.barcodes ?? []} unit={product.unit} onChanged={reload} />
+        {variant.mrp_lot_of ? (
+          <p className="text-sm text-muted-foreground">
+            Scans with {lotOf ? `${lotOf.sku}'s` : "its item's"} barcode{variant.original_barcode ? ` (${variant.original_barcode})` : ""}: the till takes this
+            lot when it is the one in stock, or asks which MRP is on the pack.
+          </p>
+        ) : (
+          <BarcodePacks variantId={variant.variant_id} barcodes={variant.barcodes ?? []} unit={product.unit} onChanged={reload} />
+        )}
         <Button variant="outline" className="w-fit" disabled={busy || !variantDirty || !sku.trim()} onClick={saveVariant}>
           Save variant
         </Button>
@@ -536,6 +556,7 @@ function VariantSection({
           </Button>
         </div>
         <OpenPriceSection variant={variant} onSaved={onSaved} />
+        {!variant.mrp_lot_of && <AddMrpLot variant={variant} onSaved={onSaved} />}
         {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
@@ -641,8 +662,20 @@ function OpenPriceSection({ variant, onSaved }: { variant: ProductDetailVariant;
   );
 }
 
-function AddVariantSection({ productId, attrs, onSaved }: { productId: string; attrs: CategoryAttribute[]; onSaved: (p: ProductDetail) => void }) {
+function AddVariantSection({
+  productId,
+  attrs,
+  onSaved,
+  printedCodes,
+}: {
+  productId: string;
+  attrs: CategoryAttribute[];
+  onSaved: (p: ProductDetail) => void;
+  printedCodes: string[];
+}) {
   const [sku, setSku] = useState("");
+  // erp-core-go migrations/083: every colour/size may carry the same printed code.
+  const [originalBarcode, setOriginalBarcode] = useState("");
   const [costPrice, setCostPrice] = useState("");
   const [mrp, setMrp] = useState("");
   const [sellingPrice, setSellingPrice] = useState("");
@@ -662,6 +695,7 @@ function AddVariantSection({ productId, attrs, onSaved }: { productId: string; a
         mrp: Number(mrp),
         selling_price: Number(sellingPrice),
         generate_barcode: generateBarcode,
+        ...(originalBarcode.trim() ? { original_barcode: originalBarcode.trim() } : {}),
         attribute_combo: Object.fromEntries(Object.entries(attrValues).filter(([, v]) => v !== "")),
       });
       toast.success(`Variant ${sku} added`);
@@ -699,6 +733,26 @@ function AddVariantSection({ productId, attrs, onSaved }: { productId: string; a
             </div>
           </div>
           <AttributeFields attrs={attrs} values={attrValues} onChange={(n, v) => setAttrValues((prev) => ({ ...prev, [n]: v }))} />
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="newOriginalBarcode">Printed barcode (optional)</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                id="newOriginalBarcode"
+                className="max-w-xs"
+                value={originalBarcode}
+                onChange={(e) => setOriginalBarcode(e.target.value)}
+                placeholder="the code on the goods"
+              />
+              {printedCodes.map((c) => (
+                <Button key={c} type="button" variant="ghost" size="sm" onClick={() => setOriginalBarcode(c)}>
+                  Same as the others ({c})
+                </Button>
+              ))}
+            </div>
+            <span className="text-xs text-muted-foreground">
+              Several colours or sizes of this product may share the code printed on them; scanning it asks which one.
+            </span>
+          </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={generateBarcode} onChange={(e) => setGenerateBarcode(e.target.checked)} />
             Generate a system barcode

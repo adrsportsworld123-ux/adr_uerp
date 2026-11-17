@@ -37,14 +37,21 @@ type studioRequest struct {
 	Language string             `json:"language"`
 	BranchID string             `json:"branch_id"` // for the batch that sells next, when batch_no isn't given
 	Items    []studioItem       `json:"items"`
+	// ShowPrice: the selling price on these labels, whatever the size or
+	// preset says (migrations/085); nil = the preset's / custom fields,
+	// with the price off when the branch's print setting turns it off.
+	ShowPrice *bool `json:"show_price"`
 
 	resolved printing.LabelSpec
 	data     []printing.LabelData
 }
 
+// A job may be a whole catalogue (§3.88: all variants, or those without
+// a printed barcode, each at its available stock).
 const (
-	maxStudioItems  = 200
-	maxStudioCopies = 2000
+	maxStudioItems      = 1000
+	maxStudioCopies     = 20000
+	maxStudioItemCopies = 5000
 )
 
 var errStudioVariant = errors.New("variant not found")
@@ -73,8 +80,8 @@ func (req *studioRequest) validate() error {
 	}
 	total := 0
 	for _, it := range req.Items {
-		if it.VariantID == "" || it.Copies < 1 || it.Copies > 500 {
-			return errors.New("each item needs a variant_id and 1 to 500 copies")
+		if it.VariantID == "" || it.Copies < 1 || it.Copies > maxStudioItemCopies {
+			return fmt.Errorf("each item needs a variant_id and 1 to %d copies", maxStudioItemCopies)
 		}
 		total += it.Copies
 	}
@@ -87,6 +94,16 @@ func (req *studioRequest) validate() error {
 // load fills each item's label data: the variant's name, prices and
 // primary barcode, and the batch (given, or the one that sells next).
 func (req *studioRequest) load(ctx context.Context, tx pgx.Tx) error {
+	switch {
+	case req.ShowPrice != nil:
+		req.resolved.Fields.Price = *req.ShowPrice
+	case req.BranchID != "" && req.resolved.Fields.Price:
+		show, err := labelShowsPrice(ctx, tx, "", req.BranchID)
+		if err != nil {
+			return err
+		}
+		req.resolved.Fields.Price = show
+	}
 	req.data = make([]printing.LabelData, len(req.Items))
 	for i, it := range req.Items {
 		d := &req.data[i]
@@ -94,7 +111,7 @@ func (req *studioRequest) load(ctx context.Context, tx pgx.Tx) error {
 			SELECT p.name, pv.sku, pv.mrp::text, pv.selling_price::text, COALESCE(b.code, ''), COALESCE(b.symbology, '')
 			FROM product_variants pv
 			JOIN products p ON p.id = pv.product_id
-			LEFT JOIN barcodes b ON b.variant_id = pv.id AND b.is_primary = true
+			LEFT JOIN barcodes b ON b.variant_id = COALESCE(pv.mrp_parent_id, pv.id) AND b.is_primary = true -- an MRP lot prints its parent's code (migrations/083)
 			WHERE pv.id::text = $1`, it.VariantID).
 			Scan(&d.ProductName, &d.SKU, &d.MRP, &d.SellingPrice, &d.BarcodeCode, &d.Symbology); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

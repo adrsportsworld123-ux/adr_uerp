@@ -36,6 +36,7 @@ type Form = {
   show_gstin: boolean;
   show_sku: boolean;
   show_mrp_discount: boolean;
+  label_show_price: boolean;
   receipt_format: "a4" | "thermal";
 };
 
@@ -52,6 +53,7 @@ function toForm(s: PrintSettings): Form {
     show_gstin: s.show_gstin,
     show_sku: s.show_sku ?? true,
     show_mrp_discount: s.show_mrp_discount ?? false,
+    label_show_price: s.label_show_price ?? true,
     receipt_format: s.receipt_format,
   };
 }
@@ -303,6 +305,10 @@ export default function BranchPrintSettingsPage() {
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={form.show_mrp_discount} onChange={(e) => set("show_mrp_discount", e.target.checked)} />
                 Show the discount on MRP (MRP less the selling price) and &ldquo;You saved&rdquo; on the sales screen and receipts
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={form.label_show_price} onChange={(e) => set("label_show_price", e.target.checked)} />
+                Print the selling price on barcode labels (off: the MRP only — Label Studio can still choose per job)
               </label>
             </fieldset>
 

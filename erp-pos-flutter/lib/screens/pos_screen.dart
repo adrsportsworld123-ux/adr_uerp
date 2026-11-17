@@ -143,7 +143,14 @@ class _PosScreenState extends State<PosScreen> {
     if (trimmed.isEmpty || _busy) return;
     final session = context.read<AppSession>();
     await _withBusy(() async {
-      final product = await session.scanBarcode(trimmed);
+      var product = await session.scanBarcode(trimmed);
+      // One code on several colours, or an item in several MRP lots in
+      // stock: the cashier says which (erp-core-go migrations/083).
+      if (product != null && product.choiceRequired && product.options.isNotEmpty && mounted) {
+        final picked = await showScanChoice(context, product);
+        if (picked == null) return;
+        product = product.withOption(picked);
+      }
       if (product != null && mounted) {
         // A pack barcode adds its contents (a tray of 30), a scale barcode its weight (erp-core-go migrations/076).
         if (await addProductToCart(context, session, product, product.packQty)) {

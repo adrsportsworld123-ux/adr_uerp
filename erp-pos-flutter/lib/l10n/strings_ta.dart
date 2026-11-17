@@ -632,4 +632,7 @@ const Map<String, String> stringsTa = {
   'More than is due on this sale': 'இந்த விற்பனையின் நிலுவையை விட அதிகம்',
   'Nothing is due on this sale any more': 'இந்த விற்பனையில் இனி நிலுவை இல்லை',
   'Credit collected': 'கடன் வசூல்',
+  'Which one is it?': 'இது எது?',
+  'Which MRP is on the pack?': 'பேக்கில் உள்ள MRP எது?',
+  'This code is on more than one item.': 'இந்தக் குறியீடு ஒன்றுக்கு மேற்பட்ட பொருட்களில் உள்ளது.',
 };

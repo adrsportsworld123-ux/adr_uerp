@@ -307,7 +307,8 @@ class AppSession extends ChangeNotifier {
     _lastError = null;
     if (!offlineMode) {
       try {
-        return await api.lookupBarcode(code);
+        // The branch, so an MRP lot in stock here is chosen (erp-core-go migrations/083).
+        return await api.lookupBarcode(code, branchId: branchId);
       } on ApiException catch (e) {
         _lastError = e.code == 'PRODUCT_NOT_FOUND' ? tr('No product matches that barcode') : e.message;
         notifyListeners();
@@ -319,14 +320,46 @@ class AppSession extends ChangeNotifier {
       }
     }
 
-    final cached = await _offline.lookupBarcode(code);
-    if (cached == null) {
+    final all = await _offline.lookupBarcodeAll(code);
+    if (all.isEmpty) {
       _lastError = tr('No product matches that barcode (offline — catalog cache may be out of date)');
       notifyListeners();
       return null;
     }
-    _offlineCatalogByVariant[cached.lookup.variantId] = cached;
-    return cached.lookup;
+    for (final i in all) {
+      _offlineCatalogByVariant[i.product.lookup.variantId] = i.product;
+    }
+    if (all.length == 1) return all.first.product.lookup;
+    // erp-core-go migrations/083, decided as the server would: colours on
+    // one code always ask; MRP lots take the one in stock here.
+    final r = resolveScanOptions([
+      for (final i in all)
+        ScanOption(
+          variantId: i.product.lookup.variantId,
+          sku: i.product.lookup.sku,
+          label: i.product.label,
+          mrp: i.product.lookup.mrp,
+          sellingPrice: i.product.lookup.sellingPrice,
+          mrpLotOf: i.product.mrpLotOf,
+          available: i.available,
+        ),
+    ]);
+    final c = all.firstWhere((i) => i.product.lookup.variantId == r.chosen.variantId).product.lookup;
+    return ProductLookup(
+      productId: c.productId,
+      productName: c.productName,
+      variantId: c.variantId,
+      sku: c.sku,
+      sellingPrice: c.sellingPrice,
+      mrp: c.mrp,
+      openPrice: c.openPrice,
+      posColor: c.posColor,
+      packQty: c.packQty,
+      unitSymbol: c.unitSymbol,
+      unitDecimals: c.unitDecimals,
+      options: r.choiceRequired ? r.options : const [],
+      choiceRequired: r.choiceRequired,
+    );
   }
 
   /// Category/subcategory tree for the product-search screen's filters.

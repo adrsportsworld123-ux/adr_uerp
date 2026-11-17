@@ -388,3 +388,47 @@ Future<String?> _promptText(BuildContext context, {required String title, requir
     ),
   );
 }
+
+/// One printed code, several things (erp-core-go migrations/083): "which
+/// colour?" for a code shared by a product's variants, or "which MRP is on
+/// the pack?" for an item in more than one MRP lot. null = cancelled.
+Future<ScanOption?> showScanChoice(BuildContext context, ProductLookup product) {
+  final colours = product.options.map((o) => o.base).toSet().length > 1;
+  return showDialog<ScanOption>(
+    context: context,
+    builder: (ctx) {
+      final theme = Theme.of(ctx);
+      return AlertDialog(
+        key: const Key('scan-choice'),
+        title: Text(colours ? tr('Which one is it?') : tr('Which MRP is on the pack?')),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(product.productName, style: theme.textTheme.titleSmall),
+            if (colours) Text(tr('This code is on more than one item.'), style: theme.textTheme.bodySmall),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView(shrinkWrap: true, children: [
+                for (final o in product.options)
+                  ListTile(
+                    key: Key('scan-option-${o.variantId}'),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    title: Text([if (o.label.isNotEmpty) o.label, tr('MRP {0}', [formatRupees(o.mrp)])].join(' · '),
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text([
+                      o.sku,
+                      tr('{0} each', [formatRupees(o.sellingPrice)]),
+                      if (o.available != null)
+                        o.available! <= 0 ? tr('Out of stock') : tr('{0} in stock', [formatQty(o.available!.toString())]),
+                    ].join(' · ')),
+                    onTap: () => Navigator.of(ctx).pop(o),
+                  ),
+              ]),
+            ),
+          ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(tr('Cancel')))],
+      );
+    },
+  );
+}

@@ -94,7 +94,17 @@ function PricingList() {
         </div>
       ),
     },
-    { key: "sku", header: "SKU", cell: ({ variant }) => <span className="font-mono text-xs">{variant.sku}</span> },
+    {
+      key: "sku",
+      header: "SKU",
+      cell: ({ variant }) => (
+        <span className="font-mono text-xs">
+          {variant.sku}
+          {/* erp-core-go migrations/083: stock at a newer MRP under the same barcode. */}
+          {variant.mrp_lot_of && <span className="ms-1 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">MRP lot</span>}
+        </span>
+      ),
+    },
     { key: "available", header: "Available", align: "right", cell: ({ variant }) => <StockCell v={variant} /> },
     { key: "cost", header: "Cost", align: "right", cell: ({ variant }) => <span className="tabular">{rupees(variant.cost_price)}</span> },
     { key: "mrp", header: "MRP", align: "right", cell: ({ variant }) => <span className="tabular">{rupees(variant.mrp)}</span> },

@@ -632,4 +632,7 @@ const Map<String, String> stringsHi = {
   'More than is due on this sale': 'इस बिक्री पर बाकी से ज़्यादा',
   'Nothing is due on this sale any more': 'इस बिक्री पर अब कुछ बाकी नहीं',
   'Credit collected': 'उधार वसूली',
+  'Which one is it?': 'यह कौन-सा है?',
+  'Which MRP is on the pack?': 'पैक पर कौन-सा MRP छपा है?',
+  'This code is on more than one item.': 'यह कोड एक से अधिक आइटम पर है।',
 };

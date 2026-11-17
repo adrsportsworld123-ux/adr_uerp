@@ -632,4 +632,7 @@ const Map<String, String> stringsKn = {
   'More than is due on this sale': 'ಈ ಮಾರಾಟದ ಬಾಕಿಗಿಂತ ಹೆಚ್ಚು',
   'Nothing is due on this sale any more': 'ಈ ಮಾರಾಟದಲ್ಲಿ ಇನ್ನು ಬಾಕಿ ಇಲ್ಲ',
   'Credit collected': 'ಸಾಲ ವಸೂಲಿ',
+  'Which one is it?': 'ಇದು ಯಾವುದು?',
+  'Which MRP is on the pack?': 'ಪ್ಯಾಕ್‌ನಲ್ಲಿರುವ MRP ಯಾವುದು?',
+  'This code is on more than one item.': 'ಈ ಕೋಡ್ ಒಂದಕ್ಕಿಂತ ಹೆಚ್ಚು ಐಟಂಗಳಲ್ಲಿದೆ.',
 };

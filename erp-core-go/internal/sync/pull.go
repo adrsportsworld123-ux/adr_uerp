@@ -41,6 +41,15 @@ type catalogEntry struct {
 	PackQty      string `json:"pack_qty"`
 	UnitSymbol   string `json:"unit_symbol"`
 	UnitDecimals int    `json:"unit_decimals"`
+	// migrations/083: a code may name several variants of one product
+	// (colours) and their MRP lots, each its own entry with the same
+	// Barcode. Label is the variant's attribute values ("Red · L");
+	// MRPLotOf the variant a lot belongs to; Sellable false for an
+	// inactive variant. Entries for one code come with the code's own
+	// variant last, so an older till keyed by barcode alone keeps it.
+	Label    string  `json:"label"`
+	MRPLotOf *string `json:"mrp_lot_of"`
+	Sellable bool    `json:"sellable"`
 }
 
 type stockEntry struct {
@@ -84,13 +93,15 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			       COALESCE(ts.cgst_rate,0), COALESCE(ts.sgst_rate,0),
 			       COALESCE(ts.igst_rate,0), COALESCE(ts.cess_rate,0), p.price_includes_tax,
 			       `+catalog.OpenPriceColumns+`, COALESCE(p.pos_color, ''),
-			       b.pack_qty::text, COALESCE(u.symbol, ''), COALESCE(u.decimals, 3)
+			       b.pack_qty::text, COALESCE(u.symbol, ''), COALESCE(u.decimals, 3),
+			       pv.attribute_combo::text, pv.mrp_parent_id::text, `+catalog.SellablePredicate+`
 			FROM barcodes b
-			JOIN product_variants pv ON pv.id = b.variant_id
+			JOIN product_variants pv ON pv.id = b.variant_id OR pv.mrp_parent_id = b.variant_id
 			JOIN products p ON p.id = pv.product_id
 			LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
 			LEFT JOIN units u ON u.id = p.unit_id
-			WHERE ($1::boolean = false) OR (p.updated_at > $2) OR (pv.updated_at > $2)`,
+			WHERE ($1::boolean = false) OR (p.updated_at > $2) OR (pv.updated_at > $2)
+			ORDER BY b.code, pv.id = b.variant_id, b.is_primary, pv.created_at`,
 			hasSince, since)
 		if err != nil {
 			return err
@@ -101,12 +112,15 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 			var c catalogEntry
 			var opEnabled bool
 			var opMin, opMax, opAbove *string
+			var combo string
 			if err := catalogRows.Scan(&c.Barcode, &c.ProductID, &c.ProductName, &c.HSNCode,
 				&c.VariantID, &c.SKU, &c.SellingPrice, &c.MRP,
 				&c.CGSTRate, &c.SGSTRate, &c.IGSTRate, &c.CessRate, &c.PriceIncludesTax,
-				&opEnabled, &opMin, &opMax, &opAbove, &c.POSColor, &c.PackQty, &c.UnitSymbol, &c.UnitDecimals); err != nil {
+				&opEnabled, &opMin, &opMax, &opAbove, &c.POSColor, &c.PackQty, &c.UnitSymbol, &c.UnitDecimals,
+				&combo, &c.MRPLotOf, &c.Sellable); err != nil {
 				return err
 			}
+			c.Label = catalog.ComboLabel([]byte(combo))
 			c.OpenPrice = catalog.NewOpenPrice(opEnabled, opMin, opMax, opAbove)
 			resp.Catalog = append(resp.Catalog, c)
 		}

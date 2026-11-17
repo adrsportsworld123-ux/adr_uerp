@@ -156,6 +156,9 @@ type importLine struct {
 	qty, cost    float64
 	tax          float64
 	batch, expry string
+	// newMRP: the invoice's MRP when it differs from the matched item's
+	// (migrations/083): the goods go into that MRP's lot.
+	newMRP float64
 }
 
 // poImportLine: one PO line and what this invoice does to it.
@@ -328,7 +331,7 @@ type knownVariant struct {
 type catalogue struct {
 	variants   []*knownVariant
 	byID       map[string]*knownVariant
-	byBarcode  map[string]*knownVariant
+	byBarcode  map[string][]*knownVariant // a code can be on several colours of one product (migrations/083)
 	bySKU      map[string][]*knownVariant
 	byName     map[string][]*knownVariant
 	categories map[string][]string // normalized name or path → ids
@@ -347,7 +350,7 @@ func words(s string) map[string]bool {
 }
 
 func loadCatalogue(ctx context.Context, tx pgx.Tx, branchID string) (*catalogue, error) {
-	c := &catalogue{byBarcode: map[string]*knownVariant{}, bySKU: map[string][]*knownVariant{}, byName: map[string][]*knownVariant{},
+	c := &catalogue{byBarcode: map[string][]*knownVariant{}, bySKU: map[string][]*knownVariant{}, byName: map[string][]*knownVariant{},
 		categories: map[string][]string{}, catLabel: map[string]string{}, brands: map[string]string{}, slabs: map[string]string{}, slabName: map[string]string{}}
 	rows, err := tx.Query(ctx, `
 		SELECT pv.id::text, pv.sku, p.name,
@@ -389,7 +392,7 @@ func loadCatalogue(ctx context.Context, tx pgx.Tx, branchID string) (*catalogue,
 			return err
 		}
 		if v := c.byID[vid]; v != nil {
-			c.byBarcode[strings.TrimSpace(code)] = v
+			c.byBarcode[strings.TrimSpace(code)] = append(c.byBarcode[strings.TrimSpace(code)], v)
 		}
 		return nil
 	}); err != nil {
@@ -706,8 +709,19 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 				bad("the product chosen for this line no longer exists")
 			}
 		default:
-			if b := get("barcode"); b != "" && cat.byBarcode[b] != nil {
-				hit, l.MatchedBy = cat.byBarcode[b], "barcode"
+			if b := get("barcode"); b != "" && len(cat.byBarcode[b]) == 1 {
+				hit, l.MatchedBy = cat.byBarcode[b][0], "barcode"
+			} else if vs := cat.byBarcode[b]; b != "" && len(vs) > 1 {
+				// One code on several colours: the name or SKU says which.
+				name := normKey(l.ItemName)
+				for _, v := range vs {
+					if normKey(v.name+" "+v.combo) == name || normKey(v.sku) == normKey(get("sku")) {
+						hit, l.MatchedBy = v, "barcode"
+					}
+				}
+				if hit == nil {
+					bad("this barcode is on more than one colour or size of the product — choose the one on this line")
+				}
 			} else if s := get("sku"); s != "" && len(cat.bySKU[normKey(s)]) == 1 {
 				hit, l.MatchedBy = cat.bySKU[normKey(s)][0], "sku"
 			} else if vs := cat.bySKU[normKey(l.ItemName)]; len(vs) == 1 {
@@ -723,7 +737,9 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 			l.Action, l.VariantID, l.SKU, l.CurrentMRP, l.OnHand = "add_stock", hit.id, hit.sku, money(hit.mrp), qtyText(hit.onHand)
 			l.ProductName = strings.TrimSpace(hit.name + " " + hit.combo)
 			if m, ok := parseNumber(get("mrp")); ok && m > 0 && math.Abs(m-hit.mrp) >= 0.01 {
-				l.Warnings = append(l.Warnings, fmt.Sprintf("MRP on the invoice is ₹%s, the system has ₹%s — update it under Pricing if it changed", money(m), money(hit.mrp)))
+				// migrations/083: kept apart from the stock at the old MRP.
+				l.newMRP = m
+				l.Warnings = append(l.Warnings, fmt.Sprintf("MRP on the invoice is ₹%s, the system has ₹%s — it is received as a separate MRP lot, so both MRPs can be sold", money(m), money(hit.mrp)))
 			}
 			if hit.status != "active" {
 				l.Warnings = append(l.Warnings, "this product is "+hit.status+" — it will be restocked but stays "+hit.status+" until you reactivate it")
@@ -1081,6 +1097,12 @@ func (h *Handler) CommitImport(w http.ResponseWriter, r *http.Request) {
 				res.GRNID, variantID, l.qty, l.cost, round2(l.qty*l.cost), l.batch, l.expry, l.POLineID); err != nil {
 				return err
 			}
+			if l.newMRP > 0 {
+				if _, err := tx.Exec(ctx, `UPDATE goods_receipt_lines SET mrp = $2
+					WHERE id = (SELECT id FROM goods_receipt_lines WHERE grn_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1)`, res.GRNID, l.newMRP); err != nil {
+					return err
+				}
+			}
 		}
 		var discard grnResponse
 		if err := recalcGRNTotals(ctx, tx, res.GRNID, &discard); err != nil {
@@ -1138,6 +1160,7 @@ func (h *Handler) CommitImport(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not import the invoice — nothing was saved")
 	default:
 		h.indexNew(r.Context(), claims.TenantID, created)
+		h.indexGRNLots(r.Context(), claims.TenantID, res.GRNID)
 		httpx.JSON(w, http.StatusCreated, res)
 	}
 }

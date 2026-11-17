@@ -168,6 +168,11 @@ A product's stock, cost and price are in its unit (`products.unit_id`, §3.79); 
 
 A credit sale's payment, from anywhere, goes through `customers.ApplyReceivablePayment`; a till passes `POSTerminalID` so its cash counts in `accounting.ComputeCashFlow` (`CreditCollected`). A sale's payment status / pending amount is `paymentStatusSQL` / `pendingSQL` (`internal/sales/history.go`). Stock for a sale is reserved with `reserveStock`, which follows `app_allow_negative_stock(branch)`; anything that is not a sale uses `reserveStockAt(..., false)`. A checkout that leaves stock below zero opens a stock review item (§3.85).
 
+## Shared barcodes, MRP lots, Phase 8 completion (2026-11-09)
+
+- **Barcodes (§3.86):** a code may name several variants, so a lookup by code returns rows, not a row: use `scanOptions` (catalog) for what a scan means, and order any other `WHERE b.code = $1` deterministically. An MRP lot (`product_variants.mrp_parent_id`) has no barcode rows; join barcodes on `COALESCE(pv.mrp_parent_id, pv.id)` to show or print its code. Make lots only through `catalog.EnsureMRPLot`.
+- **Pricing (§3.87):** a price rule has one scope of variant / category / collection; markdown steps (`markdown_plan_id`) change only through their plan. Scale labels decode through `decodeScale` with `loadScaleFormats`.
+
 ## Repo layout
 
 ```

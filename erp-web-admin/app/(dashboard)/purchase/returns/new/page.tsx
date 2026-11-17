@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
+import { ScanChoice, ScanResult, optionText } from "@/components/catalog/mrp-lots";
 import { Supplier, PurchaseReturnSummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,12 +39,24 @@ export default function NewPurchaseReturnPage() {
   const [unitCost, setUnitCost] = useState("");
   const [batchNo, setBatchNo] = useState("");
   const [lineError, setLineError] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     api.get<{ suppliers: Supplier[] }>("/api/v1/suppliers").then((d) => setSuppliers(d.suppliers));
   }, []);
+
+  function commit(product: { variant_id: string; product_name: string; sku: string }) {
+    setLines((prev) => [
+      ...prev,
+      { variant_id: product.variant_id, product_name: product.product_name, sku: product.sku, quantity: Number(quantity), unit_cost: Number(unitCost), batch_no: batchNo.trim() },
+    ]);
+    setBarcode("");
+    setQuantity("");
+    setUnitCost("");
+    setBatchNo("");
+  }
 
   async function handleAddLine(e: React.FormEvent) {
     e.preventDefault();
@@ -55,16 +68,15 @@ export default function NewPurchaseReturnPage() {
     try {
       const product = picked
         ? { variant_id: picked.variantId, product_name: picked.productName, sku: picked.sku }
-        : await api.get<{ variant_id: string; product_name: string; sku: string }>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}`);
+        : await api.get<ScanResult>(`/api/v1/products/barcode/${encodeURIComponent(barcode)}`);
       setPicked(null);
-      setLines((prev) => [
-        ...prev,
-        { variant_id: product.variant_id, product_name: product.product_name, sku: product.sku, quantity: Number(quantity), unit_cost: Number(unitCost), batch_no: batchNo.trim() },
-      ]);
-      setBarcode("");
-      setQuantity("");
-      setUnitCost("");
-      setBatchNo("");
+      // erp-core-go migrations/083: a code on several colours, or an item in
+      // several MRP lots — the person says which.
+      if ("choice_required" in product && product.choice_required && product.options?.length) {
+        setChoosing(product);
+        return;
+      }
+      commit(product);
     } catch (e) {
       setLineError(e instanceof ApiError ? e.message : "Could not reach the server");
     }
@@ -196,6 +208,16 @@ export default function NewPurchaseReturnPage() {
               <Input id="batchNo" value={batchNo} onChange={(e) => setBatchNo(e.target.value)} placeholder="Blank = expired/oldest batch first" />
             </div>
             {lineError && <p className="text-sm text-destructive">{lineError}</p>}
+            {choosing && (
+              <ScanChoice
+                result={choosing}
+                onCancel={() => setChoosing(null)}
+                onPick={(o) => {
+                  setChoosing(null);
+                  commit({ variant_id: o.variant_id, sku: o.sku, product_name: `${choosing.product_name} · ${optionText(o)}` });
+                }}
+              />
+            )}
             <Button type="submit" variant="outline">
               Add line
             </Button>

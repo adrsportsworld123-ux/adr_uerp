@@ -14,7 +14,14 @@ class CachedProduct {
   final double cgstRate, sgstRate, igstRate, cessRate;
   // true = lookup.sellingPrice already includes tax (erp-core-go migrations/033)
   final bool priceIncludesTax;
-  CachedProduct(this.lookup, this.cgstRate, this.sgstRate, this.igstRate, this.cessRate, {this.priceIncludesTax = false});
+
+  /// erp-core-go migrations/083: the variant's attribute values, the
+  /// variant it is an MRP lot of, and whether it can be sold.
+  final String label;
+  final String? mrpLotOf;
+  final bool sellable;
+  CachedProduct(this.lookup, this.cgstRate, this.sgstRate, this.igstRate, this.cessRate,
+      {this.priceIncludesTax = false, this.label = '', this.mrpLotOf, this.sellable = true});
 }
 
 /// Everything needed to POST one order to /sync/push, read back out of
@@ -119,6 +126,9 @@ class OfflineStore {
         'pack_qty': double.tryParse(e['pack_qty'] as String? ?? '') ?? 1,
         'unit_symbol': e['unit_symbol'] is String && (e['unit_symbol'] as String).isNotEmpty ? e['unit_symbol'] : null,
         'unit_decimals': e['unit_decimals'] as int? ?? 3,
+        'label': e['label'] as String? ?? '',
+        'mrp_lot_of': e['mrp_lot_of'] as String?,
+        'sellable': (e['sellable'] as bool? ?? true) ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
@@ -151,11 +161,24 @@ class OfflineStore {
   }
 
   Future<CachedProduct?> lookupBarcode(String code) async {
+    final all = await lookupBarcodeAll(code);
+    return all.isEmpty ? null : all.first.product;
+  }
+
+  /// Every cached variant a code names (erp-core-go migrations/083: the
+  /// colours sharing it and their MRP lots), sellable ones only when any
+  /// is, in shelf order (the variants, each followed by its lots, oldest
+  /// first), with cached stock.
+  Future<List<CachedCatalogItem>> lookupBarcodeAll(String code) async {
     final db = await LocalDb.instance.db;
-    final rows = await db.query('catalog', where: 'barcode = ?', whereArgs: [code]);
-    if (rows.isEmpty) return null;
-    final r = rows.first;
-    return _productFromRow(r);
+    final rows = await db.rawQuery(
+      'SELECT c.*, s.available AS available FROM catalog c LEFT JOIN stock_cache s ON s.variant_id = c.variant_id '
+      'WHERE c.barcode = ? ORDER BY COALESCE(c.mrp_lot_of, c.variant_id), c.mrp_lot_of IS NOT NULL, c.rowid',
+      [code],
+    );
+    final items = [for (final r in rows) CachedCatalogItem(_productFromRow(r), double.tryParse(r['available'] as String? ?? ''))];
+    final sellable = items.where((i) => i.product.sellable).toList();
+    return sellable.isEmpty ? items : sellable;
   }
 
   static CachedProduct _productFromRow(Map<String, Object?> r) {
@@ -182,6 +205,9 @@ class OfflineStore {
       r['igst_rate'] as double,
       r['cess_rate'] as double,
       priceIncludesTax: (r['price_includes_tax'] as int? ?? 0) == 1,
+      label: r['label'] as String? ?? '',
+      mrpLotOf: r['mrp_lot_of'] as String?,
+      sellable: (r['sellable'] as int? ?? 1) == 1,
     );
   }
 

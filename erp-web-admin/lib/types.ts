@@ -28,6 +28,8 @@ export interface ProductVariant {
   // for these (a stock increase on one needs a batch_no).
   track_batch: boolean;
   status: VariantStatus;
+  /** erp-core-go migrations/083: the variant this is an MRP lot of. */
+  mrp_lot_of?: string | null;
   // Live stock over the branches you may see (GET /products, db.StockByVariant):
   // on hand, and what's still sellable (on hand less open carts).
   on_hand?: string;
@@ -151,6 +153,8 @@ export interface PrintSettings {
   show_sku?: boolean;
   /** Show "Discount on MRP" and "You saved" on the sales screen and receipts (migrations/081). */
   show_mrp_discount?: boolean;
+  /** Barcode labels print the selling price (migrations/085; default true). */
+  label_show_price?: boolean;
   receipt_format: "a4" | "thermal";
   has_logo: boolean;
   logo_updated_at: string | null;
@@ -213,6 +217,11 @@ export interface GRNLine {
   expiry_date: string | null;
   /** The purchase order line this receives; null on a direct GRN. */
   po_line_id: string | null;
+  /** erp-core-go migrations/083: the MRP that arrived (null = the
+   * variant's), the price for a new lot, and the variant's own MRP. */
+  mrp?: string | null;
+  selling_price?: string | null;
+  variant_mrp?: string;
 }
 
 export interface GRN {
@@ -1713,6 +1722,11 @@ export interface PriceRule {
   created_at: string;
   // Sale lines this rule priced; a used rule can be deactivated, not edited or deleted.
   times_used: number;
+  /** erp-core-go migrations/084: a markdown plan's step is scoped to a
+   * collection; it changes with its plan (on the collection), not here. */
+  collection_id?: string | null;
+  collection_name?: string | null;
+  markdown_plan_id?: string | null;
 }
 
 export interface EffectivePrice {
@@ -1776,6 +1790,9 @@ export interface ProductDetailVariant {
   open_price: OpenPrice | null;
   // Every barcode with its pack (erp-core-go migrations/076).
   barcodes?: BarcodeInfo[];
+  /** erp-core-go migrations/083: the variant this is an MRP lot of (it
+   * answers to that variant's barcodes); null/absent for an ordinary one. */
+  mrp_lot_of?: string | null;
 }
 
 // Units of measure (erp-core-go §3.79, internal/catalog/units.go).
@@ -2741,4 +2758,66 @@ export interface PriceSuggestion {
   rule_id: string | null;
   rule: string | null;
   note: string;
+}
+
+/** A collection (Phase 8 Apparel): a named season/drop products are tagged with. */
+export interface Collection {
+  collection_id: string;
+  name: string;
+  season: string;
+}
+
+/** erp-core-go migrations/084: a collection's dated markdown steps. */
+export interface MarkdownStep {
+  price_rule_id: string;
+  percent_off: string;
+  starts_at: string;
+  ends_at: string | null;
+  state: "upcoming" | "live" | "ended";
+  times_used: number;
+}
+
+export interface MarkdownPlan {
+  markdown_plan_id: string;
+  collection_id: string;
+  collection_name: string;
+  branch_id: string | null;
+  branch_name: string | null;
+  name: string;
+  status: "active" | "cancelled";
+  created_at: string;
+  cancelled_at: string | null;
+  steps: MarkdownStep[];
+  products: number;
+}
+
+/** erp-core-go migrations/084: one weighing-scale label layout. */
+export interface ScaleFormat {
+  format_id?: string;
+  prefix: string;
+  plu_digits: number;
+  value_kind: "weight" | "price";
+  value_digits: number;
+  value_decimals: number;
+  active: boolean;
+}
+
+/** GET /reports/schedule-register (migrations/084). */
+export interface ScheduleRegisterLine {
+  date: string;
+  order_id: string;
+  order_number: string;
+  product_name: string;
+  sku: string;
+  drug_schedule: string;
+  quantity: string;
+  batches: string;
+  patient_name: string | null;
+  patient_phone: string | null;
+  patient_address: string | null;
+  doctor_name: string | null;
+  doctor_reg_no: string | null;
+  doctor_address: string | null;
+  prescription_id: string | null;
+  missing: string[];
 }

@@ -3,7 +3,10 @@
 // Label Studio (Phase 14, pos_frd_complete.md §12; erp-core-go
 // POST /labels/preview and /labels/print).
 // - What to print: products with a number of copies each, or a whole GRN
-//   (each line's received quantity and its batch).
+//   (each line's received quantity and its batch), or in bulk (§3.88):
+//   every variant, or those whose labels have no printed (original)
+//   barcode. Copies start at what the branch has available and can be
+//   changed per item; a picked product starts at its stock too.
 // - Size: §12's presets or a custom size; which fields; 203 or 300 dpi.
 // - A live preview that marks any label whose barcode would be too fine to
 //   scan at that size and resolution.
@@ -29,7 +32,27 @@ import { ProductPicker, VariantOption } from "@/components/data/product-picker";
 
 type Fields = { name: boolean; sku: boolean; price: boolean; mrp: boolean; batch: boolean; code: "barcode" | "qr" | "none" };
 type Spec = { width_mm: number; height_mm: number; dpi: number; fields: Fields };
-type Item = { variant_id: string; label: string; copies: number; batch_no?: string; expiry_date?: string };
+type Item = { variant_id: string; label: string; copies: number; batch_no?: string; expiry_date?: string; available?: string; barcode?: string };
+type Candidate = {
+  variant_id: string;
+  product_name: string;
+  sku: string;
+  label: string;
+  available: string;
+  default_copies: number;
+  barcode: string;
+  has_original: boolean;
+};
+/** erp-core-go maxStudioItemCopies: the most labels of one item in a job. */
+const MAX_COPIES = 5000;
+const clampCopies = (n: number) => Math.min(Math.max(Math.floor(n) || 1, 1), MAX_COPIES);
+const candidateItem = (c: Candidate): Item => ({
+  variant_id: c.variant_id,
+  label: `${c.product_name}${c.label ? ` · ${c.label}` : ""} (${c.sku})`,
+  copies: c.default_copies,
+  available: c.available,
+  barcode: c.barcode,
+});
 type Scan = { level: "ok" | "small" | "fail" | "none"; module_mm: number; message: string };
 type PreviewLabel = {
   variant_id: string;
@@ -55,6 +78,8 @@ const PRESETS: Record<string, { label: string; spec: Spec }> = {
 };
 
 const selectClass = "h-9 rounded-lg border bg-card px-2 text-sm";
+/** A bulk job can be hundreds of items; the preview draws the first few. */
+const PREVIEW_SHOWN = 60;
 const SCAN_TONE = { ok: "ok", small: "warn", fail: "bad", none: "muted" } as const;
 
 // The code as SVG, the same symbology the printer gets.
@@ -114,8 +139,26 @@ export default function LabelStudioPage() {
   const [preview, setPreview] = useState<{ labels: PreviewLabel[]; worst: string; spec: Spec } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [printMode, setPrintMode] = useState<"label" | "sheet" | null>(null);
+  // Bulk (§3.88): which variants, and whether to leave out those with no stock.
+  const [bulkScope, setBulkScope] = useState<"all" | "no_original">("all");
+  const [inStockOnly, setInStockOnly] = useState(true);
+  const [bulkQuery, setBulkQuery] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // The selling price on these labels: the branch's print setting
+  // (migrations/085) until changed for this job.
+  const [showPrice, setShowPrice] = useState<boolean | null>(null);
+  const [branchShowsPrice, setBranchShowsPrice] = useState(true);
+  const priceOn = showPrice ?? branchShowsPrice;
 
   const spec: Spec = useMemo(() => (preset === "custom" ? { ...custom, dpi } : { ...PRESETS[preset].spec, dpi }), [preset, custom, dpi]);
+
+  useEffect(() => {
+    if (!branchId) return;
+    api
+      .get<{ label_show_price?: boolean }>(`/api/v1/branches/${branchId}/print-settings`)
+      .then((s) => setBranchShowsPrice(s.label_show_price ?? true))
+      .catch(() => setBranchShowsPrice(true));
+  }, [branchId]);
 
   useEffect(() => {
     api.get<{ branches: Branch[] }>("/api/v1/branches?status=active&scope=mine").then((d) => setBranches(d.branches)).catch(() => {});
@@ -132,6 +175,7 @@ export default function LabelStudioPage() {
           preset: preset === "custom" ? "custom" : preset,
           spec: preset === "custom" ? spec : { dpi },
           branch_id: branchId,
+          show_price: priceOn,
           items: items.map(({ variant_id, copies, batch_no, expiry_date }) => ({ variant_id, copies, batch_no, expiry_date })),
         })
         .then((d) => {
@@ -141,7 +185,7 @@ export default function LabelStudioPage() {
         .catch((e) => setPreviewError(e instanceof ApiError ? e.message : "Could not preview"));
     }, 300);
     return () => clearTimeout(t);
-  }, [items, preset, spec, dpi, branchId]);
+  }, [items, preset, spec, dpi, branchId, priceOn]);
 
   // The browser print paths: the page size goes into an @page rule for
   // the print, and is removed afterwards.
@@ -165,10 +209,57 @@ export default function LabelStudioPage() {
 
   function addProduct() {
     const n = Math.floor(Number(copies));
-    if (!picked || !(n >= 1 && n <= 500)) return;
+    if (!picked || !(n >= 1 && n <= MAX_COPIES)) return;
     setItems((xs) => [...xs, { variant_id: picked.variantId, label: picked.label, copies: n }]);
     setPicked(null);
     setCopies("1");
+  }
+
+  // A picked product starts at what the branch has of it.
+  async function pickProduct(o: VariantOption | null) {
+    setPicked(o);
+    if (!o) return;
+    const before = copies;
+    try {
+      const d = await api.get<{ variants: Candidate[] }>(`/api/v1/labels/candidates?branch_id=${branchId}&variant_ids=${o.variantId}`);
+      // Only if the count wasn't typed while this was on its way.
+      if (d.variants[0]) setCopies((c) => (c === before ? String(d.variants[0].default_copies) : c));
+    } catch {
+      // keep the copies as typed
+    }
+  }
+
+  async function loadBulk() {
+    setBulkBusy(true);
+    try {
+      const qs = new URLSearchParams({ branch_id: branchId, scope: bulkScope, in_stock: String(inStockOnly), ...(bulkQuery.trim() ? { q: bulkQuery.trim() } : {}) });
+      const d = await api.get<{ variants: Candidate[]; total: number; limit: number }>(`/api/v1/labels/candidates?${qs}`);
+      setGrnId("");
+      setItems(d.variants.map(candidateItem));
+      if (d.total > d.variants.length) toast.warning(`Loaded the first ${d.variants.length} of ${d.total}. Narrow it with a search to print the rest.`);
+      else toast.success(`Loaded ${d.variants.length} variant(s), each at its available stock`);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not load the variants");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  // Variants with no barcode at all get a system one, so their labels can print.
+  const noBarcode = items.filter((i) => i.barcode === "");
+  async function generateMissing() {
+    setBulkBusy(true);
+    try {
+      const d = await api.post<{ generated: number; codes: Record<string, string> }>("/api/v1/labels/generate-barcodes", {
+        variant_ids: noBarcode.map((i) => i.variant_id),
+      });
+      setItems((xs) => xs.map((x) => (d.codes[x.variant_id] ? { ...x, barcode: d.codes[x.variant_id] } : x)));
+      toast.success(`${d.generated} system barcode(s) made`);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not make the barcodes");
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   async function loadGRN(id: string) {
@@ -180,7 +271,7 @@ export default function LabelStudioPage() {
         g.lines.map((l) => ({
           variant_id: l.variant_id,
           label: `${l.product_name} (${l.sku}) · ${g.grn_number}`,
-          copies: Math.min(Math.max(Math.ceil(Number(l.quantity)), 1), 500),
+          copies: clampCopies(Math.ceil(Number(l.quantity))),
           batch_no: l.batch_no || undefined,
           expiry_date: l.expiry_date ?? undefined,
         })),
@@ -197,6 +288,7 @@ export default function LabelStudioPage() {
         preset: preset === "custom" ? "custom" : preset,
         spec: preset === "custom" ? spec : { dpi },
         branch_id: branchId,
+        show_price: priceOn,
         language,
         items: items.map(({ variant_id, copies, batch_no, expiry_date }) => ({ variant_id, copies, batch_no, expiry_date })),
       });
@@ -247,31 +339,82 @@ export default function LabelStudioPage() {
                   ))}
                 </select>
               </div>
+              <div className="flex flex-col gap-2 rounded-lg border p-3" data-testid="bulk-labels">
+                <span className="text-sm font-medium">Or in bulk</span>
+                <div className="flex flex-col gap-1.5 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="bulk-scope" checked={bulkScope === "all"} onChange={() => setBulkScope("all")} />
+                    All variants
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="bulk-scope" checked={bulkScope === "no_original"} onChange={() => setBulkScope("no_original")} />
+                    Variants without an original (printed) barcode
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={inStockOnly} onChange={(e) => setInStockOnly(e.target.checked)} />
+                    Only what this branch has in stock
+                  </label>
+                </div>
+                <div className="flex gap-2">
+                  <Input aria-label="Narrow by name or SKU" placeholder="Name or SKU (optional)" value={bulkQuery} onChange={(e) => setBulkQuery(e.target.value)} />
+                  <Button variant="outline" disabled={bulkBusy || !branchId} onClick={loadBulk}>
+                    Load
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Each starts at its available stock at the branch below; change any count before printing. This replaces the list.</p>
+              </div>
               <div className="flex items-end gap-2">
                 <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                   <span className="text-sm font-medium">Or a product</span>
-                  <ProductPicker value={picked} onChange={setPicked} />
+                  <ProductPicker value={picked} onChange={pickProduct} />
                 </div>
-                <Input aria-label="Copies" className="w-20" type="number" min={1} max={500} value={copies} onChange={(e) => setCopies(e.target.value)} />
+                <Input aria-label="Copies" className="w-20" type="number" min={1} max={MAX_COPIES} value={copies} onChange={(e) => setCopies(e.target.value)} />
                 <Button variant="outline" disabled={!picked} onClick={addProduct}>
                   Add
                 </Button>
               </div>
-              <ul className="flex flex-col gap-1 text-sm" aria-label="Labels to print">
+              {noBarcode.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft p-2 text-xs text-warn" data-testid="labels-no-barcode">
+                  {noBarcode.length} variant(s) have no barcode yet, so their labels would print without one.
+                  <Button size="sm" variant="outline" disabled={bulkBusy} onClick={generateMissing}>
+                    Make system barcodes
+                  </Button>
+                </div>
+              )}
+              {items.length > 1 && (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!items.some((i) => i.available != null)}
+                    onClick={() => setItems((xs) => xs.map((x) => (x.available != null ? { ...x, copies: clampCopies(Number(x.available)) } : x)))}
+                  >
+                    Copies = stock
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setItems((xs) => xs.map((x) => ({ ...x, copies: 1 })))}>
+                    1 each
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setItems([])}>
+                    Clear
+                  </Button>
+                </div>
+              )}
+              <ul className="flex max-h-96 flex-col gap-1 overflow-y-auto text-sm" aria-label="Labels to print">
                 {items.map((it, i) => (
                   <li key={i} className="flex items-center gap-2">
                     <span className="min-w-0 flex-1 truncate" title={it.label}>
                       {it.label}
                       {it.batch_no ? ` · batch ${it.batch_no}` : ""}
+                      {it.available != null && <span className="block text-xs text-muted-foreground">{Number(it.available)} in stock</span>}
                     </span>
                     <Input
                       aria-label={`Copies of ${it.label}`}
-                      className="h-8 w-16"
+                      className="h-8 w-20"
                       type="number"
                       min={1}
-                      max={500}
+                      max={MAX_COPIES}
                       value={it.copies}
-                      onChange={(e) => setItems((xs) => xs.map((x, j) => (j === i ? { ...x, copies: Math.min(Math.max(Math.floor(Number(e.target.value) || 1), 1), 500) } : x)))}
+                      onChange={(e) => setItems((xs) => xs.map((x, j) => (j === i ? { ...x, copies: clampCopies(Number(e.target.value)) } : x)))}
                     />
                     <Button variant="ghost" size="icon-sm" aria-label={`Remove ${it.label}`} onClick={() => setItems((xs) => xs.filter((_, j) => j !== i))}>
                       <Trash2 />
@@ -315,6 +458,13 @@ export default function LabelStudioPage() {
                   </select>
                 </div>
               </div>
+              <label className="flex items-center gap-2 text-sm" data-testid="label-show-price">
+                <input type="checkbox" checked={priceOn} onChange={(e) => setShowPrice(e.target.checked)} />
+                Print the selling price
+                <span className="text-xs text-muted-foreground">
+                  {showPrice == null ? `(this branch's setting: ${branchShowsPrice ? "on" : "off"})` : "(this job only)"}
+                </span>
+              </label>
               {preset === "custom" && (
                 <div className="flex flex-col gap-3 rounded-lg bg-muted/40 p-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -329,7 +479,7 @@ export default function LabelStudioPage() {
                   </div>
                   <fieldset className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
                     <legend className="sr-only">Fields</legend>
-                    {(["name", "sku", "price", "mrp", "batch"] as const).map((k) => (
+                    {(["name", "sku", "mrp", "batch"] as const).map((k) => (
                       <label key={k} className="flex items-center gap-1.5">
                         <input type="checkbox" checked={custom.fields[k]} onChange={(e) => setCustom((c) => ({ ...c, fields: { ...c.fields, [k]: e.target.checked } }))} />
                         {{ name: "Name", sku: "SKU", price: "Price", mrp: "MRP", batch: "Batch & expiry" }[k]}
@@ -392,9 +542,14 @@ export default function LabelStudioPage() {
             </div>
             {previewError && <p className="text-sm text-destructive">{previewError}</p>}
             {!items.length && <p className="text-sm text-muted-foreground">Add something to print to see it here.</p>}
+            {preview && preview.labels.length > PREVIEW_SHOWN && (
+              <p className="text-xs text-muted-foreground">
+                Showing the first {PREVIEW_SHOWN} of {preview.labels.length} items; every one prints.
+              </p>
+            )}
             <div className="flex flex-wrap gap-4">
               {items.length > 0 &&
-                preview?.labels.map((l, i) => (
+                preview?.labels.slice(0, PREVIEW_SHOWN).map((l, i) => (
                   <figure key={i} className="flex flex-col gap-1.5">
                     <div className="rounded-sm shadow-[0_0_0_1px_var(--border)]">
                       <LabelFace l={l} spec={preview.spec} />

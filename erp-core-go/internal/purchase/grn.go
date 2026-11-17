@@ -53,6 +53,11 @@ type grnLineResp struct {
 	BatchNo        string  `json:"batch_no"`
 	ExpiryDate     *string `json:"expiry_date"`
 	POLineID       *string `json:"po_line_id"`
+	// migrations/083: the MRP that arrived (null = the variant's), the
+	// price for a new lot, and the variant's own MRP to compare with.
+	MRP          *string `json:"mrp"`
+	SellingPrice *string `json:"selling_price"`
+	VariantMRP   string  `json:"variant_mrp"`
 }
 
 // ---------------------------------------------------------------------
@@ -122,7 +127,16 @@ type addGRNLineRequest struct {
 	// POLineID: on a GRN against a purchase order, the PO line received.
 	// Optional; omitted = the PO's line for this variant.
 	POLineID string `json:"po_line_id"`
+	// MRP: the MRP printed on what arrived (migrations/083); 0 = the
+	// variant's. One that differs is received into that MRP's lot on
+	// completion, which is made then if it doesn't exist, priced
+	// SellingPrice (0 = the variant's price, capped at the MRP). An
+	// existing lot keeps its own price.
+	MRP          float64 `json:"mrp"`
+	SellingPrice float64 `json:"selling_price"`
 }
+
+var errGRNLinePrice = errors.New("the MRP must be positive, and the selling price above 0 and not above the MRP")
 
 func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 	claims, ok := authn.FromContext(r.Context())
@@ -139,6 +153,10 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.VariantID == "" || req.Quantity <= 0 || req.UnitCost < 0 {
 		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", "variant_id, a positive quantity and a non-negative unit_cost are required")
+		return
+	}
+	if req.MRP < 0 || req.SellingPrice < 0 || (req.SellingPrice > 0 && (req.MRP == 0 || req.SellingPrice > req.MRP)) {
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", errGRNLinePrice.Error())
 		return
 	}
 
@@ -173,6 +191,9 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 			}); err != nil {
 				return err
 			}
+			if err := setGRNLineMRP(ctx, tx, grnID, req.MRP, req.SellingPrice); err != nil {
+				return err
+			}
 			return recalcGRNTotals(ctx, tx, grnID, &resp)
 		}
 
@@ -189,6 +210,9 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO goods_receipt_lines (id, grn_id, variant_id, quantity, unit_cost, line_total, batch_no, expiry_date)
 			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NULLIF($6,''), NULLIF($7,'')::date)`,
 			grnID, req.VariantID, req.Quantity, req.UnitCost, lineTotal, req.BatchNo, req.ExpiryDate); err != nil {
+			return err
+		}
+		if err := setGRNLineMRP(ctx, tx, grnID, req.MRP, req.SellingPrice); err != nil {
 			return err
 		}
 
@@ -212,6 +236,18 @@ func (h *Handler) AddGRNLine(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.JSON(w, http.StatusOK, resp)
 	}
+}
+
+// setGRNLineMRP records the MRP / selling price on the line just added
+// (the GRN's newest); nothing when no MRP was given.
+func setGRNLineMRP(ctx context.Context, tx pgx.Tx, grnID string, mrp, sellingPrice float64) error {
+	if mrp <= 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE goods_receipt_lines SET mrp = $2, selling_price = NULLIF($3, 0)
+		WHERE id = (SELECT id FROM goods_receipt_lines WHERE grn_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1)`, grnID, mrp, sellingPrice)
+	return err
 }
 
 // ---------------------------------------------------------------------
@@ -343,8 +379,39 @@ func (h *Handler) CompleteGRN(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not complete GRN")
 	default:
+		h.indexGRNLots(r.Context(), claims.TenantID, grnID)
 		httpx.JSON(w, http.StatusOK, resp)
 	}
+}
+
+// indexGRNLots puts the MRP lots a GRN received into product search
+// (migrations/083), so the till's grid and Find Product list them. Lots
+// already indexed are simply rewritten. Best-effort after commit.
+func (h *Handler) indexGRNLots(ctx context.Context, tenantID, grnID string) {
+	if h.Search == nil || !h.Search.Enabled() {
+		return
+	}
+	var ids []string
+	if err := h.DB.WithTenant(ctx, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT DISTINCT gl.variant_id::text FROM goods_receipt_lines gl JOIN product_variants pv ON pv.id = gl.variant_id
+			WHERE gl.grn_id::text = $1 AND pv.mrp_parent_id IS NOT NULL`, grnID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	}); err != nil {
+		return
+	}
+	h.indexNew(ctx, tenantID, ids)
 }
 
 // completeGRNTx is the completion itself, inside the caller's transaction:
@@ -366,7 +433,8 @@ func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receive
 	}
 
 	rows, err := tx.Query(ctx, `
-		SELECT id, variant_id, quantity, unit_cost, line_total, COALESCE(batch_no,''), expiry_date::text
+		SELECT id, variant_id, quantity, unit_cost, line_total, COALESCE(batch_no,''), expiry_date::text,
+		       COALESCE(mrp, 0)::float8, COALESCE(selling_price, 0)::float8
 		FROM goods_receipt_lines WHERE grn_id = $1`, grnID)
 	if err != nil {
 		return err
@@ -377,11 +445,12 @@ func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receive
 		lineTotal          float64
 		batchNo            string
 		expiryDate         *string
+		mrp, sellingPrice  float64
 	}
 	var lines []line
 	for rows.Next() {
 		var l line
-		if err := rows.Scan(&l.id, &l.variantID, &l.quantity, &l.unitCost, &l.lineTotal, &l.batchNo, &l.expiryDate); err != nil {
+		if err := rows.Scan(&l.id, &l.variantID, &l.quantity, &l.unitCost, &l.lineTotal, &l.batchNo, &l.expiryDate, &l.mrp, &l.sellingPrice); err != nil {
 			rows.Close()
 			return err
 		}
@@ -399,6 +468,24 @@ func completeGRNTx(ctx context.Context, tx pgx.Tx, grnID, userID string, receive
 	if poID != nil {
 		if err := receivePOTx(ctx, tx, grnID, *poID); err != nil {
 			return err
+		}
+	}
+	// migrations/083: a line with an MRP other than its variant's goes into
+	// that MRP's lot (made now if needed, costed at this line's cost). After
+	// the PO check, which matches by PO line, before any stock moves.
+	for i := range lines {
+		if lines[i].mrp <= 0 {
+			continue
+		}
+		lot, _, err := catalog.EnsureMRPLot(ctx, tx, lines[i].variantID, lines[i].mrp, lines[i].sellingPrice, lines[i].unitCost, userID)
+		if err != nil {
+			return err
+		}
+		if lot != lines[i].variantID {
+			if _, err := tx.Exec(ctx, `UPDATE goods_receipt_lines SET variant_id = $1 WHERE id = $2`, lot, lines[i].id); err != nil {
+				return err
+			}
+			lines[i].variantID = lot
 		}
 	}
 
@@ -517,7 +604,8 @@ func loadGRNLines(ctx context.Context, tx pgx.Tx, grnID string) ([]grnLineResp, 
 	rows, err := tx.Query(ctx, `
 		SELECT gl.id, gl.variant_id, pv.sku, p.name, gl.quantity::text, gl.unit_cost::text,
 		       COALESCE(gl.landed_unit_cost::text, ''), gl.line_total::text,
-		       COALESCE(gl.batch_no,''), gl.expiry_date::text, gl.po_line_id::text
+		       COALESCE(gl.batch_no,''), gl.expiry_date::text, gl.po_line_id::text,
+		       gl.mrp::text, gl.selling_price::text, pv.mrp::text
 		FROM goods_receipt_lines gl
 		JOIN product_variants pv ON pv.id = gl.variant_id
 		JOIN products p ON p.id = pv.product_id
@@ -532,7 +620,7 @@ func loadGRNLines(ctx context.Context, tx pgx.Tx, grnID string) ([]grnLineResp, 
 	for rows.Next() {
 		var l grnLineResp
 		if err := rows.Scan(&l.LineID, &l.VariantID, &l.SKU, &l.ProductName, &l.Quantity, &l.UnitCost, &l.LandedUnitCost, &l.LineTotal,
-			&l.BatchNo, &l.ExpiryDate, &l.POLineID); err != nil {
+			&l.BatchNo, &l.ExpiryDate, &l.POLineID, &l.MRP, &l.SellingPrice, &l.VariantMRP); err != nil {
 			return nil, err
 		}
 		lines = append(lines, l)

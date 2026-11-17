@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -33,15 +34,18 @@ type prescriptionResponse struct {
 	CustomerID     string `json:"customer_id"`
 	DoctorName     string `json:"doctor_name"`
 	DoctorRegNo    string `json:"doctor_reg_no"`
-	Notes          string `json:"notes"`
-	CreatedAt      string `json:"created_at"`
+	// DoctorAddress: the Schedule H1 register needs it (migrations/084).
+	DoctorAddress string `json:"doctor_address"`
+	Notes         string `json:"notes"`
+	CreatedAt     string `json:"created_at"`
 }
 
 type createPrescriptionRequest struct {
-	CustomerID  string `json:"customer_id"`
-	DoctorName  string `json:"doctor_name"`
-	DoctorRegNo string `json:"doctor_reg_no"`
-	Notes       string `json:"notes"`
+	CustomerID    string `json:"customer_id"`
+	DoctorName    string `json:"doctor_name"`
+	DoctorRegNo   string `json:"doctor_reg_no"`
+	DoctorAddress string `json:"doctor_address"`
+	Notes         string `json:"notes"`
 }
 
 // CreatePrescription: POST /prescriptions — open to any authenticated
@@ -65,16 +69,17 @@ func (h *Handler) CreatePrescription(w http.ResponseWriter, r *http.Request) {
 	resp.DoctorName = req.DoctorName
 	resp.DoctorRegNo = req.DoctorRegNo
 	resp.Notes = req.Notes
+	resp.DoctorAddress = req.DoctorAddress
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		var customerExists string
 		if err := tx.QueryRow(ctx, `SELECT id FROM customers WHERE id = $1`, req.CustomerID).Scan(&customerExists); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, `
-			INSERT INTO prescriptions (id, merchant_id, customer_id, doctor_name, doctor_reg_no, notes, created_by)
-			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5)
+			INSERT INTO prescriptions (id, merchant_id, customer_id, doctor_name, doctor_reg_no, notes, created_by, doctor_address)
+			VALUES (gen_random_uuid(), current_setting('app.tenant_id')::uuid, $1, $2, $3, $4, $5, NULLIF($6, ''))
 			RETURNING id, created_at::text`,
-			req.CustomerID, req.DoctorName, req.DoctorRegNo, req.Notes, claims.UserID,
+			req.CustomerID, req.DoctorName, req.DoctorRegNo, req.Notes, claims.UserID, strings.TrimSpace(req.DoctorAddress),
 		).Scan(&resp.PrescriptionID, &resp.CreatedAt)
 	})
 	switch {
@@ -100,7 +105,7 @@ func (h *Handler) ListPrescriptions(w http.ResponseWriter, r *http.Request) {
 	list := []prescriptionResponse{}
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, customer_id, doctor_name, COALESCE(doctor_reg_no,''), COALESCE(notes,''), created_at::text
+			SELECT id, customer_id, doctor_name, COALESCE(doctor_reg_no,''), COALESCE(notes,''), created_at::text, COALESCE(doctor_address, '')
 			FROM prescriptions
 			WHERE ($1 = '' OR customer_id::text = $1)
 			ORDER BY created_at DESC`, customerID)
@@ -110,7 +115,7 @@ func (h *Handler) ListPrescriptions(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var p prescriptionResponse
-			if err := rows.Scan(&p.PrescriptionID, &p.CustomerID, &p.DoctorName, &p.DoctorRegNo, &p.Notes, &p.CreatedAt); err != nil {
+			if err := rows.Scan(&p.PrescriptionID, &p.CustomerID, &p.DoctorName, &p.DoctorRegNo, &p.Notes, &p.CreatedAt, &p.DoctorAddress); err != nil {
 				return err
 			}
 			list = append(list, p)

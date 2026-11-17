@@ -632,4 +632,7 @@ const Map<String, String> stringsMl = {
   'More than is due on this sale': 'ഈ വിൽപ്പനയിലെ ബാക്കിയേക്കാൾ കൂടുതൽ',
   'Nothing is due on this sale any more': 'ഈ വിൽപ്പനയിൽ ഇനി ബാക്കിയില്ല',
   'Credit collected': 'ക്രെഡിറ്റ് പിരിവ്',
+  'Which one is it?': 'ഇത് ഏതാണ്?',
+  'Which MRP is on the pack?': 'പാക്കിലെ MRP ഏതാണ്?',
+  'This code is on more than one item.': 'ഈ കോഡ് ഒന്നിലധികം ഇനങ്ങളിലുണ്ട്.',
 };

@@ -7,6 +7,39 @@ import 'package:sqflite/sqflite.dart';
 /// widget test never logs in or touches the cart, and sqflite has no
 /// desktop/host test backend by default, so eager initialization would
 /// break `flutter test` for no functional benefit.
+/// The cached catalog: one row per barcode and variant (v9).
+String _catalogTable(String name) => '''
+  CREATE TABLE $name (
+    barcode TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    hsn_code TEXT,
+    variant_id TEXT NOT NULL,
+    sku TEXT NOT NULL,
+    selling_price TEXT NOT NULL,
+    mrp TEXT NOT NULL,
+    cgst_rate REAL NOT NULL,
+    sgst_rate REAL NOT NULL,
+    igst_rate REAL NOT NULL,
+    cess_rate REAL NOT NULL,
+    price_includes_tax INTEGER NOT NULL DEFAULT 0,
+    open_price_min TEXT,
+    open_price_max TEXT,
+    open_price_approval_above TEXT,
+    pos_color TEXT,
+    pack_qty REAL NOT NULL DEFAULT 1,
+    unit_symbol TEXT,
+    unit_decimals INTEGER NOT NULL DEFAULT 3,
+    label TEXT NOT NULL DEFAULT '',
+    mrp_lot_of TEXT,
+    sellable INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (barcode, variant_id)
+  )
+''';
+
+const _catalogV8Columns = 'barcode, product_id, product_name, hsn_code, variant_id, sku, selling_price, mrp, cgst_rate, sgst_rate, igst_rate, '
+    'cess_rate, price_includes_tax, open_price_min, open_price_max, open_price_approval_above, pos_color, pack_qty, unit_symbol, unit_decimals';
+
 class LocalDb {
   LocalDb._();
   static final LocalDb instance = LocalDb._();
@@ -18,8 +51,11 @@ class LocalDb {
     return _db!;
   }
 
-  Future<Database> _open() async {
-    final path = p.join(await getDatabasesPath(), 'erp_pos_offline.db');
+  Future<Database> _open() async => openAt(p.join(await getDatabasesPath(), 'erp_pos_offline.db'));
+
+  /// Opens (creating or upgrading) the store at [path]; tests use it to
+  /// upgrade an older file.
+  static Future<Database> openAt(String path) {
     return openDatabase(
       path,
       // v2 (erp-core-go migrations/033): catalog.price_includes_tax and
@@ -37,7 +73,11 @@ class LocalDb {
       // tile colour; the next pull is a full one so every product gets it.
       // v8 (erp-core-go migrations/076): catalog.pack_qty (what one scan of
       // the barcode adds), unit_symbol and unit_decimals; a full re-pull.
-      version: 8,
+      // v9 (erp-core-go migrations/083): a code may name several variants
+      // (colours) and their MRP lots, so the catalog is keyed by barcode
+      // AND variant, with each variant's label, mrp_lot_of and sellable;
+      // a full re-pull.
+      version: 9,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await db.execute('ALTER TABLE catalog ADD COLUMN price_includes_tax INTEGER NOT NULL DEFAULT 0');
@@ -76,32 +116,17 @@ class LocalDb {
           await db.execute('ALTER TABLE catalog ADD COLUMN unit_decimals INTEGER NOT NULL DEFAULT 3');
           await db.execute("DELETE FROM sync_meta WHERE key = 'last_pull_at'");
         }
+        if (oldVersion < 9) {
+          // SQLite can't change a primary key in place: rebuild the table.
+          await db.execute(_catalogTable('catalog_v9'));
+          await db.execute('INSERT INTO catalog_v9 ($_catalogV8Columns) SELECT $_catalogV8Columns FROM catalog');
+          await db.execute('DROP TABLE catalog');
+          await db.execute('ALTER TABLE catalog_v9 RENAME TO catalog');
+          await db.execute("DELETE FROM sync_meta WHERE key = 'last_pull_at'");
+        }
       },
       onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE catalog (
-            barcode TEXT PRIMARY KEY,
-            product_id TEXT NOT NULL,
-            product_name TEXT NOT NULL,
-            hsn_code TEXT,
-            variant_id TEXT NOT NULL,
-            sku TEXT NOT NULL,
-            selling_price TEXT NOT NULL,
-            mrp TEXT NOT NULL,
-            cgst_rate REAL NOT NULL,
-            sgst_rate REAL NOT NULL,
-            igst_rate REAL NOT NULL,
-            cess_rate REAL NOT NULL,
-            price_includes_tax INTEGER NOT NULL DEFAULT 0,
-            open_price_min TEXT,
-            open_price_max TEXT,
-            open_price_approval_above TEXT,
-            pos_color TEXT,
-            pack_qty REAL NOT NULL DEFAULT 1,
-            unit_symbol TEXT,
-            unit_decimals INTEGER NOT NULL DEFAULT 3
-          )
-        ''');
+        await db.execute(_catalogTable('catalog'));
         await db.execute('''
           CREATE TABLE stock_cache (
             variant_id TEXT PRIMARY KEY,

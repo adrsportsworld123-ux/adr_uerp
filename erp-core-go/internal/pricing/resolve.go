@@ -67,7 +67,8 @@ type LinePrice struct {
 //  1. The customer's price-list price for this variant — a negotiated
 //     contract price is never overridden by a time-based rule.
 //  2. Otherwise the best live price rule (migrations/035) applied to the
-//     base selling_price: variant rule over category rule, then higher
+//     base selling_price: variant rule over collection rule (a markdown
+//     plan's step, migrations/084) over category rule, then higher
 //     priority, then newest. Time windows are evaluated in the branch's
 //     own timezone at `at`.
 //  3. Otherwise the base selling_price.
@@ -87,20 +88,20 @@ type LinePrice struct {
 func ResolveLinePriceAt(ctx context.Context, tx pgx.Tx, customerID, variantID, branchID string, at time.Time) (LinePrice, error) {
 	var listPrice *float64
 	var base, mrp, cost, taxRate float64
-	var categoryID *string
+	var categoryID, collectionID *string
 	var inclusive bool
 	var benefit string
 	if err := tx.QueryRow(ctx, `
 		SELECT (SELECT pli.price FROM customers c
 		        JOIN price_list_items pli ON pli.price_list_id = c.price_list_id
 		        WHERE c.id = NULLIF($1,'')::uuid AND pli.variant_id = pv.id),
-		       pv.selling_price, pv.mrp, p.category_id::text, pv.cost_price, p.price_includes_tax,
+		       pv.selling_price, pv.mrp, p.category_id::text, p.collection_id::text, pv.cost_price, p.price_includes_tax,
 		       COALESCE(ts.cgst_rate,0) + COALESCE(ts.sgst_rate,0) + COALESCE(ts.igst_rate,0) + COALESCE(ts.cess_rate,0),
 		       app_price_benefit(NULLIF($3,'')::uuid)
 		FROM product_variants pv
 		JOIN products p ON p.id = pv.product_id
 		LEFT JOIN tax_slabs ts ON ts.id = p.tax_slab_id
-		WHERE pv.id = $2`, customerID, variantID, branchID).Scan(&listPrice, &base, &mrp, &categoryID, &cost, &inclusive, &taxRate, &benefit); err != nil {
+		WHERE pv.id = $2`, customerID, variantID, branchID).Scan(&listPrice, &base, &mrp, &categoryID, &collectionID, &cost, &inclusive, &taxRate, &benefit); err != nil {
 		return LinePrice{}, err
 	}
 	if listPrice != nil {
@@ -128,7 +129,7 @@ func ResolveLinePriceAt(ctx context.Context, tx pgx.Tx, customerID, variantID, b
 		SELECT r.id, r.name, r.rule_type, r.value
 		FROM price_rules r CROSS JOIN local
 		WHERE r.active
-		  AND (r.variant_id = $1::uuid OR r.category_id = NULLIF($2,'')::uuid)
+		  AND (r.variant_id = $1::uuid OR r.category_id = NULLIF($2,'')::uuid OR r.collection_id = NULLIF($5,'')::uuid)
 		  AND (r.branch_id IS NULL OR r.branch_id = NULLIF($3,'')::uuid)
 		  AND (r.starts_at IS NULL OR r.starts_at <= $4::timestamptz)
 		  AND (r.ends_at IS NULL OR $4::timestamptz < r.ends_at)
@@ -137,8 +138,8 @@ func ResolveLinePriceAt(ctx context.Context, tx pgx.Tx, customerID, variantID, b
 		         WHEN r.time_start <= r.time_end THEN local.ts::time >= r.time_start AND local.ts::time < r.time_end
 		         ELSE local.ts::time >= r.time_start OR local.ts::time < r.time_end  -- window crosses midnight
 		       END)
-		ORDER BY (r.variant_id IS NOT NULL) DESC, r.priority DESC, r.created_at DESC
-		LIMIT 1`, variantID, deref(categoryID), branchID, at).Scan(&ruleID, &ruleName, &ruleType, &value)
+		ORDER BY (r.variant_id IS NOT NULL) DESC, (r.collection_id IS NOT NULL) DESC, r.priority DESC, r.created_at DESC
+		LIMIT 1`, variantID, deref(categoryID), branchID, at, deref(collectionID)).Scan(&ruleID, &ruleName, &ruleType, &value)
 	ruleFound := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return LinePrice{}, err
