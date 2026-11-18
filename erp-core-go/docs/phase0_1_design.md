@@ -262,6 +262,9 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `NO_TABLE_FOUND` | 422 | `POST /purchase/imports/read` (§3.91) | No item table under the supplier's column headings; `details` carries `ai_available` and the template used |
 | `AI_READER_UNAVAILABLE` | 503 | `POST /purchase/imports/read` (§3.91) | Photos / a scanned PDF sent, but the server has no `ANTHROPIC_API_KEY` |
 | `AI_READ_FAILED` | 502 | `POST /purchase/imports/read` (§3.91) | The AI reader answered with something that isn't the invoice |
+| `PREVIOUS_DUE_CHANGED` | 409 | `POST /sales/orders/{id}/checkout` (§3.92) | `previous_due.collect` is more than the customer now owes on earlier sales (paid elsewhere meanwhile); read `GET .../previous-due` again |
+| `PREVIOUS_DUE_NOT_COVERED` | 400 | `POST /sales/orders/{id}/checkout` (§3.92) | The cash, card and UPI tenders don't reach `previous_due.collect` — credit can't pay credit |
+| `PREVIOUS_DUE_UNAVAILABLE` | 503 | `POST /sales/orders/{id}/checkout` (§3.92) | `previous_due` sent before migrations/087 is applied; every other checkout works as before |
 | `NOTHING_DUE` | 409 | `POST /sales/orders/{id}/credit-payments` (§3.85) | The sale has no credit left to pay (a cash sale, or already paid) |
 | `MARKUP_RULE_IN_USE` | 409 | `PUT/DELETE /pricing/markup-rules/{id}` (§3.77) | The rule has priced sale lines: switch it off and make a new one |
 | `PARTNER_EXISTS` | 409 | `POST/PATCH /partners` (§3.77) | Another partner has that name |
@@ -2990,6 +2993,16 @@ Migration 086: `supplier_invoice_templates` (one per supplier: `column_map`, `op
 - Web (Import Invoice): "Read the supplier's invoice": file in, an editable lines table (name, qty, cost before GST, GST, MRP, sale price, category, brand, sale GST; notes per line), "Reading rules" (save per supplier), "Read it with AI" after NO_TABLE_FOUND when available; the table is the page's CSV.
 
 Verified: Go `invoice_reader_test.go` against invoices 1, 3, 11, 12 (and by hand on 2, 4-9: every one adds up to its printed totals row); `walkin_reader_flow.py` (reader part, 30 checks: invoice 12 read, found by GSTIN, imported at Rs 17,790 / 25 pieces, read again restocks); a browser check of the page (16 checks).
+
+### 3.92 Previous outstanding collected with the current sale (2026-11-18)
+
+When a sale has a customer who still owes on earlier credit sales, the till and New sale show it and the cashier keeps it on this bill (default) or leaves it off (`internal/sales/previous_due.go`, migrations/087).
+
+- **Read:** `GET /sales/orders/{id}/previous-due` → `{customer_id, outstanding, invoices[]}` — the customer's sales that are `finalized`/`partially_refunded` with `credit_amount − credit_paid > 0`, excluding this one, oldest first (`openDueInvoices`). Any signed-in user, like `.../credit-payments`.
+- **Checkout:** `previous_due: {collect}` (absent = left off, exactly as before; `collect` 0 = shown on the receipt, nothing collected; at most the outstanding, re-read `FOR UPDATE`). The payments cover the bill plus `collect`. `splitTenders` takes `collect` out of the non-credit tenders, last first; the rest are the sale's own, so `payments`, the sale journal, loyalty earn and the drawer's sale cash are as without it. After the sale is finalized, `previousDuePlan.apply` pays the open sales oldest first through `customers.ApplyReceivablePayment` (Dr cash/bank, Cr Accounts Receivable; `pos_terminal_id` = the sale's till so the cash counts as "Credit collected"; `collected_with_order_id` = this sale) and stores `previous_due` / `previous_due_collected` on the sale. A retried checkout answers from the finalized sale and pays nothing twice.
+- **Shown:** `previous_due {outstanding, collected, balance_after, total_received, payments[]}` on the order (`loadOrder`, once not a cart), the receipt JSON, the thermal slip ("Previous due / Collected now / against … / Total received / Balance due"), the PDF's payments block, and `GET .../detail`. `balance_after` = outstanding − collected + this sale's own credit; `payments` is one line per earlier sale, oldest first, methods joined ("cash + upi").
+- **Before the migration:** `previousDueColumns` checks once for the columns; until they exist, orders, receipts and receivable payments read and write as before and only `previous_due` is refused (`PREVIOUS_DUE_UNAVAILABLE`). `ApplyReceivablePayment` sets `collected_with_order_id` in a separate statement only when given.
+- **Clients:** offline carts never offer it (customer attach is live-only). Verified end to end against the compose database: FIFO across two invoices, partial collection, the three refusals, retry, AR ledger = the balance, journals balanced, thermal and PDF.
 
 ## 4. What Phase 0 concretely delivers against this design
 

@@ -35,6 +35,15 @@ type SaleInput struct {
 	// migrations/081). false = the receipt as before.
 	ShowMRPDiscount                bool
 	MRPDiscountTotal, TotalSavings string
+	// PreviousDue: the customer's earlier outstanding kept on this bill
+	// (migrations/087); nil = the receipt as before.
+	PreviousDue *SalePreviousDue
+}
+
+// SalePreviousDue: listed under the payments.
+type SalePreviousDue struct {
+	Outstanding, Collected, TotalReceived, BalanceAfter string
+	Against                                             [][2]string // "S-0012 · cash", amount
 }
 
 // SaleReceipt: a finalized sale is a "TAX INVOICE" when the branch has a
@@ -114,6 +123,17 @@ func SaleReceipt(lh Letterhead, in SaleInput) Document {
 	}
 	for _, p := range in.Payments {
 		d.Payments = append(d.Payments, [2]string{Label(p[0]), INR(p[1])})
+	}
+	if pd := in.PreviousDue; pd != nil {
+		d.Payments = append(d.Payments, [2]string{"Previous due", INR(pd.Outstanding)})
+		if isNonZero(pd.Collected) {
+			d.Payments = append(d.Payments, [2]string{"Collected now", INR(pd.Collected)})
+			for _, a := range pd.Against {
+				d.Payments = append(d.Payments, [2]string{"   against " + a[0], INR(a[1])})
+			}
+			d.Payments = append(d.Payments, [2]string{"Total received", INR(pd.TotalReceived)})
+		}
+		d.Payments = append(d.Payments, [2]string{"Balance due", INR(pd.BalanceAfter)})
 	}
 	return d
 }

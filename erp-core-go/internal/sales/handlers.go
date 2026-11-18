@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -86,6 +87,9 @@ type orderResponse struct {
 	// to apply them again.
 	DiscountsCleared bool `json:"discounts_cleared,omitempty"`
 	mrpSavings
+	// PreviousDue: the customer's earlier outstanding this sale kept on
+	// its bill and what it collected (migrations/087); absent otherwise.
+	PreviousDue *previousDueSummary `json:"previous_due,omitempty"`
 }
 
 // mrpSavings (migrations/081): what the customer saved against MRP —
@@ -707,16 +711,22 @@ func (h *Handler) DeleteLine(w http.ResponseWriter, r *http.Request) {
 // POST /sales/orders/{id}/checkout
 // ---------------------------------------------------------------------
 
+type checkoutPayment struct {
+	Method    string  `json:"method"`
+	Amount    float64 `json:"amount"`
+	Reference string  `json:"reference"` // card/UPI gateway transaction id (UTR), if the terminal/gateway integration provides one — matched later by accounting.MatchPaymentGatewaySettlementLine
+}
+
 type checkoutRequest struct {
-	Payments []struct {
-		Method    string  `json:"method"`
-		Amount    float64 `json:"amount"`
-		Reference string  `json:"reference"` // card/UPI gateway transaction id (UTR), if the terminal/gateway integration provides one — matched later by accounting.MatchPaymentGatewaySettlementLine
-	} `json:"payments"`
+	Payments []checkoutPayment `json:"payments"`
 	// RoundOff: the amount waived, signed (-0.75 settles ₹105.75 for ₹105).
 	// Optional; 0 = none, exactly as before. Within the merchant's
 	// round_off_max (round_off.go).
 	RoundOff float64 `json:"round_off"`
+	// PreviousDue: the customer's earlier outstanding kept on this bill,
+	// and how much of it the payments also cover (previous_due.go).
+	// Absent = left off, exactly as before.
+	PreviousDue *previousDueRequest `json:"previous_due"`
 }
 
 func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
@@ -815,6 +825,14 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 			if scheduledCount > 0 {
 				return errPrescriptionRequired
 			}
+		}
+
+		// The customer's previous outstanding kept on the bill: its share of
+		// the tenders comes out here, so everything below sees only the
+		// sale's own (previous_due.go).
+		dues, err := planPreviousDue(ctx, tx, &req, customerID, orderID)
+		if err != nil {
+			return err
 		}
 
 		var paidTotal, creditPortion float64
@@ -957,6 +975,11 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		if dues != nil {
+			if err := dues.apply(ctx, tx, *customerID, orderID, claims.UserID); err != nil {
+				return err
+			}
+		}
 
 		// Loyalty earn (discount hierarchy item 5's counterpart — see
 		// internal/loyalty.Handler.EarnForOrder for why a redemption on
@@ -1004,9 +1027,18 @@ func (h *Handler) Checkout(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "PRESCRIPTION_REQUIRED", errPrescriptionRequired.Error())
 	case errors.Is(err, errReservationMismatch):
 		httpx.Error(w, http.StatusConflict, "RESERVATION_MISMATCH", "one or more items' stock hold has lapsed — remove and re-add them, or recall this cart again, before checkout")
+	case errors.Is(err, errPreviousDueUnavailable):
+		httpx.Error(w, http.StatusServiceUnavailable, "PREVIOUS_DUE_UNAVAILABLE", errPreviousDueUnavailable.Error())
+	case errors.Is(err, errPreviousDueNoCustomer):
+		httpx.Error(w, http.StatusBadRequest, "INVALID_REQUEST", errPreviousDueNoCustomer.Error())
+	case errors.Is(err, errPreviousDueTooMuch):
+		httpx.Error(w, http.StatusConflict, "PREVIOUS_DUE_CHANGED", "that is more than the customer now owes on earlier sales — check the previous outstanding again")
+	case errors.Is(err, errPreviousDueNotCovered):
+		httpx.Error(w, http.StatusBadRequest, "PREVIOUS_DUE_NOT_COVERED", errPreviousDueNotCovered.Error())
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
 	case err != nil:
+		log.Printf("sales: checkout %s: %v", orderID, err)
 		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "checkout failed")
 	default:
 		httpx.JSON(w, http.StatusOK, resp)
@@ -1047,6 +1079,12 @@ func loadOrder(ctx context.Context, tx pgx.Tx, orderID string, resp *orderRespon
 	if err := row.Scan(&resp.OrderID, &resp.OrderNumber, &resp.Status, &resp.Channel,
 		&resp.Subtotal, &resp.DiscountTotal, &resp.TaxTotal, &resp.GrandTotal, &resp.RoundOff, &resp.PayableTotal); err != nil {
 		return err
+	}
+	if resp.Status != "cart" && resp.Status != "held" {
+		var err error
+		if resp.PreviousDue, err = loadPreviousDue(ctx, tx, orderID); err != nil {
+			return err
+		}
 	}
 	return loadLinesAndTax(ctx, tx, resp)
 }

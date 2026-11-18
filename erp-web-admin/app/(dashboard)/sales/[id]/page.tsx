@@ -19,7 +19,7 @@
 // Prices and quantities are corrected with a return and a new sale.
 // - E-invoice and e-way bill (einvoice.manage, plans with GST compliance):
 //   generated or cancelled here on a completed sale.
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Ban, RotateCcw, Shuffle } from "lucide-react";
@@ -360,6 +360,34 @@ export default function SaleDetailPage() {
               ))}
             </ul>
           </Section>
+
+          {/* The customer's earlier outstanding kept on this bill (erp-core-go migrations/087), as the receipt prints it. */}
+          {sale.previous_due && (
+            <Section title="Previous outstanding">
+              <dl className="grid grid-cols-1 gap-y-1 text-sm sm:grid-cols-2" data-testid="sale-previous-due">
+                <dt className="text-muted-foreground">Previous due</dt>
+                <dd className="tabular text-right">{rupees(sale.previous_due.outstanding)}</dd>
+                {Number(sale.previous_due.collected) > 0 && (
+                  <>
+                    <dt className="text-muted-foreground">Collected with this sale</dt>
+                    <dd className="tabular text-right">{rupees(sale.previous_due.collected)}</dd>
+                    {sale.previous_due.payments.map((p) => (
+                      <Fragment key={p.order_number}>
+                        <dt className="ps-4 text-xs text-muted-foreground">
+                          against {p.order_number} · {p.method.split(" + ").map((m) => METHOD_LABEL[m] ?? m).join(" + ")}
+                        </dt>
+                        <dd className="tabular text-right text-xs">{rupees(p.amount)}</dd>
+                      </Fragment>
+                    ))}
+                    <dt className="font-semibold">Total received</dt>
+                    <dd className="tabular text-right font-semibold">{rupees(sale.previous_due.total_received)}</dd>
+                  </>
+                )}
+                <dt className="font-semibold">Balance due</dt>
+                <dd className="tabular text-right font-semibold">{rupees(sale.previous_due.balance_after)}</dd>
+              </dl>
+            </Section>
+          )}
 
           {Number(sale.credit_amount) > 0 && (sale.status === "finalized" || sale.status === "partially_refunded") && (
             <Section title="Credit">

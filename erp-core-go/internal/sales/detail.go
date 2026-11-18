@@ -139,6 +139,10 @@ type orderDetail struct {
 	Returns         []returnResponse `json:"returns"`
 	Journal         []detailJournal  `json:"journal"`
 	Audit           []detailAudit    `json:"audit"`
+	// PreviousDue: the customer's earlier outstanding this sale kept on its
+	// bill, what it collected and against which sales (migrations/087).
+	// Additive; absent otherwise.
+	PreviousDue *previousDueSummary `json:"previous_due,omitempty"`
 }
 
 func ts(t *time.Time) *string {
@@ -184,6 +188,10 @@ func (h *Handler) OrderDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		d.CreatedAt = *ts(&created)
 		d.FinalizedAt, d.DeviceCreatedAt = ts(finalized), ts(device)
+		var err error
+		if d.PreviousDue, err = loadPreviousDue(ctx, tx, orderID); err != nil {
+			return err
+		}
 
 		// Lines, with what's been returned and the effective tax rate.
 		rows, err := tx.Query(ctx, `

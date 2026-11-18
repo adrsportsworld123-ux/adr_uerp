@@ -199,6 +199,22 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
           const SizedBox(height: 16),
           for (final p in r.payments)
             _totalRow(p.method.toUpperCase(), p.amount),
+          // The customer's earlier outstanding kept on this bill
+          // (erp-core-go migrations/087).
+          if (r.previousDue case final pd?) ...[
+            const Divider(height: 24),
+            _totalRow(tr('Previous due'), pd.outstanding, key: const Key('receipt-previous-due')),
+            if (pd.hasCollected) ...[
+              _totalRow(tr('Collected now'), pd.collected, key: const Key('receipt-previous-collected')),
+              for (final (number, method, amount) in pd.payments)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 12),
+                  child: _totalRow(tr('against {0}', ['$number · ${method.toUpperCase()}']), amount),
+                ),
+              _totalRow(tr('Total received'), pd.totalReceived, emphasize: true, key: const Key('receipt-total-received')),
+            ],
+            _totalRow(tr('Balance due'), pd.balanceAfter, emphasize: true, key: const Key('receipt-balance-due')),
+          ],
           const SizedBox(height: 24),
           FilledButton.icon(
             onPressed: _printing ? null : _print,

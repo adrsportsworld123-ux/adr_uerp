@@ -409,6 +409,8 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			// Not gated, as POST /customers/{id}/payments isn't.
 			protected.Get("/sales/orders/{id}/credit-payments", orders.GetCreditPayments)
 			protected.Post("/sales/orders/{id}/credit-payments", orders.RecordCreditPayment)
+			// The customer's earlier outstanding, to keep on this bill (§3.92).
+			protected.Get("/sales/orders/{id}/previous-due", orders.GetPreviousDue)
 			protected.Post("/sales/orders/{id}/lines", orders.AddLine)
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)

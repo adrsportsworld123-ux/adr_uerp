@@ -12,14 +12,23 @@ part of '../pos_screen.dart';
 // allows it, the cashier can waive a small balance — the paise by default,
 // or another amount up to the limit — so ₹105.75 is settled for ₹105. The
 // bill keeps its total; the waiver travels with the payments.
+//
+// Previous outstanding (erp-core-go migrations/087): when the customer
+// still owes on earlier credit sales, the sheet shows it and keeps it on
+// this bill by default — all of it collected now, or an amount the cashier
+// types (0 = shown on the receipt, nothing collected) — or the cashier
+// leaves it off. The amount due is the bill plus what is collected; the
+// server applies that part to the oldest sales first. Credit can't pay it.
 // ---------------------------------------------------------------------
 
-/// What the payment sheet hands back: the tenders and the waiver taken
-/// (signed, 0 = none).
+/// What the payment sheet hands back: the tenders, the waiver taken
+/// (signed, 0 = none), and the previous outstanding collected with them
+/// (null = left off the bill).
 class _PaymentResult {
   final List<PaymentInput> payments;
   final double roundOff;
-  const _PaymentResult(this.payments, {this.roundOff = 0});
+  final double? previousDueCollect;
+  const _PaymentResult(this.payments, {this.roundOff = 0, this.previousDueCollect});
 }
 
 const _tenders = [
@@ -54,11 +63,32 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   bool _roundOn = false;
   double? _customWaive;
 
+  /// The customer's previous outstanding (null: none, a walk-in, offline),
+  /// whether it stays on this bill, and an amount typed (null = all of it).
+  PreviousDueInfo? _previous;
+  bool _keepPrevious = true;
+  double? _customCollect;
+
   @override
   void initState() {
     super.initState();
     _roundOn = context.read<AppSession>().roundOffAuto;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _autoApplyPromotions());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoApplyPromotions();
+      _loadPrevious();
+    });
+  }
+
+  /// Reads the customer's previous outstanding — on opening, and after the
+  /// customer changes. Kept on the bill each time it is read.
+  Future<void> _loadPrevious() async {
+    final info = await context.read<AppSession>().loadPreviousDue();
+    if (!mounted) return;
+    setState(() {
+      _previous = info;
+      _keepPrevious = true;
+      _customCollect = null;
+    });
   }
 
   /// Opening the sheet applies every eligible promotion (best price per
@@ -105,7 +135,39 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     return w > 0 && w <= _waiveLimit(s) + 0.004 ? w : 0;
   }
 
-  double _remaining(AppSession s) => _round2(_total(s) - _waive(s) - _paid());
+  /// What this bill collects of the previous outstanding (0 when left off).
+  double _collect() => _previous == null || !_keepPrevious ? 0 : _round2(_customCollect ?? _previous!.amount);
+
+  /// Of what is collected, the part the cash, card and UPI added so far
+  /// don't cover yet — what a credit split must leave room for.
+  double _collectUncovered() {
+    final nonCredit = _splits.where((p) => p.method != 'credit').fold<double>(0, (sum, p) => sum + p.amount);
+    final left = _round2(_collect() - nonCredit);
+    return left > 0 ? left : 0;
+  }
+
+  double _remaining(AppSession s) => _round2(_total(s) - _waive(s) + _collect() - _paid());
+
+  Future<void> _otherCollect() async {
+    final prev = _previous;
+    if (prev == null) return;
+    final text = await _promptText(context,
+        title: tr('Previous outstanding to collect now (up to {0})', [formatRupeesNum(prev.amount)]),
+        label: tr('Amount collected ({0})', [PosCurrency.symbol]),
+        confirm: tr('Apply'));
+    if (text == null || !mounted) return;
+    final v = double.tryParse(text.trim());
+    setState(() {
+      if (v == null || v < 0 || v > prev.amount + 0.004) {
+        _message = tr('Enter an amount up to {0}', [formatRupeesNum(prev.amount)]);
+        return;
+      }
+      _customCollect = _round2(v);
+      _keepPrevious = true;
+      _splits.clear();
+      _message = null;
+    });
+  }
 
   Future<void> _otherWaive(AppSession s) async {
     final text = await _promptText(context,
@@ -141,6 +203,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     );
     if (result == null || !mounted) return;
     await _run(() => _applyCustomerPick(s, result), result.clear ? tr('Walk-in sale — customer cleared') : tr('Customer added'));
+    if (mounted) await _loadPrevious();
     if (mounted && s.customerChangeClearedDiscounts) {
       setState(() => _message = tr('The customer’s points and discounts came off. Apply discounts again before payment.'));
     }
@@ -148,6 +211,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
 
   Future<void> _clearCustomer(AppSession s) async {
     await _run(s.clearCustomer, tr('Walk-in sale — customer cleared'));
+    if (mounted) await _loadPrevious();
     if (mounted && s.customerChangeClearedDiscounts) {
       setState(() => _message = tr('The customer’s points and discounts came off. Apply discounts again before payment.'));
     }
@@ -170,11 +234,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   void _complete(AppSession s) {
     final due = _remaining(s);
     final roundOff = -_waive(s);
+    final collect = _previous != null && _keepPrevious ? _collect() : null;
     if (_splitMode) {
-      if (due > 0.004) return;
-      Navigator.pop(context, _PaymentResult(List<PaymentInput>.of(_splits), roundOff: roundOff));
+      if (due > 0.004 || _collectUncovered() > 0.004) return;
+      Navigator.pop(context, _PaymentResult(List<PaymentInput>.of(_splits), roundOff: roundOff, previousDueCollect: collect));
       return;
     }
+    if (_method == 'credit' && _collect() > 0) return;
     if (_method == 'cash') {
       final tendered = double.tryParse(_tenderedController.text) ?? due;
       if (tendered + 0.004 < due) return;
@@ -183,14 +249,19 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     Navigator.pop(
         context,
         _PaymentResult([PaymentInput(method: _method, amount: due, reference: (_method == 'card' || _method == 'upi') && ref.isNotEmpty ? ref : null)],
-            roundOff: roundOff));
+            roundOff: roundOff, previousDueCollect: collect));
   }
 
   void _addSplit(AppSession s) {
     final remaining = _remaining(s);
-    final amount = double.tryParse(_splitAmountController.text) ?? remaining;
-    if (amount <= 0 || amount > remaining + 0.004) {
-      setState(() => _message = tr('Enter an amount up to {0}', [formatRupeesNum(remaining)]));
+    // Credit pays only the bill: it leaves room for the previous
+    // outstanding still to be covered by cash, card or UPI.
+    final max = _method == 'credit' ? _round2(remaining - _collectUncovered()) : remaining;
+    final amount = double.tryParse(_splitAmountController.text) ?? max;
+    if (amount <= 0 || amount > max + 0.004) {
+      setState(() => _message = _method == 'credit' && max < remaining
+          ? tr('Credit can’t pay the previous outstanding — split the payment, or leave it off')
+          : tr('Enter an amount up to {0}', [formatRupeesNum(max)]));
       return;
     }
     final ref = _referenceController.text.trim();
@@ -212,10 +283,13 @@ class _PaymentSheetState extends State<_PaymentSheet> {
     final due = _remaining(session);
     final tendered = double.tryParse(_tenderedController.text);
     final change = _method == 'cash' && tendered != null ? _round2(tendered - due) : null;
+    final creditBlocked = !_splitMode && _method == 'credit' && _collect() > 0;
     final canComplete = !_working &&
         (_splitMode
-            ? due <= 0.004 && _splits.isNotEmpty
-            : _tenderDisabledReason(session, _method) == null && (_method != 'cash' || tendered == null || tendered + 0.004 >= due));
+            ? due <= 0.004 && _splits.isNotEmpty && _collectUncovered() <= 0.004
+            : _tenderDisabledReason(session, _method) == null &&
+                !creditBlocked &&
+                (_method != 'cash' || tendered == null || tendered + 0.004 >= due));
 
     final quick = <double>{due, ((due / 100).ceil() * 100).toDouble(), ((due / 500).ceil() * 500).toDouble(), ((due / 2000).ceil() * 2000).toDouble()}
         .where((v) => v >= due)
@@ -246,8 +320,29 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 key: const Key('amount-due'),
                 style: theme.textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
           ]),
+          if (_collect() > 0)
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(tr('Bill {0} + previous {1}', [formatRupeesNum(_round2(_total(session) - _waive(session))), formatRupeesNum(_collect())]),
+                  key: const Key('bill-plus-previous'), style: theme.textTheme.bodySmall),
+            ),
           const SizedBox(height: 12),
           _PaymentCustomer(enabled: live && !_working, onPick: () => _pickCustomer(session), onClear: () => _clearCustomer(session)),
+          if (_previous != null && live) ...[
+            const SizedBox(height: 8),
+            _PreviousDueRow(
+              info: _previous!,
+              keep: _keepPrevious,
+              collect: _collect(),
+              enabled: !_working,
+              onKeep: (on) => setState(() {
+                _keepPrevious = on;
+                _splits.clear();
+                _message = null;
+              }),
+              onChange: _otherCollect,
+            ),
+          ],
           if (session.roundOffMax > 0 && _total(session) > 0) ...[
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -394,6 +489,12 @@ class _PaymentSheetState extends State<_PaymentSheet> {
               }),
             ),
           ),
+          if (creditBlocked)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(tr('Credit can’t pay the previous outstanding — split the payment, or leave it off'),
+                  key: const Key('previous-due-credit'), style: TextStyle(color: theme.colorScheme.error)),
+            ),
           if (_message != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
@@ -593,6 +694,56 @@ class _PaymentCustomer extends StatelessWidget {
           onPressed: enabled ? onPick : null,
           icon: Icon(name == null ? Icons.person_add_alt : Icons.swap_horiz, size: 18),
           label: Text(name == null ? tr('Add customer') : tr('Change')),
+        ),
+      ]),
+    );
+  }
+}
+
+/// The customer's previous outstanding on the payment step: how much and
+/// over how many bills, a switch to keep it on this bill, and what is
+/// collected now (all of it, unless the cashier changes the amount).
+class _PreviousDueRow extends StatelessWidget {
+  final PreviousDueInfo info;
+  final bool keep;
+  final double collect;
+  final bool enabled;
+  final ValueChanged<bool> onKeep;
+  final VoidCallback onChange;
+
+  const _PreviousDueRow({required this.info, required this.keep, required this.collect, required this.enabled, required this.onKeep, required this.onChange});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final pos = theme.pos;
+    return Container(
+      key: const Key('previous-due'),
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: keep ? pos.warnSoft : null,
+        border: Border.all(color: keep ? pos.warn : theme.colorScheme.outline),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(children: [
+        Icon(Icons.history, size: 20, color: pos.warn),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text('${tr('Previous outstanding')} ${formatRupeesNum(info.amount)}', key: const Key('previous-due-amount'), style: theme.textTheme.titleSmall),
+            Text(
+              [
+                info.invoiceCount == 1 ? tr('1 earlier bill') : tr('{0} earlier bills', [info.invoiceCount]),
+                if (keep) collect > 0 ? tr('Collecting {0} now', [formatRupeesNum(collect)]) : tr('Kept on the bill — nothing collected now'),
+              ].join(' · '),
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ]),
+        ),
+        if (keep) TextButton(key: const Key('previous-due-change'), onPressed: enabled ? onChange : null, child: Text(tr('Change amount'))),
+        Tooltip(
+          message: tr('Add to this bill'),
+          child: Switch(key: const Key('previous-due-keep'), value: keep, onChanged: enabled ? onKeep : null),
         ),
       ]),
     );

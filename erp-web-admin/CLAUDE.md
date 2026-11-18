@@ -125,6 +125,8 @@ Bearer token in `localStorage` (`lib/auth.tsx`), not a cookie/session — delibe
 
 **Walk-in and invoice reader (2026-11-17, erp-core-go §3.90-§3.91).** New sale's Customer box has "Walk-in" (DELETE `/sales/orders/{id}/customer`). Import Invoice's "Read the supplier's invoice" (`components/purchase/invoice-reader.tsx`, `lib/invoice-reader.ts`): a PDF's text is extracted in the browser with pdf.js (`pdfjs-dist` 4.10.38, run in the page thread by setting `globalThis.pdfjsWorker`, so there is no worker file to serve) and sent to `POST /purchase/imports/read`; photos are scaled to 2,200 px JPEG for the AI reader. The editable lines are the page's CSV (`linesToCsv`); "Reading rules" edits and saves the supplier's template.
 
+**Previous outstanding (2026-11-18, erp-core-go §3.92).** New sale reads `GET /sales/orders/{id}/previous-due` when a customer is on the cart (a read for another customer is ignored by `customer_id`): "Previous outstanding" is ticked by default with "collect now" (all of it; 0 = shown only), "To collect" and Complete sale include it, and checkout sends `previous_due: {collect}`. Credit can't pay it. The sale page's "Previous outstanding" section shows the collection from `SaleDetail.previous_due`.
+
 **Reporting round (2026-10-18, `erp-core-go` `phase0_1_design.md` §3.60–§3.63):** the sales dashboard (`/dashboard`, recharts; widgets per role under `/dashboard/settings`), X & Z reports (`/reports/x-z`), the Report Library (`/reports/library`) and Saved Reports (`/reports/saved`). `e2e/reports-round10.spec.ts` covers them. The app shell puts focus back at the top after a navigation that left nothing focused (recharts' focusable charts otherwise sent the next Tab past the end of the new page).
 
 ## Working conventions to keep

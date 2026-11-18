@@ -335,7 +335,7 @@ class _PosScreenState extends State<PosScreen> {
           );
     if (result == null || result.payments.isEmpty) return _refocusScan();
 
-    final ok = await _withBusy(() => session.checkout(result.payments, roundOff: result.roundOff));
+    final ok = await _withBusy(() => session.checkout(result.payments, roundOff: result.roundOff, previousDueCollect: result.previousDueCollect));
     if (!mounted) return;
     if (ok != true) {
       if (session.lastError != null) _snack(session.lastError!);

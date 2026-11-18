@@ -856,6 +856,11 @@ class ReceiptData {
   /// MRP savings and whether the branch prints them (migrations/081).
   final MrpSavings savings;
 
+  /// The customer's earlier outstanding kept on this bill, what was
+  /// collected and the balance after (erp-core-go migrations/087); null
+  /// when it wasn't kept (or from an older server).
+  final PreviousDueSummary? previousDue;
+
   ReceiptData({
     required this.orderNumber,
     required this.status,
@@ -876,6 +881,7 @@ class ReceiptData {
     this.taxBreakup,
     this.showSku = true,
     this.savings = const MrpSavings(),
+    this.previousDue,
   }) : payableTotal = payableTotal ?? grandTotal;
 
   bool get hasRoundOff => (double.tryParse(roundOff) ?? 0) < 0;
@@ -904,6 +910,61 @@ class ReceiptData {
         taxBreakup: TaxBreakup.fromJson(json['tax_breakup'] as Map<String, dynamic>?),
         showSku: json['show_sku'] as bool? ?? true,
         savings: MrpSavings.fromJson(json),
+        previousDue: PreviousDueSummary.fromJson(json['previous_due'] as Map<String, dynamic>?),
+      );
+}
+
+/// What a sale collected of the customer's previous outstanding
+/// (erp-core-go internal/sales/previous_due.go): the outstanding before
+/// it, what was collected and against which earlier sales, the bill plus
+/// that, and what is still owed after it.
+class PreviousDueSummary {
+  final String outstanding;
+  final String collected;
+  final String balanceAfter;
+  final String totalReceived;
+
+  /// (earlier sale's number, method(s), amount)
+  final List<(String, String, String)> payments;
+
+  const PreviousDueSummary({
+    required this.outstanding,
+    required this.collected,
+    required this.balanceAfter,
+    required this.totalReceived,
+    this.payments = const [],
+  });
+
+  bool get hasCollected => (double.tryParse(collected) ?? 0) > 0;
+
+  static PreviousDueSummary? fromJson(Map<String, dynamic>? json) {
+    if (json == null) return null;
+    return PreviousDueSummary(
+      outstanding: json['outstanding'] as String? ?? '0.00',
+      collected: json['collected'] as String? ?? '0.00',
+      balanceAfter: json['balance_after'] as String? ?? '0.00',
+      totalReceived: json['total_received'] as String? ?? '0.00',
+      payments: (json['payments'] as List<dynamic>? ?? const [])
+          .map((e) => e as Map<String, dynamic>)
+          .map((e) => (e['order_number'] as String? ?? '', e['method'] as String? ?? '', e['amount'] as String? ?? '0.00'))
+          .toList(),
+    );
+  }
+}
+
+/// GET /sales/orders/{id}/previous-due: what the sale's customer still owes
+/// on earlier credit sales.
+class PreviousDueInfo {
+  final String outstanding;
+  final int invoiceCount;
+
+  const PreviousDueInfo({required this.outstanding, required this.invoiceCount});
+
+  double get amount => double.tryParse(outstanding) ?? 0;
+
+  factory PreviousDueInfo.fromJson(Map<String, dynamic> json) => PreviousDueInfo(
+        outstanding: json['outstanding'] as String? ?? '0.00',
+        invoiceCount: (json['invoices'] as List<dynamic>? ?? const []).length,
       );
 }
 
@@ -2114,10 +2175,14 @@ class ApiClient {
 
   /// [roundOff]: the amount waived, signed (-0.75 settles ₹105.75 for
   /// ₹105); 0 sends nothing, exactly the request older servers expect.
+  /// [previousDueCollect]: the customer's earlier outstanding was kept on
+  /// this bill and this much of it is paid with it (the payments cover
+  /// both); null = left off, and nothing is sent.
   Future<OrderSummary> checkout({
     required String orderId,
     required List<PaymentInput> payments,
     double roundOff = 0,
+    double? previousDueCollect,
   }) async {
     final resp = await _http.post(
       Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/checkout'),
@@ -2125,9 +2190,20 @@ class ApiClient {
       body: jsonEncode({
         'payments': payments.map((p) => p.toJson()).toList(),
         if (roundOff != 0) 'round_off': roundOff,
+        if (previousDueCollect != null) 'previous_due': {'collect': previousDueCollect},
       }),
     );
     return OrderSummary.fromJson(_decode(resp));
+  }
+
+  /// GET /sales/orders/{id}/previous-due — the sale's customer's earlier
+  /// outstanding (0 for a walk-in).
+  Future<PreviousDueInfo> getPreviousDue(String orderId) async {
+    final resp = await _http.get(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/previous-due'),
+      headers: _authHeaders,
+    );
+    return PreviousDueInfo.fromJson(_decode(resp));
   }
 
   Future<OrderSummary> getOrder(String orderId) async {

@@ -2027,6 +2027,28 @@ export interface SaleDetail {
   returns: SaleReturn[];
   journal: { entry_number: string; entry_date: string; source_type: string; description: string; amount: string }[];
   audit: { entity_type: string; action: string; performed_by: string | null; reason: string; created_at: string }[];
+  /** erp-core-go migrations/087: the customer's earlier outstanding kept on this bill; absent otherwise. */
+  previous_due?: PreviousDueSummary;
+}
+
+/** What a sale collected of the customer's previous outstanding (erp-core-go previous_due.go). */
+export interface PreviousDueSummary {
+  /** The outstanding before this sale. */
+  outstanding: string;
+  collected: string;
+  /** Still owed after it: the outstanding less what was collected, plus this sale's own credit. */
+  balance_after: string;
+  /** The bill as paid plus what was collected. */
+  total_received: string;
+  /** One line per earlier sale paid, oldest first; method may be "cash + upi". */
+  payments: { order_number: string; method: string; amount: string }[];
+}
+
+/** GET /sales/orders/{id}/previous-due: what the sale's customer still owes on earlier credit sales. */
+export interface PreviousDue {
+  customer_id: string | null;
+  outstanding: string;
+  invoices: { order_id: string; order_number: string; date: string; due_date: string | null; outstanding: string }[];
 }
 
 export interface ReturnableOrder {

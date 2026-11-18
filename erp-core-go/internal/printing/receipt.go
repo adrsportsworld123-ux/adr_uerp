@@ -69,6 +69,20 @@ type ReceiptData struct {
 	ShowMRPDiscount  bool
 	MRPDiscountTotal string
 	TotalSavings     string
+	// PreviousDue: the customer's earlier outstanding kept on this bill
+	// (migrations/087); nil prints the slip as before.
+	PreviousDue *ReceiptPreviousDue
+}
+
+// ReceiptPreviousDue: printed after the payments — the outstanding before,
+// what was collected and against which sales, the total received, and
+// what is still owed.
+type ReceiptPreviousDue struct {
+	Outstanding   string
+	Collected     string
+	Against       []ReceiptPayment // Method: the sale paid ("S-0012 (cash)")
+	TotalReceived string
+	BalanceAfter  string
 }
 
 const ruleLine = "--------------------------------"
@@ -153,6 +167,18 @@ func BuildReceipt(d ReceiptData) []byte {
 
 	for _, p := range d.Payments {
 		b.Line(fmt.Sprintf("%s: %s", p.Method, p.Amount))
+	}
+	if pd := d.PreviousDue; pd != nil {
+		b.Line(ruleLine)
+		b.Line("Previous due: " + pd.Outstanding)
+		if nonZero(pd.Collected) {
+			b.Line("Collected now: " + pd.Collected)
+			for _, a := range pd.Against {
+				b.Line(fmt.Sprintf("  %s: %s", a.Method, a.Amount))
+			}
+			b.Bold(true).Line("Total received: " + pd.TotalReceived).Bold(false)
+		}
+		b.Bold(true).Line("Balance due: " + pd.BalanceAfter).Bold(false)
 	}
 
 	footer := d.Footer

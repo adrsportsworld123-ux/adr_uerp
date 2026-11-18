@@ -49,6 +49,10 @@ type receiptResponse struct {
 	// CustomerPhone: the customer's mobile, printed on every receipt
 	// format. Additive (it was internal only before).
 	CustomerPhone *string `json:"customer_phone"`
+	// PreviousDue: the customer's earlier outstanding kept on this bill,
+	// what was collected, and the balance after (migrations/087).
+	// Additive; absent when it wasn't kept.
+	PreviousDue *previousDueSummary `json:"previous_due,omitempty"`
 
 	// Not part of the public JSON contract (GetReceipt already predates
 	// notifications and other clients may depend on its exact shape) —
@@ -182,6 +186,13 @@ func (h *Handler) PrintReceipt(w http.ResponseWriter, r *http.Request) {
 	for _, p := range resp.Payments {
 		data.Payments = append(data.Payments, printing.ReceiptPayment{Method: p.Method, Amount: p.Amount})
 	}
+	if pd := resp.PreviousDue; pd != nil {
+		data.PreviousDue = &printing.ReceiptPreviousDue{Outstanding: pd.Outstanding, Collected: pd.Collected,
+			TotalReceived: pd.TotalReceived, BalanceAfter: pd.BalanceAfter}
+		for _, l := range pd.Payments {
+			data.PreviousDue.Against = append(data.PreviousDue.Against, printing.ReceiptPayment{Method: l.OrderNumber + " (" + l.Method + ")", Amount: l.Amount})
+		}
+	}
 
 	httpx.Binary(w, http.StatusOK, "application/vnd.escpos-raw", printing.BuildReceipt(data))
 }
@@ -238,6 +249,9 @@ func loadReceiptDataTx(ctx context.Context, tx pgx.Tx, orderID string) (receiptR
 		return resp, err
 	}
 	if resp.TaxBreakup, err = orderTaxBreakup(ctx, tx, orderID, lines); err != nil {
+		return resp, err
+	}
+	if resp.PreviousDue, err = loadPreviousDue(ctx, tx, orderID); err != nil {
 		return resp, err
 	}
 

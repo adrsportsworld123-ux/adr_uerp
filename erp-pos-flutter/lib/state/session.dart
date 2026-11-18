@@ -577,7 +577,10 @@ class AppSession extends ChangeNotifier {
   /// [roundOff]: the amount waived, signed (-0.75), within
   /// [roundOffMax]; the server checks it again (online) or records it with
   /// the synced sale (offline).
-  Future<bool> checkout(List<PaymentInput> payments, {double roundOff = 0}) async {
+  /// [previousDueCollect]: the customer's earlier outstanding kept on this
+  /// bill and how much of it the payments also cover (online only; null =
+  /// left off).
+  Future<bool> checkout(List<PaymentInput> payments, {double roundOff = 0, double? previousDueCollect}) async {
     if (currentOrder == null) return false;
     _lastError = null;
     if (_currentOrderIsLocal) {
@@ -588,7 +591,7 @@ class AppSession extends ChangeNotifier {
       return true;
     }
     try {
-      final finalized = await api.checkout(orderId: currentOrder!.orderId, payments: payments, roundOff: roundOff);
+      final finalized = await api.checkout(orderId: currentOrder!.orderId, payments: payments, roundOff: roundOff, previousDueCollect: previousDueCollect);
       currentOrder = finalized;
       notifyListeners();
       return true;
@@ -599,6 +602,8 @@ class AppSession extends ChangeNotifier {
         'CREDIT_LIMIT_EXCEEDED' => tr('This sale would put the customer over their credit limit'),
         'SHIFT_NOT_OPEN' => tr('Open a shift on this till before taking payment (tap the shift chip at the top)'),
         'ROUND_OFF_NOT_ALLOWED' => tr('That round-off isn’t allowed (it’s off, or above the limit in Sales Policy)'),
+        'PREVIOUS_DUE_CHANGED' => tr('The customer’s previous outstanding has changed — open payment again to see it'),
+        'PREVIOUS_DUE_NOT_COVERED' => tr('Cash, card or UPI must cover the previous outstanding collected — credit can’t pay it'),
         _ => e.message,
       };
       notifyListeners();
@@ -640,6 +645,19 @@ class AppSession extends ChangeNotifier {
       _lastError = e.code == 'STOCK_UNAVAILABLE' ? tr('Not enough stock available for that quantity') : e.message;
       notifyListeners();
       return false;
+    }
+  }
+
+  /// What the sale's customer still owes on earlier credit sales, for the
+  /// payment step to offer on this bill; null offline, for a walk-in, or
+  /// when it can't be read (the bill is then taken as before).
+  Future<PreviousDueInfo?> loadPreviousDue() async {
+    if (!_canUseLiveOnlyFeatures || attachedCustomerId == null) return null;
+    try {
+      final info = await api.getPreviousDue(currentOrder!.orderId);
+      return info.amount > 0 ? info : null;
+    } catch (_) {
+      return null;
     }
   }
 

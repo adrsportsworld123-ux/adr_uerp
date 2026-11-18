@@ -258,6 +258,9 @@ type ReceivablePayment struct {
 	POSTerminalID string
 	// IdempotencyKey: "" = none (the back office's own form).
 	IdempotencyKey string
+	// CollectedWithOrderID: the sale this was collected with, as a
+	// previous outstanding (migrations/087); "" = none.
+	CollectedWithOrderID string
 }
 
 // ApplyReceivablePayment records the payment, posts Dr Cash/Bank/clearing
@@ -290,6 +293,13 @@ func ApplyReceivablePayment(ctx context.Context, tx pgx.Tx, p ReceivablePayment)
 		RETURNING id`,
 		p.CustomerID, p.SalesOrderID, p.Amount, p.Method, p.ReferenceNo, p.UserID, p.BankAccountID, p.POSTerminalID, p.IdempotencyKey).Scan(&paymentID); err != nil {
 		return "", openInvoice{}, err
+	}
+	// Set apart so every other payment writes as before migrations/087.
+	if p.CollectedWithOrderID != "" {
+		if _, err := tx.Exec(ctx, `UPDATE customer_receivable_payments SET collected_with_order_id = $2::uuid WHERE id = $1`,
+			paymentID, p.CollectedWithOrderID); err != nil {
+			return "", openInvoice{}, err
+		}
 	}
 	desc := p.Description
 	if desc == "" {

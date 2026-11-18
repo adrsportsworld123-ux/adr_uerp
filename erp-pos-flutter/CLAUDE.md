@@ -195,6 +195,8 @@ device's cart view ever looks wrong.
 
 **Walk-in customer (2026-11-17, erp-core-go §3.90).** "Clear customer (walk-in)" in the customer picker (F4, shown only when a customer is attached; `_CustomerPickResult.clear`, applied through `_applyCustomerPick`) and on the payment step (`payment-clear-customer`). `AppSession.clearCustomer` calls `DELETE /sales/orders/{id}/customer`; `customerChangeClearedDiscounts` is set when the customer's points took the cart's discounts off (also when attaching a different customer, after which the cart is reloaded), and the screen says so. Tested in `test/walk_in_customer_test.dart`.
 
+**Previous outstanding (2026-11-18, erp-core-go §3.92).** The payment sheet reads the customer's earlier outstanding (`AppSession.loadPreviousDue`, online only) and shows `_PreviousDueRow`: kept on the bill by default (switch `previous-due-keep`), all of it collected unless "Change amount" sets another (0 = shown, nothing collected). The amount due is the bill plus it; credit can't pay it (single credit is blocked, a credit split leaves room for it). `_PaymentResult.previousDueCollect` goes to `session.checkout(previousDueCollect:)`; the receipt screen shows Previous due / Collected now / against … / Total received / Balance due from `ReceiptData.previousDue`. Tested in `test/previous_due_test.dart`.
+
 **Not yet built:** on-device verification of offline sync, printing, and
 PIN-login against real Android/iOS hardware or a real network thermal
 printer — this environment has never had either. Everything above is

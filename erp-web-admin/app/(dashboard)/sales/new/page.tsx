@@ -22,7 +22,7 @@ import { useRouter } from "next/navigation";
 import { Ban, Loader2, Minus, Pencil, Plus, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, SEED_BRANCH_ID } from "@/lib/api-client";
-import { Branch, CartOrder, Customer } from "@/lib/types";
+import { Branch, CartOrder, Customer, PreviousDue } from "@/lib/types";
 import { METHOD_LABEL, qty, rupees } from "@/lib/format";
 import { missingPermissionHint, usePermissions } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
@@ -79,6 +79,12 @@ export default function NewSalePage() {
   const [roundOffMax, setRoundOffMax] = useState(0);
   const [roundOn, setRoundOn] = useState(false);
   const [customWaive, setCustomWaive] = useState<string | null>(null);
+  // The customer's previous outstanding (erp-core-go previous_due.go):
+  // kept on this bill by default, all of it collected unless an amount is
+  // typed (null = all); unticked = left off, and checkout sends nothing.
+  const [previousData, setPreviousData] = useState<PreviousDue | null>(null);
+  const [keepPrevious, setKeepPrevious] = useState(true);
+  const [collectText, setCollectText] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -113,6 +119,26 @@ export default function NewSalePage() {
 
   const allowed = can("sales.backoffice");
   const oid = order?.order_id;
+  const customerId = customer?.customer_id;
+  // Read again whenever the sale's customer changes; each read starts kept.
+  // A read for another customer (or none) is simply not shown.
+  useEffect(() => {
+    if (!oid || !customerId) return;
+    let live = true;
+    api
+      .get<PreviousDue>(`/api/v1/sales/orders/${oid}/previous-due`)
+      .then((d) => {
+        if (!live) return;
+        setPreviousData(Number(d.outstanding) > 0 ? d : null);
+        setKeepPrevious(true);
+        setCollectText(null);
+      })
+      .catch(() => live && setPreviousData(null));
+    return () => {
+      live = false;
+    };
+  }, [oid, customerId]);
+  const previous = previousData && customerId && previousData.customer_id === customerId ? previousData : null;
   const unfinished = !!order?.lines?.length;
 
   // Leaving with items in the cart would leave their stock reserved.
@@ -281,8 +307,19 @@ export default function NewSalePage() {
   const waive = roundOffMax > 0 && roundOn ? Math.round((customWaive !== null ? Number(customWaive) || 0 : paise) * 100) / 100 : 0;
   const waiveInvalid = waive < 0 || waive > roundOffMax + 0.004 || (waive > 0 && waive >= total);
   const payable = Math.round((total - waive) * 100) / 100;
+  const owed = Number(previous?.outstanding ?? 0);
+  const collect = previous && keepPrevious ? Math.round((collectText !== null ? Number(collectText) || 0 : owed) * 100) / 100 : 0;
+  const collectInvalid = collect < 0 || collect > owed + 0.004;
+  // What the payments cover: the bill, plus what is collected of the
+  // previous outstanding (applied to the oldest sales first, server-side).
+  const toCollect = Math.round((payable + collect) * 100) / 100;
   const paid = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  const remaining = Math.round((payable - paid) * 100) / 100;
+  const remaining = Math.round((toCollect - paid) * 100) / 100;
+  // Credit can't pay credit: cash, card and UPI must cover what is collected.
+  // (Without a credit tender, paying the full amount already covers it.)
+  const nonCreditPaid = payments.filter((p) => p.method !== "credit").reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const hasCredit = payments.some((p) => p.method === "credit" && Number(p.amount) > 0);
+  const previousNotCovered = collect > 0 && hasCredit && nonCreditPaid + 0.004 < collect;
   const creditWithoutCustomer = payments.some((p) => p.method === "credit" && Number(p.amount) > 0) && !customer;
 
   const checkout = () =>
@@ -293,6 +330,7 @@ export default function NewSalePage() {
           .filter((p) => Number(p.amount) > 0)
           .map((p) => ({ method: p.method, amount: Number(p.amount), reference: p.reference.trim() || undefined })),
         ...(waive > 0 ? { round_off: -waive } : {}),
+        ...(previous && keepPrevious ? { previous_due: { collect } } : {}),
       };
       const done = await api.post<CartOrder>(`/api/v1/sales/orders/${oid}/checkout`, body);
       toast.success(`Sale ${done.order_number} completed`);
@@ -651,7 +689,62 @@ export default function NewSalePage() {
                 </>
               )}
               <SavingsRowsDl order={order} />
+              {collect > 0 && (
+                <>
+                  <dt className="text-muted-foreground">Previous outstanding collected</dt>
+                  <dd className="tabular text-right" data-testid="sale-previous-collect">
+                    {rupees(collect)}
+                  </dd>
+                  <dt className="font-semibold">To collect</dt>
+                  <dd className="tabular text-right text-xl font-semibold" data-testid="sale-to-collect">
+                    {rupees(toCollect)}
+                  </dd>
+                </>
+              )}
             </dl>
+            {previous && (
+              <div className="flex flex-col gap-2 rounded-lg border border-warn/50 bg-warn-soft/40 p-2 text-sm" data-testid="previous-due">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-2 font-medium">
+                    <input
+                      type="checkbox"
+                      checked={keepPrevious}
+                      onChange={(e) => {
+                        setKeepPrevious(e.target.checked);
+                        setCollectText(null);
+                      }}
+                    />
+                    Previous outstanding {rupees(previous.outstanding)}
+                  </label>
+                  <span className="text-xs text-muted-foreground">
+                    {previous.invoices.length === 1 ? "1 earlier bill" : `${previous.invoices.length} earlier bills`} — tick to add it to this bill
+                  </span>
+                </div>
+                {keepPrevious && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted-foreground">collect now {currencySymbol()}</span>
+                    <Input
+                      aria-label="Previous outstanding collected now"
+                      className="h-8 w-28"
+                      type="number"
+                      min={0}
+                      max={owed}
+                      step="0.01"
+                      value={collectText ?? owed.toFixed(2)}
+                      aria-invalid={collectInvalid}
+                      onChange={(e) => setCollectText(e.target.value)}
+                    />
+                    <span className={collectInvalid ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+                      {collectInvalid
+                        ? `Up to ${rupees(owed)}`
+                        : collect > 0
+                          ? `applied to the oldest bills first: ${previous.invoices.map((i) => `${i.order_number} ${rupees(i.outstanding)}`).join(", ")}`
+                          : "shown on the receipt, nothing collected now"}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
             {roundOffMax > 0 && total > 0 && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 p-2 text-sm">
                 <label className="flex items-center gap-2">
@@ -740,12 +833,24 @@ export default function NewSalePage() {
               </Button>
             </div>
             {creditWithoutCustomer && <p className="text-xs text-destructive">A credit payment needs a customer.</p>}
+            {previousNotCovered && (
+              <p className="text-xs text-destructive">Cash, card or UPI must cover the previous outstanding collected — credit can&apos;t pay it.</p>
+            )}
             <Button
               size="lg"
-              disabled={!allowed || !order?.lines?.length || busy || Math.abs(remaining) > 0.004 || creditWithoutCustomer || waiveInvalid}
+              disabled={
+                !allowed ||
+                !order?.lines?.length ||
+                busy ||
+                Math.abs(remaining) > 0.004 ||
+                creditWithoutCustomer ||
+                waiveInvalid ||
+                collectInvalid ||
+                previousNotCovered
+              }
               onClick={checkout}
             >
-              Complete sale · {rupees(payable)}
+              Complete sale · {rupees(toCollect)}
             </Button>
           </div>
         </div>

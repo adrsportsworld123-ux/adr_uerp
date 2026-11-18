@@ -76,6 +76,13 @@ func (h *Handler) DownloadReceipt(w http.ResponseWriter, r *http.Request) {
 	for _, p := range resp.Payments {
 		in.Payments = append(in.Payments, [2]string{p.Method, p.Amount})
 	}
+	if pd := resp.PreviousDue; pd != nil {
+		in.PreviousDue = &documents.SalePreviousDue{Outstanding: pd.Outstanding, Collected: pd.Collected,
+			TotalReceived: pd.TotalReceived, BalanceAfter: pd.BalanceAfter}
+		for _, l := range pd.Payments {
+			in.PreviousDue.Against = append(in.PreviousDue.Against, [2]string{l.OrderNumber + " · " + documents.Label(l.Method), l.Amount})
+		}
+	}
 
 	format := documents.ParseFormat(r.URL.Query().Get("format"), def)
 	pdf, err := documents.Render(lh, documents.SaleReceipt(lh, in), format)

@@ -178,6 +178,10 @@ A credit sale's payment, from anywhere, goes through `customers.ApplyReceivableP
 - **Customer (§3.90):** a sale's customer changes only on a cart/held sale through `AttachCustomer` / `DetachCustomer`; both call `dropCustomerDiscounts` so loyalty points and customer-counted coupons never stay on a sale that isn't that customer's.
 - **Invoice reader (§3.91):** `invoice_reader.go` is pure (PDF text rows -> `rawRow` -> `buildLines`), tested on real invoices in `testdata/`; the AI path (`invoice_ai.go`) must only produce `rawRow`s, so the supplier's template applies the same way to both. Its key comes from `ANTHROPIC_API_KEY` (compose reads a gitignored `.env`); never hardcode or log it.
 
+## Previous outstanding with the sale (2026-11-18)
+
+A customer's earlier credit collected at checkout (`previous_due: {collect}`, §3.92) is taken from the non-credit tenders (`splitTenders`) before the sale's own payment checks, and paid oldest-first through `customers.ApplyReceivablePayment` with `CollectedWithOrderID`; the sale's own payments and journal never include it. Read it with `loadPreviousDue`, which (with `previousDueColumns`) keeps every sale working on a database without migrations/087.
+
 ## Repo layout
 
 ```
