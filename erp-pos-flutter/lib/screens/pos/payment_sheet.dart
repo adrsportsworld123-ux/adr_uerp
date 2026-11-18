@@ -140,11 +140,17 @@ class _PaymentSheetState extends State<_PaymentSheet> {
       builder: (_) => ChangeNotifierProvider<AppSession>.value(value: s, child: const _CustomerPickerDialog()),
     );
     if (result == null || !mounted) return;
-    await _run(
-        () => result.existing != null
-            ? s.attachCustomer(customerId: result.existing!.customerId, name: result.existing!.name)
-            : s.attachCustomer(name: result.walkInName, phone: result.walkInPhone, email: result.walkInEmail),
-        tr('Customer added'));
+    await _run(() => _applyCustomerPick(s, result), result.clear ? tr('Walk-in sale — customer cleared') : tr('Customer added'));
+    if (mounted && s.customerChangeClearedDiscounts) {
+      setState(() => _message = tr('The customer’s points and discounts came off. Apply discounts again before payment.'));
+    }
+  }
+
+  Future<void> _clearCustomer(AppSession s) async {
+    await _run(s.clearCustomer, tr('Walk-in sale — customer cleared'));
+    if (mounted && s.customerChangeClearedDiscounts) {
+      setState(() => _message = tr('The customer’s points and discounts came off. Apply discounts again before payment.'));
+    }
   }
 
   Future<void> _run(Future<bool> Function() action, String okText) async {
@@ -241,7 +247,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
                 style: theme.textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w700, fontFeatures: const [FontFeature.tabularFigures()])),
           ]),
           const SizedBox(height: 12),
-          _PaymentCustomer(enabled: live && !_working, onPick: () => _pickCustomer(session)),
+          _PaymentCustomer(enabled: live && !_working, onPick: () => _pickCustomer(session), onClear: () => _clearCustomer(session)),
           if (session.roundOffMax > 0 && _total(session) > 0) ...[
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -540,8 +546,9 @@ class _Banner extends StatelessWidget {
 class _PaymentCustomer extends StatelessWidget {
   final bool enabled;
   final VoidCallback onPick;
+  final VoidCallback onClear;
 
-  const _PaymentCustomer({required this.enabled, required this.onPick});
+  const _PaymentCustomer({required this.enabled, required this.onPick, required this.onClear});
 
   @override
   Widget build(BuildContext context) {
@@ -574,6 +581,13 @@ class _PaymentCustomer extends StatelessWidget {
           ]),
         ),
         const SizedBox(width: 8),
+        if (name != null)
+          IconButton(
+            key: const Key('payment-clear-customer'),
+            tooltip: tr('Clear customer (walk-in)'),
+            onPressed: enabled ? onClear : null,
+            icon: const Icon(Icons.person_remove_alt_1, size: 20),
+          ),
         OutlinedButton.icon(
           key: const Key('payment-add-customer'),
           onPressed: enabled ? onPick : null,

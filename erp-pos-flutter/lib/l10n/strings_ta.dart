@@ -635,4 +635,8 @@ const Map<String, String> stringsTa = {
   'Which one is it?': 'இது எது?',
   'Which MRP is on the pack?': 'பேக்கில் உள்ள MRP எது?',
   'This code is on more than one item.': 'இந்தக் குறியீடு ஒன்றுக்கு மேற்பட்ட பொருட்களில் உள்ளது.',
+  'Clear customer (walk-in)': 'வாடிக்கையாளரை நீக்கு (நேரடி விற்பனை)',
+  'Take the customer off this sale — a walk-in sale': 'இந்த விற்பனையிலிருந்து வாடிக்கையாளரை நீக்கு — நேரடி விற்பனை',
+  'Walk-in sale — customer cleared': 'நேரடி விற்பனை — வாடிக்கையாளர் நீக்கப்பட்டார்',
+  'The customer’s points and discounts came off. Apply discounts again before payment.': 'வாடிக்கையாளரின் புள்ளிகளும் தள்ளுபடிகளும் நீக்கப்பட்டன. பணம் பெறும் முன் தள்ளுபடிகளை மீண்டும் பயன்படுத்தவும்.',
 };

@@ -635,4 +635,8 @@ const Map<String, String> stringsEs = {
   'Which one is it?': '¿Cuál es?',
   'Which MRP is on the pack?': '¿Qué PVP figura en el envase?',
   'This code is on more than one item.': 'Este código está en más de un artículo.',
+  'Clear customer (walk-in)': 'Quitar cliente (cliente de paso)',
+  'Take the customer off this sale — a walk-in sale': 'Quitar el cliente de esta venta — venta a un cliente de paso',
+  'Walk-in sale — customer cleared': 'Venta a cliente de paso — cliente quitado',
+  'The customer’s points and discounts came off. Apply discounts again before payment.': 'Se quitaron los puntos y descuentos del cliente. Vuelva a aplicar los descuentos antes del pago.',
 };

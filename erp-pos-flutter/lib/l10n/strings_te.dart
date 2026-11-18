@@ -635,4 +635,8 @@ const Map<String, String> stringsTe = {
   'Which one is it?': 'ఇది ఏది?',
   'Which MRP is on the pack?': 'ప్యాక్‌పై ఉన్న MRP ఏది?',
   'This code is on more than one item.': 'ఈ కోడ్ ఒకటి కంటే ఎక్కువ అంశాలపై ఉంది.',
+  'Clear customer (walk-in)': 'కస్టమర్‌ను తీసివేయి (వాక్-ఇన్)',
+  'Take the customer off this sale — a walk-in sale': 'ఈ అమ్మకం నుండి కస్టమర్‌ను తీసివేయి — వాక్-ఇన్ అమ్మకం',
+  'Walk-in sale — customer cleared': 'వాక్-ఇన్ అమ్మకం — కస్టమర్ తీసివేయబడ్డారు',
+  'The customer’s points and discounts came off. Apply discounts again before payment.': 'కస్టమర్ పాయింట్లు మరియు డిస్కౌంట్లు తీసివేయబడ్డాయి. చెల్లింపుకు ముందు డిస్కౌంట్లను మళ్లీ వర్తింపజేయండి.',
 };

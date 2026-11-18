@@ -635,4 +635,8 @@ const Map<String, String> stringsKn = {
   'Which one is it?': 'ಇದು ಯಾವುದು?',
   'Which MRP is on the pack?': 'ಪ್ಯಾಕ್‌ನಲ್ಲಿರುವ MRP ಯಾವುದು?',
   'This code is on more than one item.': 'ಈ ಕೋಡ್ ಒಂದಕ್ಕಿಂತ ಹೆಚ್ಚು ಐಟಂಗಳಲ್ಲಿದೆ.',
+  'Clear customer (walk-in)': 'ಗ್ರಾಹಕರನ್ನು ತೆಗೆದುಹಾಕಿ (ವಾಕ್-ಇನ್)',
+  'Take the customer off this sale — a walk-in sale': 'ಈ ಮಾರಾಟದಿಂದ ಗ್ರಾಹಕರನ್ನು ತೆಗೆದುಹಾಕಿ — ವಾಕ್-ಇನ್ ಮಾರಾಟ',
+  'Walk-in sale — customer cleared': 'ವಾಕ್-ಇನ್ ಮಾರಾಟ — ಗ್ರಾಹಕರನ್ನು ತೆಗೆದುಹಾಕಲಾಗಿದೆ',
+  'The customer’s points and discounts came off. Apply discounts again before payment.': 'ಗ್ರಾಹಕರ ಪಾಯಿಂಟ್‌ಗಳು ಮತ್ತು ರಿಯಾಯಿತಿಗಳನ್ನು ತೆಗೆದುಹಾಕಲಾಗಿದೆ. ಪಾವತಿಗೆ ಮೊದಲು ರಿಯಾಯಿತಿಗಳನ್ನು ಮತ್ತೆ ಅನ್ವಯಿಸಿ.',
 };

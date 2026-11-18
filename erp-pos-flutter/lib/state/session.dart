@@ -163,6 +163,9 @@ class AppSession extends ChangeNotifier {
   String? attachedCustomerId;
   String? attachedCustomerName;
   int? loyaltyAvailablePoints;
+  // The last customer change (another customer, or a walk-in) took the
+  // cart's discounts off with the customer's points: the screen says so.
+  bool customerChangeClearedDiscounts = false;
 
   // Populated by scanBarcode whenever it falls back to the local catalog
   // cache — addToCart's offline path needs the tax rates a plain
@@ -653,18 +656,55 @@ class AppSession extends ChangeNotifier {
       return false;
     }
     _lastError = null;
+    customerChangeClearedDiscounts = false;
     try {
-      final id = await api.attachCustomer(
+      final result = await api.attachCustomerToOrder(
         orderId: currentOrder!.orderId,
         customerId: customerId,
         name: name,
         phone: phone,
         email: email,
       );
-      attachedCustomerId = id;
+      attachedCustomerId = result.customerId;
       attachedCustomerName = customerId != null ? name : (name ?? phone);
+      if (result.discountsCleared) {
+        customerChangeClearedDiscounts = true;
+        loyaltyAvailablePoints = null;
+        try {
+          currentOrder = await api.getOrder(currentOrder!.orderId);
+        } catch (_) {
+          // The totals catch up on the next cart change.
+        }
+      }
       notifyListeners();
       unawaited(refreshLoyaltyBalance());
+      return true;
+    } on ApiException catch (e) {
+      _lastError = e.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Back to a walk-in sale: the customer comes off this sale, before
+  /// payment (DELETE /sales/orders/{id}/customer). Points redeemed for them
+  /// come off with the cart's discounts ([customerChangeClearedDiscounts]).
+  Future<bool> clearCustomer() async {
+    if (attachedCustomerId == null) return true;
+    if (!_canUseLiveOnlyFeatures) {
+      _lastError = tr('Not available offline');
+      notifyListeners();
+      return false;
+    }
+    _lastError = null;
+    customerChangeClearedDiscounts = false;
+    try {
+      currentOrder = await api.detachCustomer(currentOrder!.orderId);
+      attachedCustomerId = null;
+      attachedCustomerName = null;
+      loyaltyAvailablePoints = null;
+      customerChangeClearedDiscounts = currentOrder!.discountsCleared;
+      notifyListeners();
       return true;
     } on ApiException catch (e) {
       _lastError = e.message;

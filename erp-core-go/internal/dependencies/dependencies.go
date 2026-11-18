@@ -140,6 +140,9 @@ var SkipFor = map[string][]string{
 	"branch":    {"stock_levels", "pos_terminals", "branch_print_settings", "branch_geofences", "user_branches"},
 	"employee":  {"refresh_tokens", "password_history", "password_reset_tokens", "user_roles", "user_branches"},
 	"attribute": {"attribute_values", "category_attributes"},
+	// How the supplier's invoices are read (migrations/086) is part of the
+	// supplier, not a use of it.
+	"supplier": {"supplier_invoice_templates"},
 }
 
 type Handler struct {

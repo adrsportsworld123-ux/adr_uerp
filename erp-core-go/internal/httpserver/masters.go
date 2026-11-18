@@ -26,6 +26,7 @@ func registerMasterDeletes(r chi.Router, database *db.DB) {
 	}))
 	gate("master_data.delete")(r).Delete("/suppliers/{id}", softdelete.MasterDelete(database, softdelete.Master{
 		Table: "suppliers", What: "supplier",
+		Skip: dependencies.SkipFor["supplier"],
 	}))
 	gate("master_data.delete")(r).Delete("/branches/{id}", softdelete.MasterDelete(database, softdelete.Master{
 		Table: "branches", What: "branch",

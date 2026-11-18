@@ -257,6 +257,11 @@ A `sales_orders` row is created the moment a cashier starts a transaction (statu
 | `MARKDOWN_RULE` | 409 | `PUT/DELETE /pricing/rules/{id}` (§3.87) | The rule is a step of a markdown plan: change or cancel the plan on its collection |
 | `MARKDOWN_EXISTS` | 409 | `POST /collections/{id}/markdown-plans` (§3.87) | The collection already has a live plan for that branch scope |
 | `PRICE_REQUIRED` | 409 | `GET /products/barcode/{code}` (§3.87) | A price-embedded scale label for an item with no selling price to turn the price into a quantity |
+| `ORDER_NOT_EDITABLE` | 409 | `DELETE /sales/orders/{id}/customer` (§3.90) | A completed sale keeps its customer; only a cart or held sale goes back to walk-in |
+| `NO_TEXT` | 422 | `POST /purchase/imports/read` (§3.91) | The PDF has no text (a scan); `details.ai_available` says whether the AI reader can read it |
+| `NO_TABLE_FOUND` | 422 | `POST /purchase/imports/read` (§3.91) | No item table under the supplier's column headings; `details` carries `ai_available` and the template used |
+| `AI_READER_UNAVAILABLE` | 503 | `POST /purchase/imports/read` (§3.91) | Photos / a scanned PDF sent, but the server has no `ANTHROPIC_API_KEY` |
+| `AI_READ_FAILED` | 502 | `POST /purchase/imports/read` (§3.91) | The AI reader answered with something that isn't the invoice |
 | `NOTHING_DUE` | 409 | `POST /sales/orders/{id}/credit-payments` (§3.85) | The sale has no credit left to pay (a cash sale, or already paid) |
 | `MARKUP_RULE_IN_USE` | 409 | `PUT/DELETE /pricing/markup-rules/{id}` (§3.77) | The rule has priced sale lines: switch it off and make a new one |
 | `PARTNER_EXISTS` | 409 | `POST/PATCH /partners` (§3.77) | Another partner has that name |
@@ -2961,6 +2966,30 @@ Migration 085: `branch_print_settings.label_show_price` (default true, every exi
 Verified: `inv11_label_flow.py` (label part, 9 checks); Go `TestLabelHidePrice`.
 
 Also: SPORTS COM invoice SC/SL/26-27/5391 (`PurchaseInvoices/11.pdf`) as the import template, `PurchaseInvoices/11.csv`: 25 lines, 49 pieces, each size its own item ("FORVO HALF TIGHTS BLACK WT - XSMALL"; the PDF's "BATCH NO." column is the size), taxable ₹8,721.43, total ₹8,875. Imported on a test database: 25 products, bill ₹8,875; GST is booked as the sum of the printed line taxes, ₹153.59, while the PDF's footer rounds it to ₹153.57 (the 2 paise go to round-off).
+
+### 3.90 Walk-in customer: clearing a sale's customer (2026-11-17)
+
+No migration. `DELETE /sales/orders/{id}/customer` (no body, no permission, like attaching) puts a cart or held sale back to a walk-in; a finalized one answers 409 `ORDER_NOT_EDITABLE`, and a sale with no customer answers as it is (a retry is harmless). It answers with the order, like the other cart endpoints.
+- When a discount belongs to the customer (a `loyalty` layer, or a coupon redemption counted against them), `dropCustomerDiscounts` undoes the cart's discount layers as a line edit does (`clearDiscountLayers`: the redeemed points go back, the coupon use is given back) and the answer has `discounts_cleared` when a hand-applied discount must be applied again. Promotions and a manual discount alone are kept.
+- The supply trigger puts the place of supply back to the branch's state; promotions are re-planned (a segment promotion drops out). Audited (`reason` "walk-in customer").
+- `POST /sales/orders/{id}/customer` with a *different* customer on an open cart does the same `dropCustomerDiscounts` first (the first customer's points no longer stay on another customer's sale) and returns `discounts_cleared`. The same customer again, or attaching after checkout, is unchanged.
+- POS: "Clear customer (walk-in)" in the customer picker (F4, only when one is attached) and on the payment step; `AppSession.clearCustomer`, `customerChangeClearedDiscounts`. Web: New sale's Customer box has a "Walk-in" button.
+
+Verified: `walkin_reader_flow.py` (walk-in part, 19 checks); POS `walk_in_customer_test.dart`.
+
+### 3.91 Reading a supplier's invoice PDF or photo into the import (2026-11-17)
+
+Migration 086: `supplier_invoice_templates` (one per supplier: `column_map`, `options`, use count; RLS). No row = the built-in defaults. Supplier deletion skips it (`dependencies.SkipFor["supplier"]`).
+
+`POST /purchase/imports/read` (open, like the import) turns the supplier's document into lines; nothing is booked: the answer's `csv` goes to the existing `preview` / `commit` unchanged.
+- **Typed PDF:** the browser extracts each run of text with its position (pdf.js) and sends `pages: [{width, height, items: [{s, x, y, w}]}]`. `parseDocPages` (`internal/purchase/invoice_reader.go`, pure) groups rows by baseline, finds the heading row (the item column and two of quantity / rate / MRP / total, by the template's headings), puts text that starts under a heading in that column and anything else under the nearest heading centre, starts a line at a serial number (or a quantity), joins wrapped rows within 22pt, stops at the totals row (its quantity and total are kept for the check), and repeats per page. The invoice number, date (day first) and total are read after their labels; GSTINs anywhere.
+- **Photos / scanned PDF:** `files: [{name, media_type, data}]` (JPEG/PNG/WebP/PDF, up to 6, 8 MB each) go to the AI reader (`invoice_ai.go`: `llm.DocumentReader`, Anthropic with `INVOICE_READER_MODEL`, default `claude-sonnet-5-5`) whenever `ANTHROPIC_API_KEY` is set, independent of `LLM_PROVIDER`. The model only transcribes the printed cells into the same rows; no key = 503 `AI_READER_UNAVAILABLE`.
+- **Template (`buildLines`):** `variant_use` size (default: the "BATCH NO." column is a size, added to the name with `name_format` "{item} - {size}") / batch / ignore; `extractSize` drops the MRP ("MRP 180", the MRP's digits), drop words (NEW, OLD, RATE...), the supplier's alphanumeric codes and "-", reads "SIZE 4" / "MITIGSIZE-XL" / "S-SIZE", spells sizes `words` (SMALL...2XLARGE) / `letters` / `as_printed`, applies `size_aliases`, and skips words already in the name. `cost_basis` from_total (default: line total / (1+GST) / qty, to 6 places, so the lines add up to the printed total) / rate; `line_amount` auto (default: the printed amount includes GST unless the line's tax amount, or rate × qty when no tax is printed, shows it is the taxable value) / with_gst / before_gst — a before-GST amount gives cost = amount / qty, `printed_amount` keeps it and `line_total` adds the GST, so the CSV's line total is always with GST as the import checks it; `noteSaleGST` notes a line with no sale GST (bought at 0%) or a sale GST with no active slab (12% after the September 2025 slabs), since the import refuses those as new items. The import preview counts a line's amounts in its totals whenever quantity, cost and GST are readable, even if the line is refused for something else, and lists the rows to fix in `errors`, so a refused new item never shows as "the invoice total doesn't match"; GST from "(5%)", a GST column, or worked out from the tax amount; "MRP 220" leaves the name and fills an empty MRP; `brand_rule` known (default) / first_word / none; `sale_gst_rate` and `category` for new items; `ai_hints`.
+- **Supplier:** none chosen -> the supplier with the invoice's GSTIN (not the shop's own) is used, and the document is read again with their template if saved; a chosen supplier whose GSTIN differs gets a `supplier_note`. Checks: lines vs the totals row (pieces and amount) and vs the invoice total (`adds_up` within Rs 1, the rest is round-off).
+- `GET/PUT/DELETE /purchase/import-templates/{supplier_id}`: the effective template (`saved` false = defaults; empty heading lists keep the defaults), save (audited on the supplier), back to defaults. A read may pass `columns` / `options` to try rules without saving.
+- Web (Import Invoice): "Read the supplier's invoice": file in, an editable lines table (name, qty, cost before GST, GST, MRP, sale price, category, brand, sale GST; notes per line), "Reading rules" (save per supplier), "Read it with AI" after NO_TABLE_FOUND when available; the table is the page's CSV.
+
+Verified: Go `invoice_reader_test.go` against invoices 1, 3, 11, 12 (and by hand on 2, 4-9: every one adds up to its printed totals row); `walkin_reader_flow.py` (reader part, 30 checks: invoice 12 read, found by GSTIN, imported at Rs 17,790 / 25 pieces, read again restocks); a browser check of the page (16 checks).
 
 ## 4. What Phase 0 concretely delivers against this design
 

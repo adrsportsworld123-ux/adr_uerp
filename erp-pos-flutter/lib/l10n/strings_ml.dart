@@ -635,4 +635,8 @@ const Map<String, String> stringsMl = {
   'Which one is it?': 'ഇത് ഏതാണ്?',
   'Which MRP is on the pack?': 'പാക്കിലെ MRP ഏതാണ്?',
   'This code is on more than one item.': 'ഈ കോഡ് ഒന്നിലധികം ഇനങ്ങളിലുണ്ട്.',
+  'Clear customer (walk-in)': 'ഉപഭോക്താവിനെ നീക്കുക (വാക്ക്-ഇൻ)',
+  'Take the customer off this sale — a walk-in sale': 'ഈ വിൽപ്പനയിൽ നിന്ന് ഉപഭോക്താവിനെ നീക്കുക — വാക്ക്-ഇൻ വിൽപ്പന',
+  'Walk-in sale — customer cleared': 'വാക്ക്-ഇൻ വിൽപ്പന — ഉപഭോക്താവിനെ നീക്കി',
+  'The customer’s points and discounts came off. Apply discounts again before payment.': 'ഉപഭോക്താവിന്റെ പോയിന്റുകളും കിഴിവുകളും നീക്കി. പണമടയ്ക്കുന്നതിന് മുമ്പ് കിഴിവുകൾ വീണ്ടും പ്രയോഗിക്കുക.',
 };

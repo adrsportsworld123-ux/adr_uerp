@@ -106,6 +106,14 @@ func main() {
 		}
 	}
 
+	// The purchase invoice reader's AI path (photos, scanned PDFs) needs
+	// an Anthropic key; without one it stays off and those reads answer
+	// 503 AI_READER_UNAVAILABLE. Typed PDFs are read without it.
+	invoiceReader := llm.NewDocumentReader(cfg.AnthropicAPIKey, cfg.InvoiceReaderModel)
+	if invoiceReader == nil {
+		log.Printf("purchase: no ANTHROPIC_API_KEY — photos and scanned invoices can't be read (typed PDFs and CSV still import)")
+	}
+
 	go sales.RunExpirySweeper(ctx, database, time.Minute)
 	go quotations.RunExpirySweeper(ctx, database, time.Hour)
 	go inventory.RunLowStockSweeper(ctx, database, notify, 15*time.Minute)
@@ -126,7 +134,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify, einv, llmClient, cfg.HoldDurationMinutes, reportRunner, activityLog),
+		Handler:           httpserver.NewRouter(database, issuer, cfg.DevAuthToolsEnabled, searchClient, notify, einv, llmClient, cfg.HoldDurationMinutes, reportRunner, activityLog, invoiceReader),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

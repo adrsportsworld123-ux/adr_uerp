@@ -52,7 +52,7 @@ import (
 	"erp-core-go/internal/users"
 )
 
-func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int, reportRunner *reportbuilder.Runner, activityLog *activity.Recorder) http.Handler {
+func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled bool, searchClient *search.Client, notify *notifications.Handler, einv *einvoice.Handler, llmClient llm.Client, holdDurationMinutes int, reportRunner *reportbuilder.Runner, activityLog *activity.Recorder, invoiceReader llm.DocumentReader) http.Handler {
 	r := chi.NewRouter()
 	r.Use(CORS)
 	r.Use(middleware.RequestID)
@@ -80,7 +80,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 	inv := &inventory.Handler{DB: database}
 	rpt := &reports.Handler{DB: database}
 	syncH := &sync.Handler{DB: database}
-	pur := &purchase.Handler{DB: database, Search: searchClient}
+	pur := &purchase.Handler{DB: database, Search: searchClient, Reader: invoiceReader}
 	acct := &accounting.Handler{DB: database}
 	br := &branches.Handler{DB: database}
 	farmH := &farm.Handler{DB: database}
@@ -413,6 +413,7 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Patch("/sales/orders/{id}/lines/{line_id}", orders.UpdateLine)
 			protected.Delete("/sales/orders/{id}/lines/{line_id}", orders.DeleteLine)
 			protected.Post("/sales/orders/{id}/customer", orders.AttachCustomer)
+			protected.Delete("/sales/orders/{id}/customer", orders.DetachCustomer)
 			protected.Put("/sales/orders/{id}/place-of-supply", orders.SetPlaceOfSupply)
 			protected.Put("/sales/orders/{id}/lines/{line_id}/description", orders.SetLineDescription)
 			protected.Post("/sales/orders/{id}/prescription", orders.AttachPrescription)
@@ -546,6 +547,12 @@ func NewRouter(database *db.DB, issuer *authn.TokenIssuer, devAuthToolsEnabled b
 			protected.Get("/purchase/imports/template", pur.ImportTemplate)
 			protected.Post("/purchase/imports/preview", pur.PreviewImport)
 			protected.Post("/purchase/imports/commit", pur.CommitImport)
+			// Reading the supplier's own PDF / photo, and each supplier's
+			// reading template (invoice_read.go, §3.90).
+			protected.Post("/purchase/imports/read", pur.ReadInvoice)
+			protected.Get("/purchase/import-templates/{supplier_id}", pur.GetInvoiceTemplate)
+			protected.Put("/purchase/import-templates/{supplier_id}", pur.SaveInvoiceTemplate)
+			protected.Delete("/purchase/import-templates/{supplier_id}", pur.ResetInvoiceTemplate)
 			protected.Post("/purchase/bills", pur.CreateBill)
 			protected.Get("/purchase/bills", pur.ListBills)
 			protected.Get("/purchase/bills/{id}", pur.GetBill)

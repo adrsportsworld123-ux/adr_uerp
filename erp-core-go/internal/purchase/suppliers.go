@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/ai/llm"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/db"
 	"erp-core-go/internal/httpx"
@@ -24,6 +25,9 @@ type Handler struct {
 	// Search indexes the products an invoice import creates (import.go);
 	// nil or disabled = skip.
 	Search *search.Client
+	// Reader reads photos and scanned invoices for the import
+	// (invoice_ai.go, §3.90); nil = not configured, and those answer 503.
+	Reader llm.DocumentReader
 }
 
 type supplierRequest struct {

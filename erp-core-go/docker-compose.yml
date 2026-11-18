@@ -128,6 +128,13 @@ services:
       OLLAMA_BASE_URL: "http://ollama:11434"
       OLLAMA_MODEL: "llama3.2:3b"
       # ANTHROPIC_API_KEY: ""   # set this (and LLM_PROVIDER: "anthropic") to switch backends
+      # The purchase invoice reader's AI path (photos and scanned invoices,
+      # internal/purchase/invoice_ai.go) uses Anthropic whenever a key is
+      # set, whatever LLM_PROVIDER says. Put ANTHROPIC_API_KEY=... in a
+      # .env file next to this one (gitignored; compose reads it); empty =
+      # off, and typed PDFs and CSV import as before.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      INVOICE_READER_MODEL: "${INVOICE_READER_MODEL:-claude-sonnet-5-5}"
     ports:
       - "8080:8080"
 

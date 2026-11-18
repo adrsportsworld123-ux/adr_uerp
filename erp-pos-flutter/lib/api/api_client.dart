@@ -964,6 +964,13 @@ class SalesHistoryOrder {
 
 /// A credit sale after POST /sales/orders/{id}/credit-payments
 /// (erp-core-go migrations/082).
+class AttachCustomerResult {
+  final String customerId;
+  final bool discountsCleared;
+
+  const AttachCustomerResult({required this.customerId, this.discountsCleared = false});
+}
+
 class CreditPaymentResult {
   final String orderNumber;
   final String creditPaid;
@@ -2155,6 +2162,18 @@ class ApiClient {
     String? name,
     String? phone,
     String? email,
+  }) async =>
+      (await attachCustomerToOrder(orderId: orderId, customerId: customerId, name: name, phone: phone, email: email)).customerId;
+
+  /// [attachCustomer] with the server's whole answer: switching an open
+  /// cart to another customer takes the first one's loyalty points (and so
+  /// the cart's discounts) off — `discounts_cleared`.
+  Future<AttachCustomerResult> attachCustomerToOrder({
+    required String orderId,
+    String? customerId,
+    String? name,
+    String? phone,
+    String? email,
   }) async {
     final resp = await _http.post(
       Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/customer'),
@@ -2166,7 +2185,22 @@ class ApiClient {
         if (email != null) 'email': email,
       }),
     );
-    return _decode(resp)['customer_id'] as String;
+    final json = _decode(resp);
+    return AttachCustomerResult(
+      customerId: json['customer_id'] as String,
+      discountsCleared: json['discounts_cleared'] as bool? ?? false,
+    );
+  }
+
+  /// DELETE /sales/orders/{id}/customer — the sale goes back to a walk-in
+  /// (no customer), before payment only. Loyalty points redeemed for the
+  /// customer come off with the cart's discounts (`discountsCleared`).
+  Future<OrderSummary> detachCustomer(String orderId) async {
+    final resp = await _http.delete(
+      Uri.parse('$baseUrl/api/v1/sales/orders/$orderId/customer'),
+      headers: _authHeaders,
+    );
+    return OrderSummary.fromJson(_decode(resp));
   }
 
   /// GET /hr/attendance/me — the caller's open punch, today's row and the

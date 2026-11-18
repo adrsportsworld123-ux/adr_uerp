@@ -3,12 +3,14 @@ package sales
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"erp-core-go/internal/audit"
 	"erp-core-go/internal/authn"
 	"erp-core-go/internal/customers"
 	"erp-core-go/internal/httpx"
@@ -24,6 +26,10 @@ type attachCustomerRequest struct {
 type attachCustomerResponse struct {
 	OrderID    string `json:"order_id"`
 	CustomerID string `json:"customer_id"`
+	// DiscountsCleared: the cart had discounts tied to the customer it
+	// had before (loyalty points, a coupon counted against them), so its
+	// discounts were undone to be applied again (see dropCustomerDiscounts).
+	DiscountsCleared bool `json:"discounts_cleared,omitempty"`
 }
 
 // AttachCustomer: POST /sales/orders/{id}/customer — attaches an existing
@@ -58,8 +64,9 @@ func (h *Handler) AttachCustomer(w http.ResponseWriter, r *http.Request) {
 	var resp attachCustomerResponse
 	resp.OrderID = orderID
 	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		var orderStatus string
-		if err := tx.QueryRow(ctx, `SELECT status FROM sales_orders WHERE id = $1`, orderID).Scan(&orderStatus); err != nil {
+		var orderStatus, before string
+		if err := tx.QueryRow(ctx, `SELECT status, COALESCE(customer_id::text, '') FROM sales_orders WHERE id = $1 FOR UPDATE`, orderID).
+			Scan(&orderStatus, &before); err != nil {
 			return err
 		}
 
@@ -79,6 +86,15 @@ func (h *Handler) AttachCustomer(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Another customer on an open cart: their points and coupon uses
+		// mustn't stay with the sale.
+		if before != "" && before != customerID && (orderStatus == "cart" || orderStatus == "held") {
+			cleared, err := h.dropCustomerDiscounts(ctx, tx, orderID)
+			if err != nil {
+				return err
+			}
+			resp.DiscountsCleared = cleared
+		}
 		if _, err := tx.Exec(ctx, `UPDATE sales_orders SET customer_id = $1 WHERE id = $2`, customerID, orderID); err != nil {
 			return err
 		}
@@ -98,4 +114,97 @@ func (h *Handler) AttachCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, resp)
+}
+
+// DetachCustomer: DELETE /sales/orders/{id}/customer — the sale goes back
+// to a walk-in (no customer). Only before checkout (a cart or a held
+// sale): a completed sale's invoice keeps its customer. Loyalty points
+// redeemed and coupons counted against the customer are undone with the
+// cart's other discounts, to be applied again (discounts_cleared), the
+// place of supply goes back to the branch's state (the supply trigger),
+// and promotions for the customer's segment drop out. A sale with no
+// customer answers as it is, so a retry is harmless. Answers with the
+// order, like the other cart endpoints.
+func (h *Handler) DetachCustomer(w http.ResponseWriter, r *http.Request) {
+	claims, ok := authn.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "MISSING_TOKEN", "authentication required")
+		return
+	}
+	orderID := chi.URLParam(r, "id")
+	var resp orderResponse
+	err := h.DB.WithTenant(r.Context(), claims.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		var status string
+		var before *string
+		if err := tx.QueryRow(ctx, `SELECT status, customer_id::text FROM sales_orders WHERE id::text = $1 FOR UPDATE`, orderID).
+			Scan(&status, &before); err != nil {
+			return err
+		}
+		if status != "cart" && status != "held" {
+			return errOrderNotEditable
+		}
+		if before == nil {
+			return loadOrder(ctx, tx, orderID, &resp)
+		}
+		cleared, err := h.dropCustomerDiscounts(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE sales_orders SET customer_id = NULL WHERE id::text = $1`, orderID); err != nil {
+			return err
+		}
+		if err := audit.Log(ctx, tx, audit.Entry{EntityType: "sales_order", EntityID: orderID, Action: "update", PerformedBy: claims.UserID,
+			Before: map[string]any{"customer_id": *before}, After: map[string]any{"customer_id": nil}, Reason: "walk-in customer"}); err != nil {
+			return err
+		}
+		if err := recalcOrderTotals(ctx, tx, orderID, &resp); err != nil {
+			return err
+		}
+		resp.DiscountsCleared = cleared
+		if status == "cart" {
+			return h.refreshPromotions(ctx, tx, orderID, claims.UserID, &resp)
+		}
+		return loadOrder(ctx, tx, orderID, &resp)
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, "NOT_FOUND", "order not found")
+	case errors.Is(err, errOrderNotEditable):
+		httpx.Error(w, http.StatusConflict, "ORDER_NOT_EDITABLE", "a completed sale keeps its customer — only a sale not yet paid can go back to walk-in")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "could not clear the customer")
+	default:
+		httpx.JSON(w, http.StatusOK, resp)
+	}
+}
+
+// dropCustomerDiscounts undoes the cart's discounts when one of them
+// belongs to its customer — loyalty points redeemed, or a coupon whose use
+// was counted against them — as a line edit does (clearDiscountLayers),
+// since the layers were sized together. Reports whether the cashier has
+// discounts to apply again. A cart with only promotions or a manual
+// discount keeps them.
+func (h *Handler) dropCustomerDiscounts(ctx context.Context, tx pgx.Tx, orderID string) (bool, error) {
+	var tied bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM sales_order_discounts WHERE sales_order_id::text = $1 AND type = 'loyalty')
+		    OR EXISTS (SELECT 1 FROM coupon_redemptions WHERE sales_order_id::text = $1 AND customer_id IS NOT NULL)`, orderID).Scan(&tied); err != nil {
+		return false, err
+	}
+	if !tied {
+		return false, nil
+	}
+	byHand, err := h.discountsNeedReapplying(ctx, tx, orderID)
+	if err != nil {
+		return false, err
+	}
+	cleared, err := clearDiscountLayers(ctx, tx, orderID)
+	if err != nil {
+		return false, err
+	}
+	var resp orderResponse
+	if err := recalcOrderTotals(ctx, tx, orderID, &resp); err != nil {
+		return false, err
+	}
+	return cleared && byHand, nil
 }

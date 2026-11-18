@@ -635,4 +635,8 @@ const Map<String, String> stringsHi = {
   'Which one is it?': 'यह कौन-सा है?',
   'Which MRP is on the pack?': 'पैक पर कौन-सा MRP छपा है?',
   'This code is on more than one item.': 'यह कोड एक से अधिक आइटम पर है।',
+  'Clear customer (walk-in)': 'ग्राहक हटाएँ (वॉक-इन)',
+  'Take the customer off this sale — a walk-in sale': 'इस बिक्री से ग्राहक हटाएँ — वॉक-इन बिक्री',
+  'Walk-in sale — customer cleared': 'वॉक-इन बिक्री — ग्राहक हटाया गया',
+  'The customer’s points and discounts came off. Apply discounts again before payment.': 'ग्राहक के पॉइंट और छूट हटा दिए गए। भुगतान से पहले छूट फिर से लगाएँ।',
 };

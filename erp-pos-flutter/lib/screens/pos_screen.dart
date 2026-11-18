@@ -231,10 +231,15 @@ class _PosScreenState extends State<PosScreen> {
     final session = context.read<AppSession>();
     final result = await showDialog<_CustomerPickResult>(context: context, builder: (_) => _scoped(const _CustomerPickerDialog()));
     if (result == null) return _refocusScan();
-    final ok = await _withBusy(() => result.existing != null
-        ? session.attachCustomer(customerId: result.existing!.customerId, name: result.existing!.name)
-        : session.attachCustomer(name: result.walkInName, phone: result.walkInPhone, email: result.walkInEmail));
+    final ok = await _withBusy(() => _applyCustomerPick(session, result));
     if (ok != true && session.lastError != null) _snack(session.lastError!);
+    if (ok == true && mounted) {
+      if (session.customerChangeClearedDiscounts) {
+        _snack(tr('The customer’s points and discounts came off. Apply discounts again before payment.'));
+      } else if (result.clear) {
+        _snack(tr('Walk-in sale — customer cleared'));
+      }
+    }
     _refocusScan();
   }
 

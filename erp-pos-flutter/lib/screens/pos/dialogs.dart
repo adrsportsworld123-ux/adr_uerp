@@ -12,12 +12,30 @@ class _CustomerPickResult {
   final String? walkInName;
   final String? walkInPhone;
   final String? walkInEmail;
+  // Take the customer off: a walk-in sale with no customer.
+  final bool clear;
 
   _CustomerPickResult.existing(this.existing)
       : walkInName = null,
         walkInPhone = null,
-        walkInEmail = null;
-  _CustomerPickResult.walkIn(this.walkInName, this.walkInPhone, this.walkInEmail) : existing = null;
+        walkInEmail = null,
+        clear = false;
+  _CustomerPickResult.walkIn(this.walkInName, this.walkInPhone, this.walkInEmail)
+      : existing = null,
+        clear = false;
+  _CustomerPickResult.clear()
+      : existing = null,
+        walkInName = null,
+        walkInPhone = null,
+        walkInEmail = null,
+        clear = true;
+}
+
+/// Runs the picker's choice on the session: attach, register, or clear.
+Future<bool> _applyCustomerPick(AppSession s, _CustomerPickResult r) {
+  if (r.clear) return s.clearCustomer();
+  if (r.existing != null) return s.attachCustomer(customerId: r.existing!.customerId, name: r.existing!.name);
+  return s.attachCustomer(name: r.walkInName, phone: r.walkInPhone, email: r.walkInEmail);
 }
 
 class _CustomerPickerDialog extends StatefulWidget {
@@ -87,6 +105,17 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (context.read<AppSession>().attachedCustomerId != null) ...[
+              OutlinedButton.icon(
+                key: const Key('customer-clear'),
+                onPressed: () => Navigator.pop(context, _CustomerPickResult.clear()),
+                icon: const Icon(Icons.person_remove_alt_1, size: 18),
+                label: Text(tr('Clear customer (walk-in)')),
+              ),
+              const SizedBox(height: 4),
+              Text(tr('Take the customer off this sale — a walk-in sale'), style: Theme.of(context).textTheme.bodySmall),
+              const Divider(height: 24),
+            ],
             TextField(
               controller: _searchController,
               autofocus: true,

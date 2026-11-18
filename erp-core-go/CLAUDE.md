@@ -173,6 +173,11 @@ A credit sale's payment, from anywhere, goes through `customers.ApplyReceivableP
 - **Barcodes (§3.86):** a code may name several variants, so a lookup by code returns rows, not a row: use `scanOptions` (catalog) for what a scan means, and order any other `WHERE b.code = $1` deterministically. An MRP lot (`product_variants.mrp_parent_id`) has no barcode rows; join barcodes on `COALESCE(pv.mrp_parent_id, pv.id)` to show or print its code. Make lots only through `catalog.EnsureMRPLot`.
 - **Pricing (§3.87):** a price rule has one scope of variant / category / collection; markdown steps (`markdown_plan_id`) change only through their plan. Scale labels decode through `decodeScale` with `loadScaleFormats`.
 
+## Walk-in customer, invoice reader (2026-11-17)
+
+- **Customer (§3.90):** a sale's customer changes only on a cart/held sale through `AttachCustomer` / `DetachCustomer`; both call `dropCustomerDiscounts` so loyalty points and customer-counted coupons never stay on a sale that isn't that customer's.
+- **Invoice reader (§3.91):** `invoice_reader.go` is pure (PDF text rows -> `rawRow` -> `buildLines`), tested on real invoices in `testdata/`; the AI path (`invoice_ai.go`) must only produce `rawRow`s, so the supplier's template applies the same way to both. Its key comes from `ANTHROPIC_API_KEY` (compose reads a gitignored `.env`); never hardcode or log it.
+
 ## Repo layout
 
 ```

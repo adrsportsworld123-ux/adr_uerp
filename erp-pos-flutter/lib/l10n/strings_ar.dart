@@ -635,4 +635,8 @@ const Map<String, String> stringsAr = {
   'Which one is it?': 'أيّها هو؟',
   'Which MRP is on the pack?': 'ما سعر التجزئة المطبوع على العبوة؟',
   'This code is on more than one item.': 'هذا الرمز موجود على أكثر من صنف.',
+  'Clear customer (walk-in)': 'إزالة العميل (عميل عابر)',
+  'Take the customer off this sale — a walk-in sale': 'إزالة العميل من هذا البيع — بيع لعميل عابر',
+  'Walk-in sale — customer cleared': 'بيع لعميل عابر — تمت إزالة العميل',
+  'The customer’s points and discounts came off. Apply discounts again before payment.': 'أُزيلت نقاط العميل والخصومات. طبّق الخصومات مجدداً قبل الدفع.',
 };

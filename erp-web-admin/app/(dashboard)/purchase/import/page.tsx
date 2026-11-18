@@ -12,6 +12,11 @@
 // what is pending, or not on it at all. Differences are received as
 // invoiced once "Accept the differences" is ticked, and what is still
 // pending can be closed short in the same step.
+//
+// The supplier's own invoice can be read instead of filling the CSV
+// (components/purchase/invoice-reader.tsx, §3.90): a PDF, or photos of it,
+// become editable lines, and those lines are the CSV this page previews and
+// imports.
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -24,6 +29,7 @@ import { saveBlob } from "@/components/data/document-actions";
 import { PageHeader } from "@/components/data/page-header";
 import { SearchSelect } from "@/components/data/search-select";
 import { PO_TONE, StatusChip } from "@/components/data/status-chip";
+import { InvoiceReader } from "@/components/purchase/invoice-reader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -310,7 +316,7 @@ function ImportInvoice() {
     <div className="space-y-6">
       <PageHeader
         title="Import Purchase Invoice"
-        description="Fill the template with the invoice's lines, upload it, check the preview and import. Existing products are restocked; new ones are created with a barcode."
+        description="Read the supplier's invoice PDF or photos — or fill the CSV template — check the preview and import. Existing products are restocked; new ones are created with a barcode."
         actions={
           <>
             <Button variant="outline" onClick={() => template(false)}>
@@ -352,6 +358,22 @@ function ImportInvoice() {
           </CardContent>
         </Card>
       )}
+
+      <InvoiceReader
+        supplierId={supplierId}
+        onRead={(r) => {
+          if (r.supplierId && !supplierId && !poId) setSupplierId(r.supplierId);
+          if (r.invoiceNumber) setInvoiceNumber(r.invoiceNumber);
+          if (r.invoiceDate) setInvoiceDate(r.invoiceDate);
+          if (r.invoiceTotal) setTotal(String(Number(r.invoiceTotal)));
+        }}
+        onLines={(text, label) => {
+          setCsv(text);
+          setFileName(text ? `Lines read from ${label} — edit them above` : "");
+          setMatches({});
+          setResult(null);
+        }}
+      />
 
       <Card>
         <CardHeader>
@@ -412,7 +434,7 @@ function ImportInvoice() {
             <Input id="imp-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2 sm:col-span-2">
-            <Label htmlFor="imp-file">Invoice lines (CSV from the template) *</Label>
+            <Label htmlFor="imp-file">Invoice lines * (read above, or the CSV template)</Label>
             <Input id="imp-file" type="file" accept=".csv,text/csv" onChange={(e) => readFile(e.target.files?.[0])} />
             {fileName && <span className="text-xs text-muted-foreground">{fileName}</span>}
           </div>

@@ -69,6 +69,11 @@ type Config struct {
 	// deployment that only uses "ollama" never needs this set.
 	AnthropicAPIKey string
 	AnthropicModel  string
+	// InvoiceReaderModel: the model that reads photos and scanned supplier
+	// invoices (internal/purchase/invoice_ai.go). Used whenever
+	// ANTHROPIC_API_KEY is set, independent of LLMProvider; no key = the
+	// reader is off and typed PDFs / CSV still import.
+	InvoiceReaderModel string
 
 	// OllamaBaseURL/OllamaModel configure internal/ai/llm.OllamaClient — a
 	// self-hosted model server (see docker-compose.yml's "ollama" service).
@@ -104,11 +109,12 @@ func Load() Config {
 
 		NotificationsPhoneChannel: getenv("NOTIFICATIONS_PHONE_CHANNEL", "sms"),
 
-		LLMProvider:     getenv("LLM_PROVIDER", ""),
-		AnthropicAPIKey: getenv("ANTHROPIC_API_KEY", ""),
-		AnthropicModel:  getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
-		OllamaBaseURL:   getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-		OllamaModel:     getenv("OLLAMA_MODEL", "llama3.2:3b"),
+		LLMProvider:        getenv("LLM_PROVIDER", ""),
+		AnthropicAPIKey:    getenv("ANTHROPIC_API_KEY", ""),
+		AnthropicModel:     getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+		InvoiceReaderModel: getenv("INVOICE_READER_MODEL", "claude-sonnet-5-5"),
+		OllamaBaseURL:      getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+		OllamaModel:        getenv("OLLAMA_MODEL", "llama3.2:3b"),
 
 		HoldDurationMinutes: getenvInt("HOLD_DURATION_MINUTES", 120),
 	}

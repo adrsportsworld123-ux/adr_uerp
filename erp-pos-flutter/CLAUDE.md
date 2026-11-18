@@ -193,6 +193,8 @@ device's cart view ever looks wrong.
 
 **Shared barcodes and MRP lots (2026-11-09, erp-core-go §3.86).** A scan may come back with `options` / `choiceRequired` (`ProductLookup`, `ScanOption`): the POS screen asks with `showScanChoice` ("Which one is it?" for colours, "Which MRP is on the pack?" for lots) and adds `withOption(picked)`. The scan sends the branch, so the one MRP lot in stock is taken without asking. Offline: local DB v9 keys the catalog by barcode and variant (`label`, `mrp_lot_of`, `sellable`), `OfflineStore.lookupBarcodeAll`, and `resolveScanOptions` applies the server's rule; the v9 upgrade rebuilds the table and forces a full pull. Tested in `test/scan_choice_test.dart`.
 
+**Walk-in customer (2026-11-17, erp-core-go §3.90).** "Clear customer (walk-in)" in the customer picker (F4, shown only when a customer is attached; `_CustomerPickResult.clear`, applied through `_applyCustomerPick`) and on the payment step (`payment-clear-customer`). `AppSession.clearCustomer` calls `DELETE /sales/orders/{id}/customer`; `customerChangeClearedDiscounts` is set when the customer's points took the cart's discounts off (also when attaching a different customer, after which the cart is reloaded), and the screen says so. Tested in `test/walk_in_customer_test.dart`.
+
 **Not yet built:** on-device verification of offline sync, printing, and
 PIN-login against real Android/iOS hardware or a real network thermal
 printer — this environment has never had either. Everything above is

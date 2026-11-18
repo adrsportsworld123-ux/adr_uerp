@@ -678,9 +678,13 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 				bad("gst_rate must be a percentage such as 5 or 18")
 			}
 		}
+		// The line's amounts count in the totals whenever they can be read,
+		// so a line refused for something else (a new item's sale GST, its
+		// category) doesn't also make the invoice look short.
+		amountsOK := len(l.Errors) == 0
 		l.Quantity, l.UnitCost, l.GSTRate = qtyText(l.qty), money(l.cost), qtyText(gst)
-		lineCost := round2(l.qty * l.cost)
-		l.tax = round2(lineCost * gst / 100)
+		var lineCost float64
+		lineCost, l.tax = importLineAmounts(l.qty, l.cost, gst)
 		l.LineCost, l.LineTax = money(lineCost), money(l.tax)
 		if t := get("line_total"); t != "" {
 			if printed, ok := parseNumber(t); ok && math.Abs(printed-(lineCost+l.tax)) > 1 {
@@ -852,7 +856,7 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 			l.NewProduct = np
 			l.SKU = np.SKU
 		}
-		if len(l.Errors) == 0 {
+		if amountsOK {
 			qtyTotal += l.qty
 			p.subtotal += lineCost
 			p.tax += l.tax
@@ -880,16 +884,27 @@ func resolveImport(ctx context.Context, tx pgx.Tx, req importRequest) (*importPr
 			p.Summary.RoundOff = money(diff)
 		}
 	}
-	p.Ready = len(p.Errors) == 0
+	var badRows []string
 	for _, l := range p.Lines {
 		if len(l.Errors) > 0 {
-			p.Ready = false
+			badRows = append(badRows, strconv.Itoa(l.Row))
 		}
 	}
+	if len(badRows) > 0 {
+		p.Errors = append(p.Errors, fmt.Sprintf("%d line(s) need fixing before the import (row %s) — the reason is on each line below", len(badRows), strings.Join(badRows, ", ")))
+	}
+	p.Ready = len(p.Errors) == 0
 	return p, nil
 }
 
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+// importLineAmounts: a line's cost before GST and its GST, to the paisa,
+// as the GRN and the bill book them.
+func importLineAmounts(qty, cost, gst float64) (lineCost, tax float64) {
+	lineCost = round2(qty * cost)
+	return lineCost, round2(lineCost * gst / 100)
+}
 
 // resolvePOSummary: after the lines, against a PO: the lines not on it,
 // what each PO line is left with, and whether the invoice can be booked

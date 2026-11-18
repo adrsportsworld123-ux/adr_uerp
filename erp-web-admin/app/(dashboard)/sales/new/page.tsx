@@ -235,6 +235,21 @@ export default function NewSalePage() {
       setOrder(await api.get<CartOrder>(`/api/v1/sales/orders/${id}`));
     });
 
+  // Back to a walk-in sale (erp-core-go DELETE /sales/orders/{id}/customer):
+  // loyalty points redeemed for the customer come off with the cart's
+  // discounts, which the server then says to apply again.
+  const walkIn = () =>
+    run(async () => {
+      if (!oid) {
+        setCustomer(null);
+        return;
+      }
+      const o = await api.delete<CartOrder & { discounts_cleared?: boolean }>(`/api/v1/sales/orders/${oid}/customer`);
+      setOrder(o);
+      setCustomer(null);
+      toast.success(o.discounts_cleared ? "Walk-in sale — the customer's points and the discounts came off; apply discounts again" : "Walk-in sale — no customer");
+    });
+
   const saveDescription = (lineId: string, text: string) =>
     run(async () => {
       if (!oid) return;
@@ -508,9 +523,13 @@ export default function NewSalePage() {
                 <span className="flex items-center gap-2">
                   <UserRound className="size-4" /> {customer.name} · {customer.phone}
                 </span>
+                <Button size="sm" variant="ghost" onClick={walkIn} disabled={!allowed || busy} title="Take the customer off: a walk-in sale">
+                  <X aria-hidden /> Walk-in
+                </Button>
               </div>
             ) : (
               <>
+                <span className="text-xs text-muted-foreground">Walk-in customer — or find one for credit, loyalty or a named bill.</span>
                 <Input
                   aria-label="Find a customer"
                   placeholder="Name or phone (needed for credit)"
